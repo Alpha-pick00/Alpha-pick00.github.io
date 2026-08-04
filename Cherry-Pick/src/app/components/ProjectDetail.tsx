@@ -37,7 +37,7 @@ export const ProjectDetail = () => {
              <h1 className="text-6xl md:text-9xl font-medium tracking-tighter leading-[0.9]">
                {project.title}
              </h1>
-             <span className="font-mono text-sm text-neutral-400 mb-2">{project.category} — {project.year}</span>
+             <span className="font-mono text-sm text-neutral-400 mb-2">{project.category}</span>
           </div>
 
           <div className="aspect-[16/9] w-full bg-neutral-900 overflow-hidden rounded-sm">

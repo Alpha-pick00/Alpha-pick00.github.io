@@ -1,9 +1,11 @@
+import leicaPureImage from "../../assets/projects/leica-pure.jpg";
+
 export const projects = [
   {
     id: "aesop-ethereal",
     slug: "aesop-ethereal",
-    title: "Aesop Ethereal",
-    category: "Packaging Design",
+    title: "생활소모품",
+    category: "Daily consumables",
     image: "https://images.unsplash.com/photo-1761125802333-d145773f4461?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwbHV4dXJ5JTIwY29zbWV0aWMlMjBwYWNrYWdpbmclMjBhZXN0aGV0aWN8ZW58MXx8fHwxNzY1MjcwMzMyfDA&ixlib=rb-4.1.0&q=80&w=1080",
     year: "2024",
     client: "Aesop",
@@ -13,8 +15,8 @@ export const projects = [
   {
     id: "mono-chair",
     slug: "mono-chair",
-    title: "Mono Chair",
-    category: "Furniture Design",
+    title: "가전 / 디지털",
+    category: "home appliance/digital",
     image: "https://images.unsplash.com/photo-1551907234-fb773fb08a2a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBtaW5pbWFsJTIwY2hhaXIlMjBmdXJuaXR1cmUlMjBkZXNpZ24lMjBzdHVkaW98ZW58MXx8fHwxNzY1MjcwMzMyfDA&ixlib=rb-4.1.0&q=80&w=1080",
     year: "2023",
     client: "Herman Miller",
@@ -24,9 +26,9 @@ export const projects = [
   {
     id: "leica-pure",
     slug: "leica-pure",
-    title: "Leica Pure",
-    category: "Product Concept",
-    image: "https://images.unsplash.com/photo-1755136983366-b958dcd2053e?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxsZWljYSUyMGNhbWVyYSUyMG1pbmltYWxpc3QlMjBwcm9kdWN0JTIwcGhvdG9ncmFwaHl8ZW58MXx8fHwxNzY1MjcwMzMzfDA&ixlib=rb-4.1.0&q=80&w=1080",
+    title: "가공식품 / 건강식품",
+    category: "Processed / Health functional food",
+    image: leicaPureImage,
     year: "2023",
     client: "Leica",
     role: "Product Design",
@@ -35,8 +37,8 @@ export const projects = [
   {
     id: "bang-olufsen",
     slug: "bang-olufsen",
-    title: "Bang & Olufsen",
-    category: "Audio Design",
+    title: "출산 / 유아동용품",
+    category: "Baby care products",
     image: "https://images.unsplash.com/photo-1750603244415-8c7d86d52091?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxiYW5nJTIwYW5kJTIwb2x1ZnNlbiUyMHNwZWFrZXIlMjBtaW5pbWFsaXN0JTIwYXVkaW8lMjBkZXNpZ258ZW58MXx8fHwxNzY1MjcwMzMzfDA&ixlib=rb-4.1.0&q=80&w=1080",
     year: "2022",
     client: "Bang & Olufsen",
@@ -46,8 +48,8 @@ export const projects = [
   {
     id: "architectural-form",
     slug: "architectural-form",
-    title: "Architectural Form",
-    category: "Spatial Design",
+    title: "스포츠 / 레저용품",
+    category: "Sports/Leisure Goods",
     image: "https://images.unsplash.com/photo-1486718448742-163732cd1544?q=80&w=2600&auto=format&fit=crop",
     year: "2022",
     client: "Vitra",
@@ -57,8 +59,8 @@ export const projects = [
   {
     id: "ceramic-void",
     slug: "ceramic-void",
-    title: "Ceramic Void",
-    category: "Art Direction",
+    title: "문구 / 오피스용품",
+    category: "Stationery / Office Supplies",
     image: "https://images.unsplash.com/photo-1610701596007-11502861dcfa?q=80&w=2600&auto=format&fit=crop",
     year: "2021",
     client: "Independent",
