@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowUpRight, Instagram, Twitter, Linkedin, Mail, X, Send } from 'lucide-react';
+import { ArrowUpRight, X, Send } from 'lucide-react';
 
 export const Footer = () => {
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -36,40 +36,25 @@ export const Footer = () => {
                    </div>
                  </button>
 
-                 <a href="mailto:hello@studio.com" className="group flex items-center gap-4 text-lg font-mono text-neutral-500 hover:text-neutral-950 transition-colors pl-4">
+                 <a href="https://cherry-pick00.github.io/" target="_blank" rel="noopener noreferrer" className="group flex items-center gap-4 text-lg font-mono text-neutral-500 hover:text-neutral-950 transition-colors pl-4">
                    <span className="w-2 h-2 rounded-full bg-green-500" />
-                   hello@studio.com
+                   https://cherry-pick00.github.io/
                  </a>
               </div>
             </div>
 
             <div className="flex flex-col justify-end gap-12">
-              <div className="grid grid-cols-2 gap-12">
-                <div>
-                  <h4 className="font-mono text-xs uppercase tracking-widest text-neutral-500 mb-6">Socials</h4>
-                  <ul className="space-y-4">
-                    {['Instagram', 'Twitter', 'LinkedIn', 'Awwwards'].map((social) => (
-                      <li key={social}>
-                        <a href="#" className="flex items-center gap-2 text-lg font-light text-neutral-600 hover:text-neutral-950 transition-colors group">
-                          {social}
-                          <ArrowUpRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0" />
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <h4 className="font-mono text-xs uppercase tracking-widest text-neutral-500 mb-6">Sitemap</h4>
-                  <ul className="space-y-4">
-                    {['Home', 'Work', 'About', 'Contact'].map((link) => (
-                      <li key={link}>
-                        <a href={`#${link.toLowerCase()}`} className="text-lg font-light text-neutral-600 hover:text-neutral-950 transition-colors">
-                          {link}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+              <div>
+                <h4 className="font-mono text-xs uppercase tracking-widest text-neutral-500 mb-6">Sitemap</h4>
+                <ul className="space-y-4">
+                  {['Home', 'Work', 'About', 'Contact'].map((link) => (
+                    <li key={link}>
+                      <a href={`#${link.toLowerCase()}`} className="text-lg font-light text-neutral-600 hover:text-neutral-950 transition-colors">
+                        {link}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
               </div>
             </div>
 
