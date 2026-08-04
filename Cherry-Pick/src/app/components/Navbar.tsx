@@ -22,6 +22,7 @@ export const Navbar = () => {
   }, [location]);
 
   const navItems = [
+    { name: 'Compare', to: '/compare' },
     { name: 'Work', to: '/work' },
     { name: 'About', to: '/#about' },
     { name: 'Services', to: '/#services' },

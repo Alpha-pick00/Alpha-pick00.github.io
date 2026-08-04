@@ -9,6 +9,7 @@ import { Footer } from './components/Footer';
 import { Navbar } from './components/Navbar';
 import { Work } from './components/Work';
 import { ProjectDetail } from './components/ProjectDetail';
+import { Compare } from './components/Compare';
 
 // Preloader Component
 const Preloader = () => (
@@ -93,6 +94,7 @@ function App() {
             <Route path="/" element={<HomePage />} />
             <Route path="/work" element={<Work />} />
             <Route path="/work/:slug" element={<ProjectDetail />} />
+            <Route path="/compare" element={<Compare />} />
           </Routes>
         </div>
       )}
