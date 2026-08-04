@@ -40,7 +40,7 @@ export const projects = [
   {
     id: "bang-olufsen",
     slug: "bang-olufsen",
-    title: "출산 / 유아용용품",
+    title: "출산 / 유아용품",
     category: "Baby care products",
     image: bangOlufsenImage,
     year: "2022",
