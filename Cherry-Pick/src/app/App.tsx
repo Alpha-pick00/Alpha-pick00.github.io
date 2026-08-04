@@ -25,7 +25,7 @@ const Preloader = () => (
       className="flex flex-col items-center gap-4"
     >
       <h1 className="text-4xl md:text-6xl font-bold tracking-tighter">
-        <span style={{ color: '#D64550' }}>Cherry</span>.Pick
+        <span style={{ color: '#EC4899' }}>Cherry</span>.Pick
       </h1>
       <motion.div 
         initial={{ width: 0 }}

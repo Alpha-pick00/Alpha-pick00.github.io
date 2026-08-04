@@ -19,7 +19,7 @@ export const Footer = () => {
                 className="text-6xl md:text-9xl font-medium tracking-tighter leading-[0.9] mb-16"
               >
                 Let's <br />
-                <span className="italic font-serif" style={{ color: '#D64550' }}>Talk</span>
+                <span style={{ color: '#EC4899' }}>Cherry</span>.Pick
               </motion.h2>
               
               <div className="flex flex-col gap-10">
@@ -31,7 +31,7 @@ export const Footer = () => {
                      <ArrowUpRight className="w-8 h-8 group-hover:rotate-45 transition-transform duration-500" />
                    </div>
                    <div>
-                     <span className="block text-4xl font-light tracking-tighter text-white group-hover:translate-x-2 transition-transform duration-300">Start a Project</span>
+                     <span className="block text-4xl font-light tracking-tighter text-white group-hover:translate-x-2 transition-transform duration-300">Start a <span style={{ color: '#EC4899' }}>Cherry</span>.Pick</span>
                      <span className="block text-sm font-mono uppercase tracking-widest text-neutral-500 mt-1 group-hover:text-neutral-400 transition-colors">We are currently available</span>
                    </div>
                  </button>
@@ -77,7 +77,7 @@ export const Footer = () => {
 
           <div className="flex flex-col md:flex-row justify-between items-center pt-12 border-t border-white/5 gap-6">
             <p className="font-mono text-xs uppercase tracking-widest text-neutral-600">
-              © 2026 <span style={{ color: '#D64550' }}>Cherry</span>.Pick.
+              © 2026 <span style={{ color: '#EC4899' }}>Cherry</span>.Pick.
             </p>
             <p className="font-mono text-xs uppercase tracking-widest text-neutral-600">
               All rights reserved.
@@ -148,8 +148,8 @@ const ContactModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
               <div className="mt-12">
                 <span className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-6 block">04 / Contact</span>
                 <h3 className="text-4xl md:text-5xl font-medium tracking-tighter mb-2">
-                  Start a <br />
-                  <span className="italic font-serif text-neutral-500">Project</span>
+                  Start <br />
+                  <span style={{ color: '#EC4899' }}>Cherry</span>.Pick
                 </h3>
                 <p className="text-neutral-400 font-light mb-12">
                   Tell us about your vision. We'll help you build it.

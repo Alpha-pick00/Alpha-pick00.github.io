@@ -77,7 +77,7 @@ export const Hero = () => {
           className="text-7xl md:text-[11rem] font-medium tracking-tighter leading-[0.85] mb-12 mix-blend-difference text-white"
           style={{ fontFamily: "'Times New Roman', Times, serif" }}
         >
-          <span style={{ color: '#D64550' }}>Cherry</span>.Pick <br />
+          <span style={{ color: '#EC4899' }}>Cherry</span>.Pick <br />
           <span className="italic text-neutral-500" style={{ fontFamily: "'Times New Roman', Times, serif" }}>Vision</span>
         </motion.h1>
         

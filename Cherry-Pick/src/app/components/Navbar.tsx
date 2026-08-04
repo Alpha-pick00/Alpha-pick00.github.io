@@ -43,7 +43,7 @@ export const Navbar = () => {
           transition={{ duration: 0.5 }}
         >
           <Link to="/" className="text-2xl font-bold tracking-tighter mix-blend-difference z-50">
-            <span style={{ color: '#D64550' }}>Cherry</span>.Pick
+            <span style={{ color: '#EC4899' }}>Cherry</span>.Pick
           </Link>
         </motion.div>
 
