@@ -65,7 +65,7 @@ export const Services = () => {
               className="text-6xl md:text-9xl font-medium tracking-tighter leading-none"
             >
               Curation <br />
-              <span className="italic font-serif text-neutral-500">Solutions</span>
+              <span className="italic font-serif" style={{ color: '#D64550' }}>Solutions</span>
             </motion.h2>
           </div>
           

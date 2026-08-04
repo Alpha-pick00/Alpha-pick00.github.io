@@ -19,7 +19,7 @@ export const Footer = () => {
                 className="text-6xl md:text-9xl font-medium tracking-tighter leading-[0.9] mb-16"
               >
                 Let's <br />
-                <span className="italic font-serif text-neutral-500">Talk</span>
+                <span className="italic font-serif" style={{ color: '#D64550' }}>Talk</span>
               </motion.h2>
               
               <div className="flex flex-col gap-10">

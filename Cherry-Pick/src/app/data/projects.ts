@@ -1,4 +1,7 @@
 import leicaPureImage from "../../assets/projects/leica-pure.jpg";
+import bangOlufsenImage from "../../assets/projects/bang-olufsen.webp";
+import architecturalFormImage from "../../assets/projects/architectural-form.jpg";
+import ceramicVoidImage from "../../assets/projects/ceramic-void.jpg";
 
 export const projects = [
   {
@@ -37,9 +40,9 @@ export const projects = [
   {
     id: "bang-olufsen",
     slug: "bang-olufsen",
-    title: "출산 / 유아동용품",
+    title: "출산 / 유아용용품",
     category: "Baby care products",
-    image: "https://images.unsplash.com/photo-1750603244415-8c7d86d52091?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxiYW5nJTIwYW5kJTIwb2x1ZnNlbiUyMHNwZWFrZXIlMjBtaW5pbWFsaXN0JTIwYXVkaW8lMjBkZXNpZ258ZW58MXx8fHwxNzY1MjcwMzMzfDA&ixlib=rb-4.1.0&q=80&w=1080",
+    image: bangOlufsenImage,
     year: "2022",
     client: "Bang & Olufsen",
     role: "Industrial Design",
@@ -50,7 +53,7 @@ export const projects = [
     slug: "architectural-form",
     title: "스포츠 / 레저용품",
     category: "Sports/Leisure Goods",
-    image: "https://images.unsplash.com/photo-1486718448742-163732cd1544?q=80&w=2600&auto=format&fit=crop",
+    image: architecturalFormImage,
     year: "2022",
     client: "Vitra",
     role: "Spatial Design",
@@ -61,7 +64,7 @@ export const projects = [
     slug: "ceramic-void",
     title: "문구 / 오피스용품",
     category: "Stationery / Office Supplies",
-    image: "https://images.unsplash.com/photo-1610701596007-11502861dcfa?q=80&w=2600&auto=format&fit=crop",
+    image: ceramicVoidImage,
     year: "2021",
     client: "Independent",
     role: "Art Direction",
