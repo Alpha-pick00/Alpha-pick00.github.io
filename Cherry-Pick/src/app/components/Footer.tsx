@@ -77,10 +77,10 @@ export const Footer = () => {
 
           <div className="flex flex-col md:flex-row justify-between items-center pt-12 border-t border-white/5 gap-6">
             <p className="font-mono text-xs uppercase tracking-widest text-neutral-600">
-              © 2024 Studio Pure Vision.
+              © 2026 Cherry.Pick.
             </p>
             <p className="font-mono text-xs uppercase tracking-widest text-neutral-600">
-              Designed by Figma Make
+              All rights reserved.
             </p>
           </div>
         </div>

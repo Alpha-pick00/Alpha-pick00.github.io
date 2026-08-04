@@ -1,7 +1,5 @@
 
-  # Portfolio website - awwwwards  style
-
-  This is a code bundle for Portfolio website - awwwwards  style. The original project is available at https://www.figma.com/design/uTwOpe2x210Znx6C2MDUJg/Portfolio-website---awwwwards--style.
+  # Cherry.Pick
 
   ## Running the code
 

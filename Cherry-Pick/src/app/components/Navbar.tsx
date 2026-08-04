@@ -43,7 +43,7 @@ export const Navbar = () => {
           transition={{ duration: 0.5 }}
         >
           <Link to="/" className="text-2xl font-bold tracking-tighter mix-blend-difference z-50">
-            ALEX.DESIGN
+            Cherry.Pick
           </Link>
         </motion.div>
 

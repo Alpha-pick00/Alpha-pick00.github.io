@@ -23,7 +23,7 @@ export const About = () => {
         <div className="flex items-center gap-6 mb-24">
            <div className="flex items-baseline gap-3">
               <span className="font-serif italic text-lg text-white">02</span>
-              <span className="text-xs font-mono uppercase tracking-[0.3em] text-neutral-400">The Studio</span>
+              <span className="text-xs font-mono uppercase tracking-[0.3em] text-neutral-400">About Cherry.Pick</span>
            </div>
            <div className="h-px w-32 bg-gradient-to-r from-white/30 to-transparent" />
         </div>
@@ -40,7 +40,7 @@ export const About = () => {
               className="text-5xl md:text-8xl font-medium tracking-tighter mb-12 leading-[0.9]"
             >
               We craft <br />
-              <span className="italic font-serif text-neutral-500">silent</span> luxuries.
+              <span className="italic font-serif text-neutral-500">smarter</span> choices.
             </motion.h2>
 
             <div className="grid md:grid-cols-2 gap-12 text-lg font-light text-neutral-400 leading-relaxed">
@@ -52,10 +52,10 @@ export const About = () => {
                 className="space-y-6"
               >
                 <p>
-                  In a world screaming for attention, we choose the whisper. We build digital experiences that respect the user's intelligence and time.
+                  In a world full of tabs, we choose the one answer. Every platform, every price, every promotion — screaming for your attention across a dozen open windows. We build an experience that ends the noise, not adds to it.
                 </p>
                 <p>
-                  Our philosophy is simple: perfection is achieved not when there is nothing left to add, but when there is nothing left to take away.
+                  Our philosophy is simple: the best comparison is the one you never have to make yourself. We don't show you more data. We show you less — only what matters, distilled into a single, confident recommendation.
                 </p>
               </motion.div>
               
@@ -67,10 +67,10 @@ export const About = () => {
                 className="space-y-6"
               >
                 <p>
-                  Our approach is rooted in the belief that utility and beauty are not separate entities, but rather the same force expressed differently.
+                  We believe utility and trust are not separate features, but the same idea. A price means nothing without the reason behind it. So every answer we give comes with its evidence — visible, explainable, yours to verify.
                 </p>
                 <p className="text-white/80">
-                  We collaborate with brands who understand that design is the silent ambassador of their values.
+                  We build for the shopper who values their time as much as their money. Not another app to check. The one that checks everything, so you don't have to.
                 </p>
               </motion.div>
             </div>
@@ -79,24 +79,24 @@ export const About = () => {
             <div className="mt-16 pt-16 border-t border-white/5">
                <div className="grid grid-cols-3 gap-8 mb-16">
                  <div className="space-y-2 border-r border-white/5">
-                   <h4 className="text-4xl font-light text-white">05<span className="text-neutral-600 text-lg">+</span></h4>
-                   <p className="text-xs uppercase tracking-widest text-neutral-500">Years Active</p>
+                   <h4 className="text-4xl font-light text-white">2026</h4>
+                   <p className="text-xs uppercase tracking-widest text-neutral-500">Launching</p>
                  </div>
                  <div className="space-y-2 border-r border-white/5">
-                   <h4 className="text-4xl font-light text-white">42<span className="text-neutral-600 text-lg">+</span></h4>
-                   <p className="text-xs uppercase tracking-widest text-neutral-500">Projects Delivered</p>
+                   <h4 className="text-4xl font-light text-white">5<span className="text-neutral-600 text-lg">+</span></h4>
+                   <p className="text-xs uppercase tracking-widest text-neutral-500">Platforms Compared</p>
                  </div>
                  <div className="space-y-2">
-                   <h4 className="text-4xl font-light text-white">12</h4>
-                   <p className="text-xs uppercase tracking-widest text-neutral-500">Design Awards</p>
+                   <h4 className="text-4xl font-light text-white">100K</h4>
+                   <p className="text-xs uppercase tracking-widest text-neutral-500">Target Users by Year 3</p>
                  </div>
                </div>
 
                {/* Client List - Trust Factor */}
                <div>
-                 <span className="text-xs font-mono uppercase tracking-widest text-neutral-600 block mb-6">Trusted by industry leaders</span>
+                 <span className="text-xs font-mono uppercase tracking-widest text-neutral-600 block mb-6">Compare across</span>
                  <div className="flex flex-wrap gap-x-12 gap-y-4 text-neutral-400 font-light text-lg">
-                   {['Aesop', 'Leica', 'Herman Miller', 'Bang & Olufsen', 'Vitra', 'Polestar', 'Acne Studios'].map((client, i) => (
+                   {['Coupang', 'Naver Shopping', 'Kurly', 'SSG', 'etc'].map((client, i) => (
                      <motion.span 
                        key={client}
                        initial={{ opacity: 0 }}
@@ -140,7 +140,7 @@ export const About = () => {
                    <path id="circlePath" d="M 50, 50 m -37, 0 a 37,37 0 1,1 74,0 a 37,37 0 1,1 -74,0" fill="transparent" />
                    <text className="fill-neutral-500 text-[10px] uppercase tracking-widest font-mono">
                      <textPath href="#circlePath">
-                       • Digital Design • Strategy • Development
+                       - Price Comparison • AI Curation • Smart Shopping
                      </textPath>
                    </text>
                  </svg>

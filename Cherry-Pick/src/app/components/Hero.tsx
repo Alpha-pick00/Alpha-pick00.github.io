@@ -66,7 +66,7 @@ export const Hero = () => {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
             </span>
-            Available for new projects
+            Available for new product buying
           </div>
         </motion.div>
 
@@ -75,9 +75,10 @@ export const Hero = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
           className="text-7xl md:text-[11rem] font-medium tracking-tighter leading-[0.85] mb-12 mix-blend-difference text-white"
+          style={{ fontFamily: "'Times New Roman', Times, serif" }}
         >
-          Pure <br />
-          <span className="italic font-serif text-neutral-500">Vision</span>
+          Cherry.Pick <br />
+          <span className="italic text-neutral-500" style={{ fontFamily: "'Times New Roman', Times, serif" }}>Vision</span>
         </motion.h1>
         
         <motion.div 
@@ -87,13 +88,13 @@ export const Hero = () => {
           className="flex flex-col md:flex-row items-center gap-6 md:gap-16 text-lg font-light text-neutral-400 max-w-4xl mx-auto"
         >
           <p className="md:text-right flex-1 leading-relaxed">
-            Redefining digital aesthetics with precision<br />
-            and interactive depth.
+            Redefining price comparison with clarity<br />
+            and intelligent depth.
           </p>
           <div className="w-px h-16 bg-white/10 hidden md:block" />
           <p className="md:text-left flex-1 leading-relaxed">
-            Based in San Francisco,<br />
-            working globally.
+            Based in Korea, Seoul<br />
+            Working Globally
           </p>
         </motion.div>
       </motion.div>
