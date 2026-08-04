@@ -29,7 +29,7 @@ export const Projects = () => {
             </div>
             <h2 className="text-5xl md:text-8xl font-medium tracking-tighter leading-[0.9]">
               What We <br />
-              <span className="italic font-serif text-neutral-500">Curate</span>
+              <span className="italic font-serif" style={{ color: '#D64550' }}>Curate</span>
             </h2>
           </div>
           <div className="hidden md:block mb-2">
