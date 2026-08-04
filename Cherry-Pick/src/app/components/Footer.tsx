@@ -77,7 +77,7 @@ export const Footer = () => {
 
           <div className="flex flex-col md:flex-row justify-between items-center pt-12 border-t border-white/5 gap-6">
             <p className="font-mono text-xs uppercase tracking-widest text-neutral-600">
-              © 2026 Cherry.Pick.
+              © 2026 <span style={{ color: '#D64550' }}>Cherry</span>.Pick.
             </p>
             <p className="font-mono text-xs uppercase tracking-widest text-neutral-600">
               All rights reserved.
