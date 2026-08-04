@@ -78,7 +78,7 @@ export const Services = () => {
           >
             <div className="absolute top-0 left-[-1px] h-12 w-[1px] bg-gradient-to-b from-black to-transparent" />
             <p className="text-xl md:text-2xl font-light text-neutral-700 leading-relaxed">
-              We combine conversational intelligence with real-time comparison to build decisions you can actually trust.
+              대화형 <span className="font-medium" style={{ color: '#EC4899' }}>AI</span>와 실시간 가격 비교를 결합해, 진짜 믿을 수 있는 결정을 만들어 드립니다.
             </p>
           </motion.div>
         </div>
