@@ -28,13 +28,13 @@ export const Projects = () => {
               <div className="h-px w-32 bg-gradient-to-r from-white/30 to-transparent" />
             </div>
             <h2 className="text-5xl md:text-8xl font-medium tracking-tighter leading-[0.9]">
-              Curated <br />
-              <span className="italic font-serif text-neutral-500">Excellence</span>
+              What We <br />
+              <span className="italic font-serif text-neutral-500">Curate</span>
             </h2>
           </div>
           <div className="hidden md:block mb-2">
              <Link to="/work" className="text-xs font-mono uppercase tracking-widest border-b border-white/30 pb-2 hover:text-neutral-300 transition-colors inline-block">
-               View All Projects
+               View All Curations
              </Link>
           </div>
         </motion.div>
@@ -82,12 +82,9 @@ const ProjectCard = ({ project, index }: { project: any, index: number }) => {
           </div>
         </div>
         
-        <div className="flex justify-between items-end border-t border-white/10 pt-6">
-          <div>
-            <h3 className="text-3xl font-medium tracking-tight mb-2 group-hover:text-neutral-400 transition-colors">{project.title}</h3>
-            <p className="font-mono text-xs uppercase tracking-widest text-neutral-500">{project.category}</p>
-          </div>
-          <span className="font-mono text-xs text-neutral-600">{project.year}</span>
+        <div className="border-t border-white/10 pt-6">
+          <h3 className="text-3xl font-medium tracking-tight mb-2 group-hover:text-neutral-400 transition-colors">{project.title}</h3>
+          <p className="font-mono text-xs uppercase tracking-widest text-neutral-500">{project.category}</p>
         </div>
       </Link>
     </motion.div>

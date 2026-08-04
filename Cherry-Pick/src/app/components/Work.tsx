@@ -14,8 +14,7 @@ export const Work = () => {
                ← Back to Home
              </Link>
              <h1 className="text-6xl md:text-9xl font-medium tracking-tighter leading-[0.9]">
-               Archive <br />
-               <span className="italic font-serif text-neutral-500">2021—24</span>
+               What we Curate
              </h1>
            </div>
         </div>
@@ -42,12 +41,9 @@ export const Work = () => {
                       <ArrowUpRight className="w-5 h-5 text-white" />
                    </div>
                 </div>
-                <div className="flex justify-between items-baseline border-t border-white/10 pt-4">
-                   <div>
-                     <h3 className="text-xl font-medium tracking-tight mb-1">{project.title}</h3>
-                     <p className="text-xs font-mono uppercase tracking-widest text-neutral-500">{project.category}</p>
-                   </div>
-                   <span className="text-xs font-mono text-neutral-600">{project.year}</span>
+                <div className="border-t border-white/10 pt-4">
+                   <h3 className="text-xl font-medium tracking-tight mb-1">{project.title}</h3>
+                   <p className="text-xs font-mono uppercase tracking-widest text-neutral-500">{project.category}</p>
                 </div>
               </Link>
             </motion.div>

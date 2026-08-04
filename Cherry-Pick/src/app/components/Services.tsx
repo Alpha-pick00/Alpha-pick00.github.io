@@ -64,7 +64,7 @@ export const Services = () => {
               transition={{ duration: 0.8 }}
               className="text-6xl md:text-9xl font-medium tracking-tighter leading-none"
             >
-              Digital <br />
+              Curation <br />
               <span className="italic font-serif text-neutral-500">Solutions</span>
             </motion.h2>
           </div>
@@ -78,7 +78,7 @@ export const Services = () => {
           >
             <div className="absolute top-0 left-[-1px] h-12 w-[1px] bg-gradient-to-b from-white to-transparent" />
             <p className="text-xl md:text-2xl font-light text-neutral-300 leading-relaxed">
-              We combine aesthetic precision with technical robustness to build products that stand the test of time.
+              We combine conversational intelligence with real-time comparison to build decisions you can actually trust.
             </p>
           </motion.div>
         </div>
