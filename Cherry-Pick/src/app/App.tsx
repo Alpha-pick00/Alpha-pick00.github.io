@@ -25,7 +25,7 @@ const Preloader = () => (
       className="flex flex-col items-center gap-4"
     >
       <h1 className="text-4xl md:text-6xl font-bold tracking-tighter">
-        <span style={{ color: '#D64550' }}>Cherry</span>.Pick
+        <span style={{ color: '#EC4899' }}>Cherry</span>.Pick
       </h1>
       <motion.div 
         initial={{ width: 0 }}
@@ -87,7 +87,7 @@ function App() {
       </AnimatePresence>
 
       {!loading && (
-        <div className="bg-neutral-950 min-h-screen text-white selection:bg-white/20">
+        <div className="bg-white min-h-screen text-neutral-950 selection:bg-black/20">
           <Navbar />
           <Routes>
             <Route path="/" element={<HomePage />} />

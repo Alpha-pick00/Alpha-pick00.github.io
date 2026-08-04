@@ -9,7 +9,7 @@ export const Projects = () => {
   const featuredProjects = projects.slice(0, 4);
 
   return (
-    <section id="work" className="py-32 px-6 bg-neutral-950">
+    <section id="work" className="py-32 px-6 bg-white">
       <div className="container mx-auto">
         
         {/* Section Header */}
@@ -22,18 +22,18 @@ export const Projects = () => {
           <div>
             <div className="flex items-center gap-6 mb-8">
               <div className="flex items-baseline gap-3">
-                <span className="font-serif italic text-lg text-white">02</span>
-                <span className="text-xs font-mono uppercase tracking-[0.3em] text-neutral-400">Selected Work</span>
+                <span className="font-serif italic text-lg text-neutral-950">02</span>
+                <span className="text-xs font-mono uppercase tracking-[0.3em] text-neutral-600">Selected Work</span>
               </div>
-              <div className="h-px w-32 bg-gradient-to-r from-white/30 to-transparent" />
+              <div className="h-px w-32 bg-gradient-to-r from-black/30 to-transparent" />
             </div>
             <h2 className="text-5xl md:text-8xl font-medium tracking-tighter leading-[0.9]">
               What We <br />
-              <span className="italic font-serif" style={{ color: '#D64550' }}>Curate</span>
+              <span className="italic font-serif" style={{ color: '#EC4899' }}>Curate</span>
             </h2>
           </div>
           <div className="hidden md:block mb-2">
-             <Link to="/work" className="text-xs font-mono uppercase tracking-widest border-b border-white/30 pb-2 hover:text-neutral-300 transition-colors inline-block">
+             <Link to="/work" className="text-xs font-mono uppercase tracking-widest border-b border-black/30 pb-2 hover:text-neutral-700 transition-colors inline-block">
                View All Curations
              </Link>
           </div>
@@ -66,7 +66,7 @@ const ProjectCard = ({ project, index }: { project: any, index: number }) => {
       className={`group cursor-pointer ${!isEven ? 'md:mt-32' : ''}`}
     >
       <Link to={`/work/${project.slug}`}>
-        <div className="relative overflow-hidden rounded-sm aspect-[4/3] mb-8 bg-neutral-900">
+        <div className="relative overflow-hidden rounded-sm aspect-[4/3] mb-8 bg-neutral-100">
           <motion.img 
             whileHover={{ scale: 1.05 }}
             transition={{ duration: 0.7, ease: [0.25, 1, 0.5, 1] }}
@@ -82,8 +82,8 @@ const ProjectCard = ({ project, index }: { project: any, index: number }) => {
           </div>
         </div>
         
-        <div className="border-t border-white/10 pt-6">
-          <h3 className="text-3xl font-medium tracking-tight mb-2 group-hover:text-neutral-400 transition-colors">{project.title}</h3>
+        <div className="border-t border-black/10 pt-6">
+          <h3 className="text-3xl font-medium tracking-tight mb-2 group-hover:text-neutral-600 transition-colors">{project.title}</h3>
           <p className="font-mono text-xs uppercase tracking-widest text-neutral-500">{project.category}</p>
         </div>
       </Link>
