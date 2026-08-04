@@ -22,7 +22,7 @@ export const About = () => {
         {/* Section Header - Consistent Style */}
         <div className="flex items-center gap-6 mb-24">
            <div className="flex items-baseline gap-3">
-              <span className="font-serif italic text-lg text-white">02</span>
+              <span className="font-serif italic text-lg text-white">01</span>
               <span className="text-xs font-mono uppercase tracking-[0.3em] text-neutral-400">About Cherry.Pick</span>
            </div>
            <div className="h-px w-32 bg-gradient-to-r from-white/30 to-transparent" />
@@ -95,17 +95,26 @@ export const About = () => {
                {/* Client List - Trust Factor */}
                <div>
                  <span className="text-xs font-mono uppercase tracking-widest text-neutral-600 block mb-6">Compare across</span>
-                 <div className="flex flex-wrap gap-x-12 gap-y-4 text-neutral-400 font-light text-lg">
-                   {['Coupang', 'Naver Shopping', 'Kurly', 'SSG', 'etc'].map((client, i) => (
-                     <motion.span 
-                       key={client}
+                 <div className="flex flex-wrap gap-x-12 gap-y-4 text-neutral-400 font-medium text-lg">
+                   {[
+                     { name: '쿠팡', url: 'https://www.coupang.com' },
+                     { name: '네이버쇼핑', url: 'https://shopping.naver.com' },
+                     { name: '컬리', url: 'https://www.kurly.com' },
+                     { name: 'SSG', url: 'https://www.ssg.com' },
+                     { name: 'G마켓', url: 'https://www.gmarket.co.kr' },
+                   ].map((client, i) => (
+                     <motion.a
+                       key={client.name}
+                       href={client.url}
+                       target="_blank"
+                       rel="noopener noreferrer"
                        initial={{ opacity: 0 }}
                        whileInView={{ opacity: 1 }}
                        transition={{ delay: 0.5 + (i * 0.1) }}
-                       className="hover:text-white transition-colors cursor-default"
+                       className="hover:text-white transition-colors cursor-pointer"
                      >
-                       {client}
-                     </motion.span>
+                       {client.name}
+                     </motion.a>
                    ))}
                  </div>
                </div>
