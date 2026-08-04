@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh pr create --base master --head update-readme-business-plan --title 'Update README with business plan and rename service to Etiquette' --body ' *)"
+    ]
+  }
+}
