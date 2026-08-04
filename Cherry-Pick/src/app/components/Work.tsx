@@ -6,11 +6,11 @@ import { projects } from '../data/projects'; // Import data
 
 export const Work = () => {
   return (
-    <div className="bg-neutral-950 min-h-screen text-white pt-32 px-6">
+    <div className="bg-white min-h-screen text-neutral-950 pt-32 px-6">
       <div className="container mx-auto">
         <div className="flex justify-between items-end mb-24">
            <div>
-             <Link to="/" className="text-xs font-mono uppercase tracking-widest text-neutral-500 hover:text-white transition-colors mb-8 block">
+             <Link to="/" className="text-xs font-mono uppercase tracking-widest text-neutral-500 hover:text-neutral-950 transition-colors mb-8 block">
                ← Back to Home
              </Link>
              <h1 className="text-6xl md:text-9xl font-medium tracking-tighter leading-[0.9]">
@@ -29,7 +29,7 @@ export const Work = () => {
               className="group cursor-pointer"
             >
               <Link to={`/work/${project.slug}`}>
-                <div className="relative overflow-hidden aspect-[3/4] mb-6 bg-neutral-900 rounded-sm">
+                <div className="relative overflow-hidden aspect-[3/4] mb-6 bg-neutral-100 rounded-sm">
                    <img 
                      src={project.image} 
                      alt={project.title}
@@ -41,7 +41,7 @@ export const Work = () => {
                       <ArrowUpRight className="w-5 h-5 text-white" />
                    </div>
                 </div>
-                <div className="border-t border-white/10 pt-4">
+                <div className="border-t border-black/10 pt-4">
                    <h3 className="text-xl font-medium tracking-tight mb-1">{project.title}</h3>
                    <p className="text-xs font-mono uppercase tracking-widest text-neutral-500">{project.category}</p>
                 </div>

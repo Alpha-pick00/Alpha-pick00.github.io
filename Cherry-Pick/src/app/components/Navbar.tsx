@@ -33,7 +33,7 @@ export const Navbar = () => {
       initial={{ y: -100 }}
       animate={{ y: 0 }}
       className={`fixed w-full z-50 transition-all duration-300 ${
-        scrolled ? 'bg-neutral-950/80 backdrop-blur-md py-4 border-b border-white/5' : 'py-8 bg-transparent'
+        scrolled ? 'bg-white/80 backdrop-blur-md py-4 border-b border-black/5' : 'py-8 bg-transparent'
       }`}
     >
       <div className="container mx-auto px-6 flex justify-between items-center">
@@ -58,10 +58,10 @@ export const Navbar = () => {
             >
               <Link
                 to={item.to}
-                className="text-sm uppercase tracking-widest hover:text-white/70 transition-colors relative group"
+                className="text-sm uppercase tracking-widest hover:text-black/70 transition-colors relative group"
               >
                 {item.name}
-                <span className="absolute -bottom-1 left-0 w-0 h-px bg-white transition-all group-hover:w-full" />
+                <span className="absolute -bottom-1 left-0 w-0 h-px bg-black transition-all group-hover:w-full" />
               </Link>
             </motion.div>
           ))}
@@ -70,7 +70,7 @@ export const Navbar = () => {
         {/* Mobile Toggle */}
         <button 
           onClick={() => setIsOpen(!isOpen)}
-          className="md:hidden z-50 text-white"
+          className="md:hidden z-50 text-neutral-950"
         >
           {isOpen ? <X /> : <Menu />}
         </button>
@@ -83,7 +83,7 @@ export const Navbar = () => {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: '100%' }}
               transition={{ type: "tween", duration: 0.4 }}
-              className="fixed inset-0 bg-neutral-950 flex flex-col items-center justify-center gap-12 md:hidden"
+              className="fixed inset-0 bg-white flex flex-col items-center justify-center gap-12 md:hidden"
             >
               {navItems.map((item) => (
                 <Link
