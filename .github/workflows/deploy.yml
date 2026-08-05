@@ -23,14 +23,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: Cherry-Pick/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-        working-directory: Cherry-Pick
+        working-directory: frontend
       - run: npm run build
-        working-directory: Cherry-Pick
+        working-directory: frontend
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: Cherry-Pick/dist
+          path: frontend/dist
 
   deploy:
     needs: build
