@@ -1,3 +1,3 @@
-# Cherry_pick
+# Etiquette
 
-https://cherry-pick00.github.io/Cherry_pick_Website/
+https://cherry-pick00.github.io/Etiquette/

@@ -65,7 +65,7 @@ export const Services = () => {
               className="text-6xl md:text-9xl font-medium tracking-tighter leading-none"
             >
               Curation <br />
-              <span className="italic font-serif" style={{ color: '#EC4899' }}>Solutions</span>
+              <span className="italic font-serif" style={{ color: '#4ADE80' }}>Solutions</span>
             </motion.h2>
           </div>
           
@@ -78,7 +78,7 @@ export const Services = () => {
           >
             <div className="absolute top-0 left-[-1px] h-12 w-[1px] bg-gradient-to-b from-black to-transparent" />
             <p className="text-xl md:text-2xl font-light text-neutral-700 leading-relaxed">
-              대화형 <span className="font-medium" style={{ color: '#EC4899' }}>AI</span>와 실시간 가격 비교를 결합해, 진짜 믿을 수 있는 결정을 만들어 드립니다.
+              대화형 <span className="font-medium" style={{ color: '#4ADE80' }}>AI</span>와 실시간 가격 비교를 결합해, 진짜 믿을 수 있는 결정을 만들어 드립니다.
             </p>
           </motion.div>
         </div>

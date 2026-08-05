@@ -8,7 +8,6 @@ import { Services } from './components/Services';
 import { Footer } from './components/Footer';
 import { Navbar } from './components/Navbar';
 import { Work } from './components/Work';
-import { ProjectDetail } from './components/ProjectDetail';
 
 // Preloader Component
 const Preloader = () => (
@@ -24,8 +23,8 @@ const Preloader = () => (
       transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
       className="flex flex-col items-center gap-4"
     >
-      <h1 className="text-4xl md:text-6xl font-bold tracking-tighter">
-        <span style={{ color: '#EC4899' }}>Cherry</span>.Pick
+      <h1 className="text-4xl md:text-6xl font-bold tracking-tighter" style={{ color: '#4ADE80' }}>
+        Étiquette
       </h1>
       <motion.div 
         initial={{ width: 0 }}
@@ -92,7 +91,6 @@ function App() {
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/work" element={<Work />} />
-            <Route path="/work/:slug" element={<ProjectDetail />} />
           </Routes>
         </div>
       )}

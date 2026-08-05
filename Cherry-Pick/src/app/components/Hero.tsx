@@ -1,5 +1,6 @@
 import React, { useRef } from 'react';
 import { motion, useScroll, useTransform } from 'motion/react';
+import { ArrowUp, Plus } from 'lucide-react';
 
 export const Hero = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -18,8 +19,8 @@ export const Hero = () => {
         <div className="absolute inset-0 opacity-[0.05] mix-blend-overlay bg-[url('https://grainy-gradients.vercel.app/noise.svg')]" />
         
         {/* Deep Atmospheric Glows - Boosted Visibility */}
-        <div className="absolute top-[-20%] left-[20%] w-[60vw] h-[60vw] bg-violet-900/20 rounded-full blur-[120px] mix-blend-multiply animate-pulse duration-[8000ms]" />
-        <div className="absolute bottom-[-20%] right-[20%] w-[50vw] h-[50vw] bg-blue-900/20 rounded-full blur-[120px] mix-blend-multiply animate-pulse duration-[10000ms]" />
+        <div className="absolute top-[-20%] left-[20%] w-[60vw] h-[60vw] bg-violet-900/[0.06] rounded-full blur-[120px] mix-blend-multiply animate-pulse duration-[8000ms]" />
+        <div className="absolute bottom-[-20%] right-[20%] w-[50vw] h-[50vw] bg-blue-900/[0.06] rounded-full blur-[120px] mix-blend-multiply animate-pulse duration-[10000ms]" />
       </motion.div>
 
       {/* 2. Technical Grid Overlay */}
@@ -51,37 +52,62 @@ export const Hero = () => {
       </div>
 
       {/* Main Content */}
-      <motion.div 
+      <motion.div
         style={{ y: yText, opacity: opacityText }}
-        className="relative z-10 max-w-6xl mx-auto flex flex-col items-center text-center"
+        className="relative z-10 w-full max-w-6xl mx-auto flex flex-col items-center text-center"
       >
         <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 1, ease: "easeOut" }}
-          className="mb-12"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          className="mb-8 text-6xl md:text-8xl font-medium tracking-tighter leading-none"
+          style={{ fontFamily: "'Times New Roman', Times, serif", color: '#4ADE80' }}
         >
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-black/10 bg-black/5 backdrop-blur-md text-xs font-mono tracking-widest uppercase text-neutral-600">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-            </span>
-            Available for new product buying
+          Étiquette
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 1, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
+          className="w-full max-w-4xl mx-auto mb-12"
+        >
+          <div className="flex items-center gap-3 pl-2 pr-2 py-2 rounded-full border border-black/10 bg-white/70 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.06)]">
+            <label
+              htmlFor="hero-image-upload"
+              aria-label="이미지 업로드"
+              className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center border border-black/10 text-neutral-600 hover:bg-black/5 transition-colors cursor-pointer"
+            >
+              <Plus className="w-5 h-5" strokeWidth={2.5} />
+              <input id="hero-image-upload" type="file" accept="image/*" className="hidden" />
+            </label>
+            <input
+              type="text"
+              placeholder="무엇이든 구매하세요"
+              className="flex-1 bg-transparent text-base md:text-lg font-light text-neutral-800 placeholder:text-neutral-400 outline-none"
+            />
+            <button
+              type="button"
+              aria-label="Send"
+              className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-transform hover:scale-105"
+              style={{ backgroundColor: '#4ADE80' }}
+            >
+              <ArrowUp className="w-5 h-5 text-white" strokeWidth={2.5} />
+            </button>
           </div>
         </motion.div>
 
-        <motion.h1 
-          initial={{ opacity: 0, y: 50 }}
+        <motion.p
+          initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
-          className="text-7xl md:text-[11rem] font-medium tracking-tighter leading-[0.85] mb-12 mix-blend-difference text-white"
+          transition={{ duration: 1, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
+          className="text-xl md:text-3xl tracking-normal italic text-neutral-500 mb-12"
           style={{ fontFamily: "'Times New Roman', Times, serif" }}
         >
-          <span style={{ color: '#EC4899' }}>Cherry</span>.Pick <br />
-          <span className="block mt-6 md:mt-10 leading-normal text-xl md:text-3xl tracking-normal italic text-neutral-500" style={{ fontFamily: "'Times New Roman', Times, serif" }}>Compare less, CherryPick more</span>
-        </motion.h1>
-        
-        <motion.div 
+          Compare less, Étiquette more
+        </motion.p>
+
+        <motion.div
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 1, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
