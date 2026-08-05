@@ -1,5 +1,5 @@
 
-  # Cherry.Pick
+  # Etiquette
 
   ## Running the code
 

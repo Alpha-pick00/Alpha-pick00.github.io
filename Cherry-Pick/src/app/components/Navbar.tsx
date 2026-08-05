@@ -42,8 +42,8 @@ export const Navbar = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
         >
-          <Link to="/" className="text-2xl font-bold tracking-tighter mix-blend-difference z-50">
-            <span style={{ color: '#EC4899' }}>Cherry</span>.Pick
+          <Link to="/" className="text-2xl font-bold tracking-tighter mix-blend-difference z-50" style={{ color: '#4ADE80' }}>
+            Étiquette
           </Link>
         </motion.div>
 

@@ -58,7 +58,7 @@ export const About = () => {
         <div className="flex items-center gap-6 mb-24">
            <div className="flex items-baseline gap-3">
               <span className="font-serif italic text-lg text-neutral-950">01</span>
-              <span className="text-xs font-mono uppercase tracking-[0.3em] text-neutral-600">About <span style={{ color: '#EC4899' }}>Cherry</span>.Pick</span>
+              <span className="text-xs font-mono uppercase tracking-[0.3em] text-neutral-600">About <span style={{ color: '#4ADE80' }}>Étiquette</span></span>
            </div>
            <div className="h-px w-32 bg-gradient-to-r from-black/30 to-transparent" />
         </div>
@@ -75,7 +75,7 @@ export const About = () => {
               className="text-5xl md:text-8xl font-medium tracking-tighter mb-12 leading-[0.9]"
             >
               We craft <br />
-              <span className="italic font-serif" style={{ color: '#EC4899' }}>smarter</span> choices.
+              <span className="italic font-serif" style={{ color: '#4ADE80' }}>smarter</span> choices.
             </motion.h2>
 
             <div className="grid md:grid-cols-2 gap-12 text-lg font-light text-neutral-600 leading-relaxed">
