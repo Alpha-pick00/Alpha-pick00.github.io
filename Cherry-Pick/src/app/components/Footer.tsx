@@ -35,11 +35,6 @@ export const Footer = () => {
                      <span className="block text-sm font-mono uppercase tracking-widest text-neutral-500 mt-1 group-hover:text-neutral-600 transition-colors">We are currently available</span>
                    </div>
                  </button>
-
-                 <a href="https://cherry-pick00.github.io/" target="_blank" rel="noopener noreferrer" className="group flex items-center gap-4 text-lg font-mono text-neutral-500 hover:text-neutral-950 transition-colors pl-4">
-                   <span className="w-2 h-2 rounded-full bg-green-500" />
-                   https://cherry-pick00.github.io/
-                 </a>
               </div>
             </div>
 
