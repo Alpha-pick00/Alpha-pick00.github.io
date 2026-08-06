@@ -4,7 +4,8 @@ import re
 from ..schemas import SearchResult
 
 _GENERIC_LISTING_URL_PATTERN = re.compile(
-    r"(search\?|dsearch\.php|/search\.|Gateway\.[a-z]+\?|[?&](q|query|prdid)=($|&|#))",
+    r"(search\?|dsearch\.php|/search\.|Gateway\.[a-z]+\?|/list\?cate="
+    r"|[?&](q|query|prdid|code)=($|&|#))",
     re.IGNORECASE,
 )
 
@@ -54,7 +55,11 @@ BULK_PROPOSAL_INSTRUCTIONS = (
     "아래 검색 결과를 참고해 사용자가 사려는 상품과 일치하는, 서로 다른 브랜드의 후보를 "
     "최대 {max_options}개까지 찾아 각 브랜드의 최저가로 제시하세요. "
     "반드시 아래 JSON 배열 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
-    '[{{"brand": "...", "product_name": "...", "price": "...", "retailer": "...", "url": "..."}}, ...]\n\n'
+    '[{{"brand": "...", "product_name": "...", "price": "...", "retailer": "...", "url": "...", '
+    '"reasoning": "...", "delivery_note": "..."}}, ...]\n\n'
+    "reasoning은 이 브랜드에서 왜 이 상품을 최저가 후보로 골랐는지 한두 문장으로 설명하세요. "
+    "delivery_note는 검색 결과 텍스트에 로켓배송/당일출고/익일배송처럼 배송 소요 정보가 "
+    "명시적으로 나와 있을 때만 그 표현을 그대로 적고, 없으면 빈 문자열로 두세요(지어내지 마세요). "
     "url은 반드시 아래 검색 결과에 나온 URL을 그대로(수정 없이) 복사해서 쓰세요. "
     "검색 결과에 없는 URL을 새로 만들어내지 마세요. "
     "검색창/카테고리 목록 같은 일반 검색 페이지(예: query= 뒤가 비어있는 URL, "
@@ -138,15 +143,28 @@ def build_price_confirm_prompt(product_name: str, page_content: str) -> str:
     )
 
 
-def filter_bulk_options(options: list[dict]) -> list[dict]:
-    """generic listing URL이거나 브랜드/상품명이 비어 있는 항목은 후보에서 제외한다."""
-    return [
-        o
-        for o in options
-        if not is_generic_listing_url(o.get("url") or "")
-        and (o.get("brand") or "").strip()
-        and (o.get("product_name") or "").strip()
-    ]
+def _normalize(text: str) -> str:
+    return re.sub(r"\s+", "", text or "").lower()
+
+
+def filter_bulk_options(options: list[dict], search_results: list[SearchResult]) -> list[dict]:
+    """generic listing URL이거나 브랜드/상품명이 비어 있는 항목은 후보에서 제외한다.
+    또한 brand가 실제로 그 url의 검색 결과(제목+본문)에 등장하지 않으면 제외한다 —
+    검색 결과가 여러 개일 때 LLM이 다른 후보의 브랜드명을 엉뚱한 url에 붙이는
+    매핑 오류가 가끔 있어, 응답을 받은 뒤 코드에서 한 번 더 근거를 확인한다."""
+    url_text = {r.url: _normalize(r.title + r.snippet) for r in search_results}
+    filtered = []
+    for o in options:
+        url = o.get("url") or ""
+        brand = (o.get("brand") or "").strip()
+        product_name = (o.get("product_name") or "").strip()
+        if is_generic_listing_url(url) or not brand or not product_name:
+            continue
+        haystack = url_text.get(url)
+        if haystack is not None and _normalize(brand) not in haystack:
+            continue
+        filtered.append(o)
+    return filtered
 
 
 def parse_json_object(text: str) -> dict:

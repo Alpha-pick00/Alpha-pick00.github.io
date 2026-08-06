@@ -39,7 +39,7 @@ async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkPr
             messages=[{"role": "user", "content": build_bulk_prompt(query, search_results)}],
         )
         options = parse_json_array(response.choices[0].message.content or "")
-        options = filter_bulk_options(options)
+        options = filter_bulk_options(options, search_results)
         return BulkProposal(agent="gpt", options=options)
     except Exception as exc:
         return BulkProposal(agent="gpt", error=str(exc))

@@ -1,16 +1,31 @@
 import asyncio
+import re
 
 from . import search as search_module
-from .agents import gemini, gpt, judge
+from .agents import deepseek, gemini, gpt, judge
 from .intent import is_bulk_query, needs_clarification
 from .schemas import (
+    BrandOption,
     BrandPriceResponse,
     BulkDecideResponse,
     BulkProposal,
     ClarifyResponse,
     DecideResponse,
+    PriceRange,
     Proposal,
 )
+
+
+def _price_to_int(price: str) -> int | None:
+    digits = re.sub(r"[^\d]", "", price or "")
+    return int(digits) if digits else None
+
+
+def _compute_price_range(options: list[BrandOption]) -> PriceRange | None:
+    prices = [n for n in (_price_to_int(o.price) for o in options) if n is not None]
+    if not prices:
+        return None
+    return PriceRange(min=f"{min(prices):,}원", max=f"{max(prices):,}원")
 
 
 async def run_debate(query: str) -> DecideResponse | BulkDecideResponse | ClarifyResponse:
@@ -31,6 +46,7 @@ async def run_single_debate(query: str) -> DecideResponse:
         await asyncio.gather(
             gpt.propose(query, results),
             gemini.propose(query, results),
+            deepseek.propose(query, results),
         )
     )
 
@@ -49,12 +65,16 @@ async def run_bulk_debate(query: str) -> BulkDecideResponse:
         await asyncio.gather(
             gpt.propose_bulk(query, results),
             gemini.propose_bulk(query, results),
+            deepseek.propose_bulk(query, results),
         )
     )
 
     decision = await judge.organize_options(query, proposals)
+    price_range = _compute_price_range(decision.options)
 
-    return BulkDecideResponse(query=query, proposals=proposals, decision=decision)
+    return BulkDecideResponse(
+        query=query, proposals=proposals, decision=decision, price_range=price_range
+    )
 
 
 async def run_clarify(query: str) -> DecideResponse | ClarifyResponse:

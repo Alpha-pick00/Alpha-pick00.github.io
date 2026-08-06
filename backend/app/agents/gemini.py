@@ -42,7 +42,7 @@ async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkPr
             config=JSON_CONFIG,
         )
         options = parse_json_array(response.text or "")
-        options = filter_bulk_options(options)
+        options = filter_bulk_options(options, search_results)
         return BulkProposal(agent="gemini", options=options)
     except Exception as exc:
         return BulkProposal(agent="gemini", error=str(exc))

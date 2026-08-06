@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-AgentName = Literal["gpt", "gemini"]
+AgentName = Literal["gpt", "gemini", "deepseek"]
 
 
 class SearchResult(BaseModel):
@@ -48,6 +48,8 @@ class BrandOption(BaseModel):
     price: str
     retailer: str
     url: str
+    reasoning: str | None = None
+    delivery_note: str | None = None
 
 
 class BulkProposal(BaseModel):
@@ -61,11 +63,17 @@ class BulkDecision(BaseModel):
     reasoning: str
 
 
+class PriceRange(BaseModel):
+    min: str
+    max: str
+
+
 class BulkDecideResponse(BaseModel):
     mode: Literal["bulk"] = "bulk"
     query: str
     proposals: list[BulkProposal]
     decision: BulkDecision
+    price_range: PriceRange | None = None
 
 
 class ClarifyOptions(BaseModel):

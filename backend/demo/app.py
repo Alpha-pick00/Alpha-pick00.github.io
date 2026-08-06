@@ -65,6 +65,9 @@ elif data and data.get("mode") == "brand_price":
 elif data and data.get("mode") == "bulk":
     decision = data["decision"]
     st.success(f"브랜드별 최저가 옵션 {len(decision['options'])}개")
+    price_range = data.get("price_range")
+    if price_range:
+        st.caption(f"가격대: {price_range['min']} ~ {price_range['max']}")
     st.caption(decision["reasoning"])
     for option in decision["options"]:
         st.markdown(
@@ -72,9 +75,11 @@ elif data and data.get("mode") == "bulk":
             f"{option['price']} ({option['retailer']}) · "
             f"[이 브랜드로 보기]({option['url']})"
         )
+        if option.get("delivery_note"):
+            st.caption(f"🚚 {option['delivery_note']}")
 
     st.divider()
-    st.subheader("토론 내역 (에이전트별 원본 제안)")
+    st.subheader("토론 내역 (에이전트별 원본 제안 + 추론)")
     cols = st.columns(len(data["proposals"]))
     for col, proposal in zip(cols, data["proposals"]):
         with col:
@@ -86,6 +91,10 @@ elif data and data.get("mode") == "bulk":
             else:
                 for option in proposal["options"]:
                     st.write(f"{option['brand']} — {option['price']}")
+                    if option.get("reasoning"):
+                        st.caption(option["reasoning"])
+                    if option.get("delivery_note"):
+                        st.caption(f"🚚 {option['delivery_note']}")
 
 elif data:
     decision = data["decision"]
