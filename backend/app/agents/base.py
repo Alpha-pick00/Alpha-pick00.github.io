@@ -4,7 +4,8 @@ import re
 from ..schemas import SearchResult
 
 _GENERIC_LISTING_URL_PATTERN = re.compile(
-    r"(search\?|dsearch\.php|/search\.|Gateway\.[a-z]+\?|[?&](q|query|prdid)=($|&|#))",
+    r"(search\?|dsearch\.php|/search\.|Gateway\.[a-z]+\?|/list\?cate="
+    r"|[?&](q|query|prdid|code)=($|&|#))",
     re.IGNORECASE,
 )
 
