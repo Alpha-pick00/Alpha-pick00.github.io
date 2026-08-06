@@ -8,9 +8,11 @@ from .base import (
     build_clarify_prompt,
     build_price_confirm_prompt,
     build_prompt,
+    filter_bulk_options,
     is_generic_listing_url,
     parse_json_array,
     parse_json_object,
+    proposal_data_or_error,
 )
 
 
@@ -23,8 +25,7 @@ async def propose(query: str, search_results: list[SearchResult]) -> Proposal:
             response_format={"type": "json_object"},
         )
         data = parse_json_object(response.choices[0].message.content or "")
-        if data.get("url") and is_generic_listing_url(data["url"]):
-            data = {}
+        data = proposal_data_or_error(data)
         return Proposal(agent="gpt", **data)
     except Exception as exc:
         return Proposal(agent="gpt", error=str(exc))
@@ -38,7 +39,7 @@ async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkPr
             messages=[{"role": "user", "content": build_bulk_prompt(query, search_results)}],
         )
         options = parse_json_array(response.choices[0].message.content or "")
-        options = [o for o in options if not is_generic_listing_url(o.get("url", ""))]
+        options = filter_bulk_options(options)
         return BulkProposal(agent="gpt", options=options)
     except Exception as exc:
         return BulkProposal(agent="gpt", error=str(exc))

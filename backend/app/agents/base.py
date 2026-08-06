@@ -15,6 +15,19 @@ def is_generic_listing_url(url: str) -> bool:
     return bool(_GENERIC_LISTING_URL_PATTERN.search(url))
 
 
+NO_CANDIDATE_ERROR = "적절한 상품 후보를 찾지 못했습니다."
+
+
+def proposal_data_or_error(data: dict) -> dict:
+    """product_name이 비어 있거나 url이 일반 목록 페이지면 빈 필드 그대로 두지 말고
+    error로 표시한다. 그래야 judge가 내용 없는 제안을 실제 후보처럼 다루지 않는다."""
+    if is_generic_listing_url(data.get("url") or ""):
+        return {"error": NO_CANDIDATE_ERROR}
+    if not (data.get("product_name") or "").strip():
+        return {"error": NO_CANDIDATE_ERROR}
+    return data
+
+
 PRICE_CONFIDENCE_GUIDANCE = (
     "price는 검색 결과 텍스트에 그 상품 자체의 가격으로 명확히 숫자가 나와 있을 때만 적으세요. "
     "다른 용량/수량/판촉가와 헷갈리거나 정확한 숫자를 확신할 수 없으면 "
@@ -123,6 +136,17 @@ def build_price_confirm_prompt(product_name: str, page_content: str) -> str:
         f"기존에 파악한 상품명: {product_name}\n\n"
         f"페이지 전체 텍스트:\n{page_content[:6000]}"
     )
+
+
+def filter_bulk_options(options: list[dict]) -> list[dict]:
+    """generic listing URL이거나 브랜드/상품명이 비어 있는 항목은 후보에서 제외한다."""
+    return [
+        o
+        for o in options
+        if not is_generic_listing_url(o.get("url") or "")
+        and (o.get("brand") or "").strip()
+        and (o.get("product_name") or "").strip()
+    ]
 
 
 def parse_json_object(text: str) -> dict:
