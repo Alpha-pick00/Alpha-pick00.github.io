@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-AgentName = Literal["gpt", "gemini"]
+AgentName = Literal["gpt", "gemini", "deepseek"]
 
 
 class SearchResult(BaseModel):

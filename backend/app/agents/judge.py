@@ -9,7 +9,7 @@ JUDGE_INSTRUCTIONS = (
     "아래 제안들을 비교해 사용자에게 가장 적합한 상품 하나를 선택하고, "
     "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
     '{"product_name": "...", "price": "...", "retailer": "...", "url": "...", '
-    '"reasoning": "...", "chosen_agent": "gpt|gemini"}'
+    '"reasoning": "...", "chosen_agent": "gpt|gemini|deepseek"}'
 )
 
 ORGANIZE_INSTRUCTIONS = (

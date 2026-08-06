@@ -143,15 +143,28 @@ def build_price_confirm_prompt(product_name: str, page_content: str) -> str:
     )
 
 
-def filter_bulk_options(options: list[dict]) -> list[dict]:
-    """generic listing URL이거나 브랜드/상품명이 비어 있는 항목은 후보에서 제외한다."""
-    return [
-        o
-        for o in options
-        if not is_generic_listing_url(o.get("url") or "")
-        and (o.get("brand") or "").strip()
-        and (o.get("product_name") or "").strip()
-    ]
+def _normalize(text: str) -> str:
+    return re.sub(r"\s+", "", text or "").lower()
+
+
+def filter_bulk_options(options: list[dict], search_results: list[SearchResult]) -> list[dict]:
+    """generic listing URL이거나 브랜드/상품명이 비어 있는 항목은 후보에서 제외한다.
+    또한 brand가 실제로 그 url의 검색 결과(제목+본문)에 등장하지 않으면 제외한다 —
+    검색 결과가 여러 개일 때 LLM이 다른 후보의 브랜드명을 엉뚱한 url에 붙이는
+    매핑 오류가 가끔 있어, 응답을 받은 뒤 코드에서 한 번 더 근거를 확인한다."""
+    url_text = {r.url: _normalize(r.title + r.snippet) for r in search_results}
+    filtered = []
+    for o in options:
+        url = o.get("url") or ""
+        brand = (o.get("brand") or "").strip()
+        product_name = (o.get("product_name") or "").strip()
+        if is_generic_listing_url(url) or not brand or not product_name:
+            continue
+        haystack = url_text.get(url)
+        if haystack is not None and _normalize(brand) not in haystack:
+            continue
+        filtered.append(o)
+    return filtered
 
 
 def parse_json_object(text: str) -> dict:

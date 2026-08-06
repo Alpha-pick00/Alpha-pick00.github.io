@@ -2,7 +2,7 @@ import asyncio
 import re
 
 from . import search as search_module
-from .agents import gemini, gpt, judge
+from .agents import deepseek, gemini, gpt, judge
 from .intent import is_bulk_query, needs_clarification
 from .schemas import (
     BrandOption,
@@ -46,6 +46,7 @@ async def run_single_debate(query: str) -> DecideResponse:
         await asyncio.gather(
             gpt.propose(query, results),
             gemini.propose(query, results),
+            deepseek.propose(query, results),
         )
     )
 
@@ -64,6 +65,7 @@ async def run_bulk_debate(query: str) -> BulkDecideResponse:
         await asyncio.gather(
             gpt.propose_bulk(query, results),
             gemini.propose_bulk(query, results),
+            deepseek.propose_bulk(query, results),
         )
     )
 
