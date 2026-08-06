@@ -17,8 +17,11 @@ ORGANIZE_INSTRUCTIONS = (
     "아래 제안들을 모두 모아 같은 브랜드(표기가 달라도 같은 브랜드면 하나로 합침)는 "
     "가장 낮은 가격 하나만 남기고, 가격이 낮은 순서로 정렬하세요. "
     "브랜드를 하나만 고르지 말고 서로 다른 브랜드는 전부 남기세요. "
+    "각 옵션의 reasoning과 delivery_note는 그 옵션을 제안한 에이전트가 적은 내용을 "
+    "그대로 옮기고, 새로 지어내지 마세요. "
     "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
-    '{"options": [{"brand": "...", "product_name": "...", "price": "...", "retailer": "...", "url": "..."}], '
+    '{"options": [{"brand": "...", "product_name": "...", "price": "...", "retailer": "...", '
+    '"url": "...", "reasoning": "...", "delivery_note": "..."}], '
     '"reasoning": "..."}'
 )
 
@@ -60,7 +63,8 @@ async def organize_options(query: str, proposals: list[BulkProposal]) -> BulkDec
     proposals_block = "\n\n".join(
         f"[{p.agent}]\n"
         + "\n".join(
-            f"- {o.brand} / {o.product_name} / {o.price} / {o.retailer} / {o.url}"
+            f"- {o.brand} / {o.product_name} / {o.price} / {o.retailer} / {o.url} / "
+            f"이유: {o.reasoning or '-'} / 배송: {o.delivery_note or '-'}"
             for o in p.options
         )
         for p in valid
