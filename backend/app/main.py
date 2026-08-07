@@ -1,6 +1,7 @@
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import autocomplete
 from .debate import run_brand_price, run_debate
 from .ocr import cleanup as ocr_cleanup
 from .ocr import google_vision as google_vision_ocr
@@ -30,12 +31,54 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+autocomplete.seed()
+
 DecideResult = DecideResponse | BulkDecideResponse | ClarifyResponse | BrandPriceResponse
+
+
+def _autocomplete_terms(request: DecideRequest, result: DecideResult) -> list[str]:
+    """검색어 + 파이프라인이 이미 만들어낸 모든 상품/브랜드 후보를 자동완성 인덱스에 반영한다.
+
+    judge가 최종 선택한 하나만 남기면, 각 에이전트가 실제 검색 결과에서 찾아낸
+    나머지 후보와 clarify 단계에서 뽑힌 브랜드/용량/수량은 그냥 버려진다.
+    검색 1건당 이미 검증된 상품 단어가 여러 개 나오므로 전부 모은다.
+    """
+    terms = [request.query]
+
+    if isinstance(result, DecideResponse):
+        terms.append(result.decision.product_name)
+        terms.extend(p.product_name for p in result.proposals if p.error is None)
+
+    elif isinstance(result, BulkDecideResponse):
+        for option in result.decision.options:
+            terms.append(option.brand)
+            terms.append(option.product_name)
+        for proposal in result.proposals:
+            if proposal.error is not None:
+                continue
+            for option in proposal.options:
+                terms.append(option.brand)
+                terms.append(option.product_name)
+
+    elif isinstance(result, ClarifyResponse):
+        terms.extend(result.options.brands)
+        terms.extend(result.options.volumes)
+        terms.extend(result.options.quantities)
+
+    elif isinstance(result, BrandPriceResponse) and result.option:
+        terms.append(result.option.product_name)
+
+    return terms
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/autocomplete", response_model=list[str])
+def get_autocomplete(q: str, limit: int = 8) -> list[str]:
+    return autocomplete.suggest(q, limit)
 
 
 @app.post("/ocr/extract", response_model=OcrExtractResponse)
@@ -50,11 +93,12 @@ async def ocr_extract(image: UploadFile) -> OcrExtractResponse:
 
 
 @app.post("/decide", response_model=DecideResult)
-async def decide(request: DecideRequest) -> DecideResult:
+async def decide(request: DecideRequest, background_tasks: BackgroundTasks) -> DecideResult:
     try:
         if request.brand:
-            return await run_brand_price(request.query, request.brand)
-        return await run_debate(request.query)
+            result = await run_brand_price(request.query, request.brand)
+        else:
+            result = await run_debate(request.query)
     except (RuntimeError, ValueError) as exc:
         # RuntimeError: 제안 전부 실패, ValueError: judge 응답에서 JSON을 못 찾음
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -63,3 +107,6 @@ async def decide(request: DecideRequest) -> DecideResult:
         raise HTTPException(
             status_code=502, detail="구매 결정을 처리하는 중 오류가 발생했습니다."
         ) from exc
+
+    background_tasks.add_task(autocomplete.record_terms, _autocomplete_terms(request, result))
+    return result

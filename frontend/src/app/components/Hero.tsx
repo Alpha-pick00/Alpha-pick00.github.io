@@ -1,7 +1,7 @@
-import React, { useRef, useState } from 'react';
-import { motion, useScroll, useTransform, AnimatePresence } from 'motion/react';
-import { ArrowUp, Plus, Loader2 } from 'lucide-react';
-import { decide, extractOcr, ApiError, type DecideResult } from '../lib/api';
+import React, { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion, useScroll, useTransform } from 'motion/react';
+import { ArrowUp, Loader2, Plus, Search } from 'lucide-react';
+import { decide, extractOcr, ApiError, fetchAutocomplete, type DecideResult } from '../lib/api';
 import { LoadingCard, ErrorCard, SearchResults } from './SearchResults';
 
 type Status = 'idle' | 'ocr' | 'loading' | 'result' | 'error';
@@ -19,6 +19,11 @@ export const Hero = () => {
   const [result, setResult] = useState<DecideResult | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
 
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const searchBarRef = useRef<HTMLFormElement>(null);
+
   const runSearch = async (q: string, brand?: string) => {
     if (!q.trim()) return;
     setStatus('loading');
@@ -35,6 +40,7 @@ export const Hero = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setShowSuggestions(false);
     runSearch(query);
   };
 
@@ -72,14 +78,72 @@ export const Hero = () => {
   const isBusy = status === 'ocr' || status === 'loading';
   const isSearching = status !== 'idle';
 
+  // 자동완성: 검색 로그가 없는 콜드스타트 제품이라, 카테고리/리테일러로 시드해둔 인덱스에
+  // 실제 검색어·판정된 상품명이 쌓이며 자라나는 자체 인덱스를 prefix로 조회한다.
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed || isBusy) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetchAutocomplete(trimmed, controller.signal)
+        .then((results) => {
+          setSuggestions(results);
+          setShowSuggestions(results.length > 0);
+          setActiveIndex(-1);
+        })
+        .catch(() => {});
+    }, 200);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, isBusy]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchBarRef.current && !searchBarRef.current.contains(event.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selectSuggestion = (term: string) => {
+    setQuery(term);
+    setShowSuggestions(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!showSuggestions || suggestions.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveIndex((prev) => (prev + 1) % suggestions.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveIndex((prev) => (prev <= 0 ? suggestions.length - 1 : prev - 1));
+    } else if (e.key === 'Enter' && activeIndex >= 0) {
+      e.preventDefault();
+      selectSuggestion(suggestions[activeIndex]);
+    } else if (e.key === 'Escape') {
+      setShowSuggestions(false);
+    }
+  };
+
   return (
     <section ref={containerRef} className="relative min-h-screen flex items-center justify-center px-6 py-32 bg-white">
-      
+
       {/* 1. Cinematic Grain & Gradient Background */}
       <motion.div style={{ y: yBg }} className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
         {/* Subtle Noise Texture */}
         <div className="absolute inset-0 opacity-[0.05] mix-blend-overlay bg-[url('https://grainy-gradients.vercel.app/noise.svg')]" />
-        
+
         {/* Deep Atmospheric Glows - Boosted Visibility */}
         <div className="absolute top-[-20%] left-[20%] w-[60vw] h-[60vw] bg-violet-900/[0.06] rounded-full blur-[120px] mix-blend-multiply animate-pulse duration-[8000ms]" />
         <div className="absolute bottom-[-20%] right-[20%] w-[50vw] h-[50vw] bg-blue-900/[0.06] rounded-full blur-[120px] mix-blend-multiply animate-pulse duration-[10000ms]" />
@@ -91,7 +155,7 @@ export const Hero = () => {
       {/* 3. Precision Geometric Rings (The "Sleek" Animation) */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0 overflow-hidden">
         {/* Ring 1: Slow Clockwise - Increased Opacity */}
-        <motion.div 
+        <motion.div
           animate={{ rotate: 360 }}
           transition={{ duration: 60, repeat: Infinity, ease: "linear" }}
           className="absolute w-[600px] h-[600px] md:w-[800px] md:h-[800px] rounded-full border border-black/10 border-dashed opacity-50"
@@ -135,8 +199,9 @@ export const Hero = () => {
           className="w-full max-w-4xl mx-auto mb-12"
         >
           <form
+            ref={searchBarRef}
             onSubmit={handleSubmit}
-            className="flex items-center gap-3 pl-2 pr-2 py-2 rounded-full border border-black/10 bg-white/70 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.06)]"
+            className="relative flex items-center gap-3 pl-2 pr-2 py-2 rounded-full border border-black/10 bg-white/70 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.06)]"
           >
             <label
               htmlFor="hero-image-upload"
@@ -161,8 +226,11 @@ export const Hero = () => {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
               disabled={isBusy}
               placeholder="무엇이든 구매하세요, 또는 상품 사진을 올려보세요"
+              autoComplete="off"
               className="flex-1 bg-transparent text-base md:text-lg font-light text-neutral-800 placeholder:text-neutral-400 outline-none disabled:opacity-50"
             />
             <button
@@ -178,6 +246,33 @@ export const Hero = () => {
                 <ArrowUp className="w-5 h-5 text-white" strokeWidth={2.5} />
               )}
             </button>
+
+            <AnimatePresence>
+              {showSuggestions && (
+                <motion.div
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 4 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute left-0 right-0 top-full mt-2 py-2 rounded-2xl border border-black/10 bg-white/95 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.08)] overflow-hidden z-20"
+                >
+                  {suggestions.map((term, index) => (
+                    <button
+                      key={term}
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => selectSuggestion(term)}
+                      className={`w-full flex items-center gap-3 px-5 py-2.5 text-left text-sm md:text-base font-light transition-colors ${
+                        index === activeIndex ? 'bg-black/5 text-neutral-900' : 'text-neutral-600 hover:bg-black/5'
+                      }`}
+                    >
+                      <Search className="w-4 h-4 text-neutral-400 shrink-0" strokeWidth={2} />
+                      {term}
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </form>
         </motion.div>
 
@@ -240,7 +335,7 @@ export const Hero = () => {
       </motion.div>
 
       {/* Minimal Scroll Indicator */}
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 1.2, duration: 1 }}

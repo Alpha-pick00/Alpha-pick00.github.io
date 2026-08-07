@@ -140,3 +140,12 @@ export async function extractOcr(file: File): Promise<OcrExtractResponse> {
 
   return response.json();
 }
+
+export async function fetchAutocomplete(query: string, signal?: AbortSignal): Promise<string[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const response = await fetch(`${API_URL}/autocomplete?q=${encodeURIComponent(trimmed)}`, { signal });
+  if (!response.ok) return [];
+  return response.json();
+}
