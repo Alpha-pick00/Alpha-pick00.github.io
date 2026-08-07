@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from .debate import run_brand_price, run_debate
 from .schemas import (
@@ -10,6 +11,18 @@ from .schemas import (
 )
 
 app = FastAPI(title="Etiquette Purchase Decision API")
+
+# GitHub Pages(정적 프론트엔드)에서 이 API를 브라우저로 직접 호출하므로 CORS 허용이 필요하다.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://cherry-pick00.github.io",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 DecideResult = DecideResponse | BulkDecideResponse | ClarifyResponse | BrandPriceResponse
 
