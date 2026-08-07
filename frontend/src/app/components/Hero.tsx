@@ -1,10 +1,10 @@
 import React, { useRef, useState } from 'react';
 import { motion, useScroll, useTransform, AnimatePresence } from 'motion/react';
 import { ArrowUp, Plus, Loader2 } from 'lucide-react';
-import { decide, ApiError, type DecideResult } from '../lib/api';
+import { decide, extractOcr, ApiError, type DecideResult } from '../lib/api';
 import { LoadingCard, ErrorCard, SearchResults } from './SearchResults';
 
-type Status = 'idle' | 'loading' | 'result' | 'error';
+type Status = 'idle' | 'ocr' | 'loading' | 'result' | 'error';
 
 export const Hero = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -38,12 +38,38 @@ export const Hero = () => {
     runSearch(query);
   };
 
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // 같은 파일을 다시 선택해도 onChange가 또 발생하도록 초기화
+    if (!file) return;
+
+    setStatus('ocr');
+    setErrorMessage('');
+    try {
+      const { ocr, cleaned } = await extractOcr(file);
+      const extractedText = (cleaned?.cleaned_text || ocr.text || '').trim();
+      if (!extractedText) {
+        setErrorMessage(ocr.error || '이미지에서 텍스트를 찾지 못했습니다.');
+        setStatus('error');
+        return;
+      }
+      setQuery(extractedText);
+      await runSearch(extractedText);
+    } catch (err) {
+      setErrorMessage(
+        err instanceof ApiError ? err.message : '이미지 분석 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.'
+      );
+      setStatus('error');
+    }
+  };
+
   const handleReset = () => {
     setStatus('idle');
     setResult(null);
     setErrorMessage('');
   };
 
+  const isBusy = status === 'ocr' || status === 'loading';
   const isSearching = status !== 'idle';
 
   return (
@@ -114,24 +140,35 @@ export const Hero = () => {
           >
             <label
               htmlFor="hero-image-upload"
-              aria-label="이미지 업로드"
-              className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center border border-black/10 text-neutral-600 hover:bg-black/5 transition-colors cursor-pointer"
+              aria-label="이미지로 검색"
+              className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center border border-black/10 text-neutral-600 hover:bg-black/5 transition-colors cursor-pointer has-[input:disabled]:opacity-50 has-[input:disabled]:pointer-events-none"
             >
-              <Plus className="w-5 h-5" strokeWidth={2.5} />
-              <input id="hero-image-upload" type="file" accept="image/*" className="hidden" />
+              {status === 'ocr' ? (
+                <Loader2 className="w-5 h-5 animate-spin" strokeWidth={2.5} />
+              ) : (
+                <Plus className="w-5 h-5" strokeWidth={2.5} />
+              )}
+              <input
+                id="hero-image-upload"
+                type="file"
+                accept="image/*"
+                className="hidden"
+                disabled={isBusy}
+                onChange={handleImageUpload}
+              />
             </label>
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              disabled={status === 'loading'}
-              placeholder="무엇이든 구매하세요"
+              disabled={isBusy}
+              placeholder="무엇이든 구매하세요, 또는 상품 사진을 올려보세요"
               className="flex-1 bg-transparent text-base md:text-lg font-light text-neutral-800 placeholder:text-neutral-400 outline-none disabled:opacity-50"
             />
             <button
               type="submit"
               aria-label="Send"
-              disabled={status === 'loading' || !query.trim()}
+              disabled={isBusy || !query.trim()}
               className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-transform hover:scale-105 disabled:opacity-50 disabled:hover:scale-100"
               style={{ backgroundColor: '#4ADE80' }}
             >
@@ -176,7 +213,19 @@ export const Hero = () => {
             </motion.div>
           ) : (
             <motion.div key="results" className="w-full">
-              {status === 'loading' && <LoadingCard query={query} />}
+              {status === 'ocr' && (
+                <LoadingCard message="이미지에서 텍스트를 읽고 있습니다" caption="잠시만 기다려주세요" />
+              )}
+              {status === 'loading' && (
+                <LoadingCard
+                  message={
+                    <>
+                      <span className="font-medium text-neutral-950">"{query}"</span> 에 대해 ChatGPT ·
+                      Gemini · DeepSeek가 후보를 찾고, Claude가 최종 비교하고 있습니다
+                    </>
+                  }
+                />
+              )}
               {status === 'error' && <ErrorCard message={errorMessage} onReset={handleReset} />}
               {status === 'result' && result && (
                 <SearchResults

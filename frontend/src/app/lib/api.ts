@@ -88,6 +88,25 @@ export type DecideResult =
   | ClarifyResponse
   | BrandPriceResponse;
 
+export interface OcrResult {
+  text: string;
+  confidence: number | null;
+  latency_ms: number | null;
+  block_count: number;
+  error: string | null;
+}
+
+export interface OcrCleanupResult {
+  cleaned_text: string | null;
+  notes: string | null;
+  error: string | null;
+}
+
+export interface OcrExtractResponse {
+  ocr: OcrResult;
+  cleaned: OcrCleanupResult | null;
+}
+
 export class ApiError extends Error {}
 
 export async function decide(query: string, brand?: string): Promise<DecideResult> {
@@ -100,6 +119,23 @@ export async function decide(query: string, brand?: string): Promise<DecideResul
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new ApiError(body?.detail || `요청이 실패했습니다 (${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function extractOcr(file: File): Promise<OcrExtractResponse> {
+  const formData = new FormData();
+  formData.append('image', file);
+
+  const response = await fetch(`${API_URL}/ocr/extract`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(body?.detail || `이미지 분석에 실패했습니다 (${response.status})`);
   }
 
   return response.json();

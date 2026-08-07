@@ -62,7 +62,13 @@ const BrandOptionRow = ({ option }: { option: BrandOption }) => (
   </a>
 );
 
-export const LoadingCard = ({ query }: { query: string }) => (
+export const LoadingCard = ({
+  message,
+  caption = '최대 1분 소요',
+}: {
+  message: React.ReactNode;
+  caption?: string;
+}) => (
   <Card>
     <div className="flex flex-col items-center text-center py-6 gap-4">
       <motion.div
@@ -70,11 +76,8 @@ export const LoadingCard = ({ query }: { query: string }) => (
         transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
         className="w-8 h-8 rounded-full border-2 border-black/10 border-t-[#4ADE80]"
       />
-      <p className="text-sm font-light text-neutral-500">
-        <span className="font-medium text-neutral-950">"{query}"</span> 에 대해 ChatGPT · Gemini ·
-        DeepSeek가 후보를 찾고, Claude가 최종 비교하고 있습니다
-      </p>
-      <p className="text-xs font-mono uppercase tracking-widest text-neutral-400">최대 1분 소요</p>
+      <p className="text-sm font-light text-neutral-500">{message}</p>
+      <p className="text-xs font-mono uppercase tracking-widest text-neutral-400">{caption}</p>
     </div>
   </Card>
 );
