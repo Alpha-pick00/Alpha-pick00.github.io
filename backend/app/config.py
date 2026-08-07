@@ -11,6 +11,8 @@ class Settings:
     anthropic_api_key: str | None = os.environ.get("ANTHROPIC_API_KEY")
     deepseek_api_key: str | None = os.environ.get("DEEPSEEK_API_KEY")
     tavily_api_key: str | None = os.environ.get("TAVILY_API_KEY")
+    google_merchant_id: str | None = os.environ.get("GOOGLE_MERCHANT_ID")
+    google_service_account_file: str | None = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
 
     gpt_model: str = os.environ.get("GPT_MODEL", "gpt-4.1")
     gemini_model: str = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
