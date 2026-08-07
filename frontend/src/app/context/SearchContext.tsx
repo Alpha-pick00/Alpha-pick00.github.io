@@ -1,5 +1,17 @@
-import React, { createContext, useContext, useState } from 'react';
-import { decide, extractOcr, ApiError, type DecideResult } from '../lib/api';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import {
+  decide,
+  extractOcr,
+  fetchServerHistory,
+  saveServerHistory,
+  deleteServerHistoryEntry,
+  clearServerHistory,
+  ApiError,
+  type DecideResult,
+  type ServerHistoryEntry,
+} from '../lib/api';
+import { getStoredToken } from '../lib/auth';
+import { useAuth } from './AuthContext';
 import {
   deleteHistoryEntry,
   clearHistory,
@@ -7,6 +19,13 @@ import {
   saveHistoryEntry,
   type HistoryEntry,
 } from '../lib/history';
+
+const fromServerEntry = (entry: ServerHistoryEntry): HistoryEntry => ({
+  id: entry.id,
+  query: entry.query,
+  timestamp: entry.timestamp * 1000, // 서버는 초 단위, 프론트는 Date.now() 기준 ms 단위로 통일
+  result: entry.result,
+});
 
 export type SearchStatus = 'idle' | 'ocr' | 'loading' | 'result' | 'error';
 
@@ -28,11 +47,37 @@ interface SearchContextValue {
 const SearchContext = createContext<SearchContextValue | null>(null);
 
 export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
+  const { user } = useAuth();
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<SearchStatus>('idle');
   const [result, setResult] = useState<DecideResult | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
+
+  // 로그인 상태가 바뀌면 기록 소스를 전환한다 — 로그인하면 그 계정의 서버 기록을
+  // 불러오고, 로그아웃하면 이 브라우저의 로컬 기록으로 되돌아간다.
+  useEffect(() => {
+    if (!user) {
+      setHistory(loadHistory());
+      return;
+    }
+    const token = getStoredToken();
+    if (!token) return;
+    fetchServerHistory(token).then((entries) => setHistory(entries.map(fromServerEntry)));
+  }, [user]);
+
+  const persistHistoryEntry = async (q: string, data: DecideResult) => {
+    if (user) {
+      const token = getStoredToken();
+      if (!token) return;
+      const saved = await saveServerHistory(token, q, data);
+      if (saved) {
+        setHistory((prev) => [fromServerEntry(saved), ...prev]);
+      }
+      return;
+    }
+    setHistory(saveHistoryEntry(q, data));
+  };
 
   const runSearch = async (q: string, brand?: string) => {
     if (!q.trim()) return;
@@ -42,7 +87,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
       const data = await decide(q, brand);
       setResult(data);
       setStatus('result');
-      setHistory(saveHistoryEntry(q, data));
+      persistHistoryEntry(q, data).catch(() => {});
     } catch (err) {
       setErrorMessage(
         err instanceof ApiError ? err.message : '요청 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.'
@@ -86,10 +131,22 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const deleteFromHistory = (id: string) => {
+    if (user) {
+      const token = getStoredToken();
+      if (token) deleteServerHistoryEntry(token, id).catch(() => {});
+      setHistory((prev) => prev.filter((h) => h.id !== id));
+      return;
+    }
     setHistory(deleteHistoryEntry(id));
   };
 
   const clearAllHistory = () => {
+    if (user) {
+      const token = getStoredToken();
+      if (token) clearServerHistory(token).catch(() => {});
+      setHistory([]);
+      return;
+    }
     setHistory(clearHistory());
   };
 

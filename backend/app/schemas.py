@@ -97,6 +97,9 @@ class BrandPriceResponse(BaseModel):
     error: str | None = None
 
 
+DecideResultUnion = DecideResponse | BulkDecideResponse | ClarifyResponse | BrandPriceResponse
+
+
 class OcrResult(BaseModel):
     text: str = ""
     confidence: float | None = None
@@ -138,3 +141,15 @@ class OAuthCodeRequest(BaseModel):
     code: str
     redirect_uri: str
     state: str | None = None  # 네이버는 토큰 교환 시 state가 필요하다
+
+
+class HistoryEntry(BaseModel):
+    id: str
+    query: str
+    timestamp: float
+    result: DecideResultUnion
+
+
+class SaveHistoryRequest(BaseModel):
+    query: str
+    result: DecideResultUnion

@@ -150,3 +150,48 @@ export async function fetchAutocomplete(query: string, signal?: AbortSignal): Pr
   if (!response.ok) return [];
   return response.json();
 }
+
+// --- 로그인 계정별 검색 기록 (서버에 저장, 기기 상관없이 동일 계정이면 같은 기록) ---
+
+export interface ServerHistoryEntry {
+  id: string;
+  query: string;
+  timestamp: number; // 서버는 epoch seconds(float)로 내려준다
+  result: DecideResult;
+}
+
+export async function fetchServerHistory(token: string): Promise<ServerHistoryEntry[]> {
+  const response = await fetch(`${API_URL}/history`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) return [];
+  return response.json();
+}
+
+export async function saveServerHistory(
+  token: string,
+  query: string,
+  result: DecideResult
+): Promise<ServerHistoryEntry | null> {
+  const response = await fetch(`${API_URL}/history`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ query, result }),
+  });
+  if (!response.ok) return null;
+  return response.json();
+}
+
+export async function deleteServerHistoryEntry(token: string, id: string): Promise<void> {
+  await fetch(`${API_URL}/history/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function clearServerHistory(token: string): Promise<void> {
+  await fetch(`${API_URL}/history`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}

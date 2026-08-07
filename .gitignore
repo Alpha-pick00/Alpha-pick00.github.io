@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 .venv/
 backend/app/data/autocomplete.db
+backend/app/data/history.db
