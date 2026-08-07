@@ -98,6 +98,7 @@ export interface OcrResult {
 
 export interface OcrCleanupResult {
   cleaned_text: string | null;
+  search_query: string | null;
   notes: string | null;
   error: string | null;
 }

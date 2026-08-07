@@ -107,6 +107,7 @@ class OcrResult(BaseModel):
 
 class OcrCleanupResult(BaseModel):
     cleaned_text: str | None = None
+    search_query: str | None = None
     notes: str | None = None
     error: str | None = None
 
