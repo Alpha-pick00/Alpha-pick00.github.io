@@ -3,7 +3,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from . import autocomplete
+from . import autocomplete, history
 from .auth import google as google_auth
 from .auth import kakao as kakao_auth
 from .auth import naver as naver_auth
@@ -18,9 +18,12 @@ from .schemas import (
     ClarifyResponse,
     DecideRequest,
     DecideResponse,
+    DecideResultUnion as DecideResult,
     GoogleAuthRequest,
+    HistoryEntry,
     OAuthCodeRequest,
     OcrExtractResponse,
+    SaveHistoryRequest,
     User,
 )
 
@@ -42,8 +45,6 @@ app.add_middleware(
 )
 
 autocomplete.seed()
-
-DecideResult = DecideResponse | BulkDecideResponse | ClarifyResponse | BrandPriceResponse
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -107,6 +108,30 @@ def get_autocomplete(q: str, limit: int = 8) -> list[str]:
 @app.get("/auth/me", response_model=User)
 def auth_me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@app.get("/history", response_model=list[HistoryEntry])
+def get_history(user: User = Depends(get_current_user)) -> list[HistoryEntry]:
+    return history.list_entries(user)
+
+
+@app.post("/history", response_model=HistoryEntry)
+def save_history(
+    request: SaveHistoryRequest, user: User = Depends(get_current_user)
+) -> HistoryEntry:
+    return history.add_entry(user, request.query, request.result)
+
+
+@app.delete("/history/{entry_id}")
+def delete_history_entry(entry_id: str, user: User = Depends(get_current_user)) -> dict[str, str]:
+    history.delete_entry(user, entry_id)
+    return {"status": "ok"}
+
+
+@app.delete("/history")
+def delete_all_history(user: User = Depends(get_current_user)) -> dict[str, str]:
+    history.clear_entries(user)
+    return {"status": "ok"}
 
 
 @app.post("/auth/google", response_model=AuthResponse)
