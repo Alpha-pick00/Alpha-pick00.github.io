@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useScroll, useTransform } from 'motion/react';
 import { ArrowUp, Loader2, Plus, Search } from 'lucide-react';
-import { decide, extractOcr, ApiError, fetchAutocomplete, type DecideResult } from '../lib/api';
+import { useSearch } from '../context/SearchContext';
+import { fetchAutocomplete } from '../lib/api';
 import { LoadingCard, ErrorCard, SearchResults } from './SearchResults';
-
-type Status = 'idle' | 'ocr' | 'loading' | 'result' | 'error';
 
 export const Hero = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -14,29 +13,21 @@ export const Hero = () => {
   const yBg = useTransform(scrollY, [0, 500], [0, 100]);
   const opacityText = useTransform(scrollY, [0, 300], [1, 0]);
 
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState<Status>('idle');
-  const [result, setResult] = useState<DecideResult | null>(null);
-  const [errorMessage, setErrorMessage] = useState('');
+  const {
+    query,
+    setQuery,
+    status,
+    result,
+    errorMessage,
+    runSearch,
+    handleImageUpload,
+    handleReset,
+  } = useSearch();
 
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const searchBarRef = useRef<HTMLFormElement>(null);
-
-  const runSearch = async (q: string, brand?: string) => {
-    if (!q.trim()) return;
-    setStatus('loading');
-    setErrorMessage('');
-    try {
-      const data = await decide(q, brand);
-      setResult(data);
-      setStatus('result');
-    } catch (err) {
-      setErrorMessage(err instanceof ApiError ? err.message : '요청 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
-      setStatus('error');
-    }
-  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,35 +35,11 @@ export const Hero = () => {
     runSearch(query);
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = ''; // 같은 파일을 다시 선택해도 onChange가 또 발생하도록 초기화
     if (!file) return;
-
-    setStatus('ocr');
-    setErrorMessage('');
-    try {
-      const { ocr, cleaned } = await extractOcr(file);
-      const extractedText = (cleaned?.cleaned_text || ocr.text || '').trim();
-      if (!extractedText) {
-        setErrorMessage(ocr.error || '이미지에서 텍스트를 찾지 못했습니다.');
-        setStatus('error');
-        return;
-      }
-      setQuery(extractedText);
-      await runSearch(extractedText);
-    } catch (err) {
-      setErrorMessage(
-        err instanceof ApiError ? err.message : '이미지 분석 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.'
-      );
-      setStatus('error');
-    }
-  };
-
-  const handleReset = () => {
-    setStatus('idle');
-    setResult(null);
-    setErrorMessage('');
+    handleImageUpload(file);
   };
 
   const isBusy = status === 'ocr' || status === 'loading';
@@ -219,7 +186,7 @@ export const Hero = () => {
                 accept="image/*"
                 className="hidden"
                 disabled={isBusy}
-                onChange={handleImageUpload}
+                onChange={onFileSelected}
               />
             </label>
             <input
