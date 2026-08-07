@@ -17,5 +17,7 @@ class Settings:
     judge_model: str = os.environ.get("JUDGE_MODEL", "claude-sonnet-5")
     deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
+    google_vision_api_key: str | None = os.environ.get("GOOGLE_VISION_API_KEY")
+
 
 settings = Settings()
