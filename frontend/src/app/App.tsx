@@ -7,7 +7,10 @@ import { Projects } from './components/Projects';
 import { Services } from './components/Services';
 import { Footer } from './components/Footer';
 import { Navbar } from './components/Navbar';
+import { Sidebar } from './components/Sidebar';
 import { Work } from './components/Work';
+import { AuthProvider } from './context/AuthContext';
+import { SearchProvider } from './context/SearchContext';
 
 // Preloader Component
 const Preloader = () => (
@@ -78,23 +81,28 @@ function App() {
   }, []);
 
   return (
-    <Router>
-      <ScrollToTop />
-      
-      <AnimatePresence mode="wait">
-        {loading && <Preloader key="preloader" />}
-      </AnimatePresence>
+    <AuthProvider>
+      <SearchProvider>
+        <Router>
+          <ScrollToTop />
 
-      {!loading && (
-        <div className="bg-white min-h-screen text-neutral-950 selection:bg-black/20">
-          <Navbar />
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/work" element={<Work />} />
-          </Routes>
-        </div>
-      )}
-    </Router>
+          <AnimatePresence mode="wait">
+            {loading && <Preloader key="preloader" />}
+          </AnimatePresence>
+
+          {!loading && (
+            <div className="bg-white min-h-screen text-neutral-950 selection:bg-black/20">
+              <Navbar />
+              <Sidebar />
+              <Routes>
+                <Route path="/" element={<HomePage />} />
+                <Route path="/work" element={<Work />} />
+              </Routes>
+            </div>
+          )}
+        </Router>
+      </SearchProvider>
+    </AuthProvider>
   );
 }
 

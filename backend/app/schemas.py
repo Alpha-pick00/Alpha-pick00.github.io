@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 AgentName = Literal["gpt", "gemini", "deepseek"]
+AuthProvider = Literal["google", "kakao", "naver"]
 
 
 class SearchResult(BaseModel):
@@ -113,3 +114,26 @@ class OcrCleanupResult(BaseModel):
 class OcrExtractResponse(BaseModel):
     ocr: OcrResult
     cleaned: OcrCleanupResult | None = None
+
+
+class User(BaseModel):
+    provider: AuthProvider
+    provider_user_id: str
+    email: str | None = None
+    name: str | None = None
+    picture: str | None = None
+
+
+class AuthResponse(BaseModel):
+    token: str
+    user: User
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str  # Google Identity Services가 내려주는 ID 토큰(JWT)
+
+
+class OAuthCodeRequest(BaseModel):
+    code: str
+    redirect_uri: str
+    state: str | None = None  # 네이버는 토큰 교환 시 state가 필요하다
