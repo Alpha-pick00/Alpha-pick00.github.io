@@ -1,11 +1,32 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { formatDistanceToNow } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import { PanelLeft, X, Plus, Trash2, LogOut } from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
 import { useAuth } from '../context/AuthContext';
-import { loginWithGoogle, renderGoogleButton, startKakaoLogin, startNaverLogin } from '../lib/auth';
+import { startGoogleLogin, startKakaoLogin, startNaverLogin } from '../lib/auth';
+
+const GoogleIcon = () => (
+  <svg viewBox="0 0 24 24" className="w-4 h-4">
+    <path
+      fill="#4285F4"
+      d="M23.52 12.27c0-.85-.08-1.67-.22-2.45H12v4.64h6.47a5.53 5.53 0 0 1-2.4 3.63v3h3.88c2.27-2.09 3.57-5.17 3.57-8.82Z"
+    />
+    <path
+      fill="#34A853"
+      d="M12 24c3.24 0 5.96-1.07 7.95-2.91l-3.88-3c-1.08.72-2.45 1.15-4.07 1.15-3.13 0-5.78-2.11-6.73-4.96H1.26v3.09A11.997 11.997 0 0 0 12 24Z"
+    />
+    <path
+      fill="#FBBC05"
+      d="M5.27 14.28A7.2 7.2 0 0 1 4.89 12c0-.79.14-1.56.38-2.28V6.63H1.26A11.997 11.997 0 0 0 0 12c0 1.94.46 3.77 1.26 5.37l4.01-3.09Z"
+    />
+    <path
+      fill="#EA4335"
+      d="M12 4.77c1.76 0 3.35.61 4.6 1.8l3.44-3.44C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.69 1.26 6.63l4.01 3.09C6.22 6.87 8.87 4.77 12 4.77Z"
+    />
+  </svg>
+);
 
 const KakaoIcon = () => (
   <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
@@ -19,21 +40,19 @@ const NaverIcon = () => (
   </svg>
 );
 
+const SOCIAL_BUTTON_CLASS =
+  'w-full flex items-center justify-center gap-2 h-10 rounded-xl text-sm font-medium transition-opacity hover:opacity-90';
+
 const AuthArea = () => {
   const { user, loading, setUser, logout } = useAuth();
-  const googleButtonRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (user || !googleButtonRef.current) return;
-    renderGoogleButton(googleButtonRef.current, async (credential) => {
-      try {
-        const loggedInUser = await loginWithGoogle(credential);
-        setUser(loggedInUser);
-      } catch {
-        // 로그인 실패는 조용히 무시 — 버튼이 그대로 남아있어 재시도 가능
-      }
-    });
-  }, [user, setUser]);
+  const handleGoogleLogin = async () => {
+    try {
+      setUser(await startGoogleLogin());
+    } catch {
+      // 로그인 실패/취소는 조용히 무시 — 버튼이 그대로 남아있어 재시도 가능
+    }
+  };
 
   if (loading) {
     return <div className="h-12 rounded-xl bg-neutral-100 animate-pulse" />;
@@ -68,11 +87,18 @@ const AuthArea = () => {
 
   return (
     <div className="space-y-2">
-      <div ref={googleButtonRef} className="flex justify-center [&>div]:!w-full" />
+      <button
+        type="button"
+        onClick={handleGoogleLogin}
+        className={`${SOCIAL_BUTTON_CLASS} border border-black/10 bg-white text-neutral-700 hover:bg-neutral-50`}
+      >
+        <GoogleIcon />
+        Google로 계속하기
+      </button>
       <button
         type="button"
         onClick={startKakaoLogin}
-        className="w-full flex items-center justify-center gap-2 h-10 rounded-xl text-sm font-medium transition-opacity hover:opacity-90"
+        className={SOCIAL_BUTTON_CLASS}
         style={{ backgroundColor: '#FEE500', color: '#191919' }}
       >
         <KakaoIcon />
@@ -81,7 +107,7 @@ const AuthArea = () => {
       <button
         type="button"
         onClick={startNaverLogin}
-        className="w-full flex items-center justify-center gap-2 h-10 rounded-xl text-sm font-medium text-white transition-opacity hover:opacity-90"
+        className={`${SOCIAL_BUTTON_CLASS} text-white`}
         style={{ backgroundColor: '#03C75A' }}
       >
         <NaverIcon />

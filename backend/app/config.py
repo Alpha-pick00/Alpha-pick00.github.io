@@ -22,8 +22,8 @@ class Settings:
 
     google_vision_api_key: str | None = os.environ.get("GOOGLE_VISION_API_KEY")
 
-    # 소셜 로그인
-    google_oauth_client_id: str | None = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
+    # 소셜 로그인 (Google Client ID는 프론트엔드 VITE_GOOGLE_CLIENT_ID로만 쓰임 —
+    # access_token으로 유저 정보를 조회하는 방식이라 백엔드는 client id가 필요 없다)
     kakao_client_id: str | None = os.environ.get("KAKAO_CLIENT_ID")
     kakao_client_secret: str | None = os.environ.get("KAKAO_CLIENT_SECRET")
     naver_client_id: str | None = os.environ.get("NAVER_CLIENT_ID")

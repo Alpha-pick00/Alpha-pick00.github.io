@@ -69,7 +69,7 @@ def auth_me(user: User = Depends(get_current_user)) -> User:
 @app.post("/auth/google", response_model=AuthResponse)
 async def auth_google(request: GoogleAuthRequest) -> AuthResponse:
     try:
-        user = google_auth.verify_id_token(request.credential)
+        user = await google_auth.fetch_user(request.access_token)
     except Exception as exc:
         raise HTTPException(status_code=401, detail=f"구글 로그인에 실패했습니다: {exc}") from exc
     return AuthResponse(token=issue_session_token(user), user=user)

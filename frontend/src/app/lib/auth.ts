@@ -48,11 +48,11 @@ export async function fetchCurrentUser(): Promise<AuthUser | null> {
   return response.json();
 }
 
-export async function loginWithGoogle(credential: string): Promise<AuthUser> {
+async function loginWithGoogleAccessToken(accessToken: string): Promise<AuthUser> {
   const response = await fetch(`${API_URL}/auth/google`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ credential }),
+    body: JSON.stringify({ access_token: accessToken }),
   });
   return parseAuthResponse(response);
 }
@@ -128,22 +128,26 @@ export async function handleOAuthCallback(): Promise<AuthUser | null> {
   return loginWithCode(provider, code, getRedirectUri(), state);
 }
 
-// --- Google Identity Services ---
+// --- Google (OAuth2 토큰 클라이언트 팝업) ---
+// Google의 공식 렌더링 버튼(id.renderButton)은 iframe이라 커스텀 스타일링이 안 되므로,
+// 대신 우리 버튼 클릭에서 직접 팝업을 여는 토큰 클라이언트 방식을 쓴다 —
+// 카카오/네이버와 완전히 동일한 버튼 UI를 쓸 수 있다.
 
-interface GoogleCredentialResponse {
-  credential: string;
+interface GoogleTokenResponse {
+  access_token?: string;
+  error?: string;
 }
 
 declare global {
   interface Window {
     google?: {
       accounts: {
-        id: {
-          initialize: (config: {
+        oauth2: {
+          initTokenClient: (config: {
             client_id: string;
-            callback: (response: GoogleCredentialResponse) => void;
-          }) => void;
-          renderButton: (element: HTMLElement, options: Record<string, unknown>) => void;
+            scope: string;
+            callback: (response: GoogleTokenResponse) => void;
+          }) => { requestAccessToken: () => void };
         };
       };
     };
@@ -153,7 +157,7 @@ declare global {
 let gisScriptPromise: Promise<void> | null = null;
 
 function loadGoogleIdentityScript(): Promise<void> {
-  if (window.google?.accounts?.id) return Promise.resolve();
+  if (window.google?.accounts?.oauth2) return Promise.resolve();
   if (gisScriptPromise) return gisScriptPromise;
   gisScriptPromise = new Promise((resolve, reject) => {
     const script = document.createElement('script');
@@ -167,23 +171,26 @@ function loadGoogleIdentityScript(): Promise<void> {
   return gisScriptPromise;
 }
 
-export async function renderGoogleButton(
-  el: HTMLElement,
-  onCredential: (credential: string) => void
-): Promise<void> {
+export async function startGoogleLogin(): Promise<AuthUser> {
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-  if (!clientId) return;
+  if (!clientId) throw new ApiError('구글 로그인이 아직 설정되지 않았습니다.');
 
   await loadGoogleIdentityScript();
-  window.google!.accounts.id.initialize({
-    client_id: clientId,
-    callback: (response) => onCredential(response.credential),
+
+  const accessToken = await new Promise<string>((resolve, reject) => {
+    const client = window.google!.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'openid email profile',
+      callback: (response) => {
+        if (response.error || !response.access_token) {
+          reject(new Error(response.error || '구글 로그인이 취소되었습니다.'));
+          return;
+        }
+        resolve(response.access_token);
+      },
+    });
+    client.requestAccessToken();
   });
-  window.google!.accounts.id.renderButton(el, {
-    type: 'standard',
-    theme: 'outline',
-    size: 'large',
-    shape: 'pill',
-    width: 260,
-  });
+
+  return loginWithGoogleAccessToken(accessToken);
 }

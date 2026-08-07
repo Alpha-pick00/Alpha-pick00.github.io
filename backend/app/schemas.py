@@ -130,7 +130,7 @@ class AuthResponse(BaseModel):
 
 
 class GoogleAuthRequest(BaseModel):
-    credential: str  # Google Identity Services가 내려주는 ID 토큰(JWT)
+    access_token: str  # Google OAuth2 토큰 클라이언트(팝업)가 내려주는 access token
 
 
 class OAuthCodeRequest(BaseModel):
