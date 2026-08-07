@@ -18,6 +18,22 @@ import lotteimallLogo from '../../assets/about/logos/lotteimall.webp';
 import interparkLogo from '../../assets/about/logos/interpark.jpg';
 import danawaLogo from '../../assets/about/logos/danawa.webp';
 
+import chatgptLogo from '../../assets/about/logos/chatgpt.svg';
+import geminiLogo from '../../assets/about/logos/gemini.webp';
+import claudeLogo from '../../assets/about/logos/claude.png';
+import deepseekLogo from '../../assets/about/logos/deepseek.svg';
+import awsLogo from '../../assets/about/logos/aws.svg';
+import tavilyLogo from '../../assets/about/logos/tavily.svg';
+
+const poweredByClients = [
+  { name: 'OpenAI ChatGPT', url: 'https://chatgpt.com', logo: chatgptLogo },
+  { name: 'Google Gemini', url: 'https://gemini.google.com', logo: geminiLogo },
+  { name: 'Anthropic Claude', url: 'https://claude.ai', logo: claudeLogo },
+  { name: 'DeepSeek', url: 'https://www.deepseek.com', logo: deepseekLogo },
+  { name: 'Amazon AWS', url: 'https://aws.amazon.com', logo: awsLogo },
+  { name: 'Tavily', url: 'https://tavily.com', logo: tavilyLogo },
+];
+
 const compareClients = [
   { name: '쿠팡', url: 'https://www.coupang.com', logo: coupangLogo },
   { name: '네이버쇼핑', url: 'https://shopping.naver.com', logo: naverLogo },
@@ -198,6 +214,33 @@ export const About = () => {
               </div>
             </div>
           ))}
+        </div>
+
+        {/* Powered By - AI Models */}
+        <div className="mt-16 pt-16 border-t border-black/5">
+          <span className="text-base font-mono uppercase tracking-widest text-neutral-400 block mb-6">Powered by</span>
+          <div className="relative w-full overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)]">
+            <div
+              className="marquee-track flex w-max items-center gap-4 whitespace-nowrap"
+              style={{ animation: 'marquee 40s linear infinite' }}
+            >
+              {[...poweredByClients, ...poweredByClients].map((client, i) => (
+                <a
+                  key={`${client.name}-${i}`}
+                  href={client.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={client.name}
+                  className="shrink-0 flex items-center gap-3 h-16 px-6 rounded-xl bg-neutral-100 grayscale opacity-70 hover:grayscale-0 hover:opacity-100 transition-all cursor-pointer"
+                >
+                  <img src={client.logo} alt="" className="h-6 md:h-7 w-auto max-w-[32px] object-contain shrink-0" />
+                  <span className="text-sm font-light tracking-wide text-neutral-700 whitespace-nowrap">
+                    {client.name}
+                  </span>
+                </a>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </section>

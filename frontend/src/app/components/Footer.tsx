@@ -16,7 +16,7 @@ export const Footer = () => {
                 initial={{ opacity: 0, y: 50 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
-                className="text-6xl md:text-9xl font-medium tracking-tighter leading-[0.9] mb-16"
+                className="text-6xl md:text-[7.5rem] font-medium tracking-tighter leading-[0.9] mb-16"
               >
                 Let's <br />
                 <span style={{ color: '#4ADE80' }}>Étiquette</span>
