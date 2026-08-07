@@ -1,5 +1,8 @@
+import asyncio
+
 import httpx
 
+from . import naver_shopping
 from .config import settings
 from .schemas import SearchResult
 
@@ -35,7 +38,7 @@ EXCLUDE_DOMAINS = [
 ]
 
 
-async def search(query: str, max_results: int = 12) -> list[SearchResult]:
+async def _tavily_search(query: str, max_results: int) -> list[SearchResult]:
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
             TAVILY_URL,
@@ -60,6 +63,27 @@ async def search(query: str, max_results: int = 12) -> list[SearchResult]:
         text = raw[:1500] if raw else snippet
         results.append(SearchResult(title=r["title"], url=r["url"], snippet=text))
     return results
+
+
+async def search(query: str, max_results: int = 12) -> list[SearchResult]:
+    """네이버쇼핑 API(가격/판매처/브랜드가 정제된 필드로 옴) + Tavily 스크래핑(쿠팡 등
+    네이버쇼핑 미제휴 판매처 커버)을 합쳐서 반환한다. 한쪽이 실패해도 다른 쪽 결과는
+    그대로 쓸 수 있도록 개별적으로 예외를 흡수한다."""
+    naver_task = naver_shopping.search(query)
+    tavily_task = _tavily_search(query, max_results)
+    naver_results, tavily_results = await asyncio.gather(
+        naver_task, tavily_task, return_exceptions=True
+    )
+
+    if isinstance(naver_results, BaseException):
+        naver_results = []
+    if isinstance(tavily_results, BaseException):
+        tavily_results = []
+
+    seen_urls = {r.url for r in naver_results}
+    merged = list(naver_results)
+    merged += [r for r in tavily_results if r.url not in seen_urls]
+    return merged
 
 
 async def extract(url: str) -> str | None:

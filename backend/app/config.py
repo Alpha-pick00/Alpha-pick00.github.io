@@ -11,6 +11,8 @@ class Settings:
     anthropic_api_key: str | None = os.environ.get("ANTHROPIC_API_KEY")
     deepseek_api_key: str | None = os.environ.get("DEEPSEEK_API_KEY")
     tavily_api_key: str | None = os.environ.get("TAVILY_API_KEY")
+    naver_client_id: str | None = os.environ.get("NAVER_CLIENT_ID")
+    naver_client_secret: str | None = os.environ.get("NAVER_CLIENT_SECRET")
 
     gpt_model: str = os.environ.get("GPT_MODEL", "gpt-4.1")
     gemini_model: str = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
