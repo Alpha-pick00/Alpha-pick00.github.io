@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OCR 추출 + 텍스트 정리 실험 (Google Vision + Gemini)</title>
+<style>
+  :root {
+    --bg: #0f0f12;
+    --card: #1a1a20;
+    --border: #2a2a33;
+    --text: #eef0f4;
+    --muted: #9aa0ad;
+    --accent: #e5484d;
+    --accent-soft: #2a1416;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    padding: 24px;
+  }
+  .wrap { max-width: 800px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input[type=text] {
+    width: 100%;
+    background: #101014;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 9px;
+    padding: 11px 12px;
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .drop {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    transition: .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+  img#preview { max-height: 220px; border-radius: 10px; display: none; margin: 12px auto 0; }
+  .btn {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 999px;
+    padding: 11px 22px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .err { color: var(--accent); font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .row { margin-bottom: 12px; }
+  .row div.value { font-size: 13px; white-space: pre-wrap; }
+  .meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .meta b { color: var(--text); }
+  pre.text-box {
+    background: #101014;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 12px;
+    font-size: 13px;
+    white-space: pre-wrap;
+    max-height: 320px;
+    overflow-y: auto;
+    margin: 0;
+  }
+  .spin {
+    display: inline-block; width: 12px; height: 12px;
+    border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
+    border-radius: 50%; animation: spin .7s linear infinite; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>OCR 추출 + 텍스트 정리 실험</h1>
+  <p class="sub">Google Vision으로 텍스트를 추출하고, Gemini(텍스트 전용)가 정리합니다.</p>
+
+  <div class="card">
+    <label>백엔드 주소</label>
+    <input type="text" id="apiBase" value="http://localhost:8000" />
+  </div>
+
+  <div class="card">
+    <label>이미지</label>
+    <div class="drop" id="drop">클릭하거나 파일을 끌어다 놓으세요</div>
+    <input type="file" id="file" accept="image/*" style="display:none" />
+    <img id="preview" />
+    <div style="margin-top:16px;">
+      <button class="btn" id="run" disabled>OCR 실행</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div class="card" id="ocrCard" style="display:none;"></div>
+  <div class="card" id="cleanedCard" style="display:none;"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let currentFile = null;
+
+const drop = $('drop'), fileInput = $('file');
+drop.onclick = () => fileInput.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); handleFile(e.dataTransfer.files[0]); };
+fileInput.onchange = e => handleFile(e.target.files[0]);
+
+function handleFile(file) {
+  if (!file) return;
+  currentFile = file;
+  $('preview').src = URL.createObjectURL(file);
+  $('preview').style.display = 'block';
+  $('run').disabled = false;
+  $('err').textContent = '';
+  $('ocrCard').style.display = 'none';
+  $('cleanedCard').style.display = 'none';
+}
+
+$('run').onclick = async () => {
+  if (!currentFile) return;
+  const apiBase = $('apiBase').value.trim().replace(/\/$/, '');
+  $('err').textContent = '';
+  $('run').disabled = true;
+  const orig = $('run').innerHTML;
+  $('run').innerHTML = '<span class="spin"></span> 분석 중...';
+
+  try {
+    const formData = new FormData();
+    formData.append('image', currentFile);
+    const res = await fetch(`${apiBase}/ocr/extract`, { method: 'POST', body: formData });
+    if (!res.ok) throw new Error(`요청 실패 (${res.status})`);
+    const data = await res.json();
+    renderOcr(data.ocr);
+    renderCleaned(data.cleaned);
+  } catch (e) {
+    $('err').textContent = '요청 실패: ' + e.message + '\n(백엔드 서버가 켜져 있는지, 주소가 맞는지 확인하세요)';
+  } finally {
+    $('run').disabled = false;
+    $('run').innerHTML = orig;
+  }
+};
+
+function renderOcr(r) {
+  const el = $('ocrCard');
+  el.style.display = 'block';
+  if (r.error) {
+    el.innerHTML = `<h2>Google Vision 원본 결과</h2><div class="err">${r.error}</div>`;
+    return;
+  }
+  const conf = r.confidence != null ? (r.confidence * 100).toFixed(1) + '%' : 'n/a';
+  el.innerHTML = `
+    <h2>Google Vision 원본 결과</h2>
+    <div class="meta">
+      <div>블록 수 <b>${r.block_count}</b></div>
+      <div>신뢰도 <b>${conf}</b></div>
+      <div>응답시간 <b>${r.latency_ms}ms</b></div>
+    </div>
+    <pre class="text-box">${(r.text || '(텍스트 없음)').replace(/</g, '&lt;')}</pre>
+  `;
+}
+
+function renderCleaned(c) {
+  const el = $('cleanedCard');
+  if (!c) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+
+  if (c.error) {
+    el.innerHTML = `<h2>정리된 텍스트 (Gemini)</h2><div class="err">${c.error}</div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <h2>정리된 텍스트 (Gemini, 텍스트 전용)</h2>
+    <div class="row">
+      <pre class="text-box">${(c.cleaned_text || '-').replace(/</g, '&lt;')}</pre>
+    </div>
+    <div class="row"><label>정리하면서 처리한 내용</label><div class="value">${(c.notes || '없음').replace(/</g, '&lt;')}</div></div>
+  `;
+}
+</script>
+</body>
+</html>

@@ -94,3 +94,22 @@ class BrandPriceResponse(BaseModel):
     brand: str
     option: BrandOption | None = None
     error: str | None = None
+
+
+class OcrResult(BaseModel):
+    text: str = ""
+    confidence: float | None = None
+    latency_ms: int | None = None
+    block_count: int = 0
+    error: str | None = None
+
+
+class OcrCleanupResult(BaseModel):
+    cleaned_text: str | None = None
+    notes: str | None = None
+    error: str | None = None
+
+
+class OcrExtractResponse(BaseModel):
+    ocr: OcrResult
+    cleaned: OcrCleanupResult | None = None
