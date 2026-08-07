@@ -1,6 +1,10 @@
-import React, { useRef } from 'react';
-import { motion, useScroll, useTransform } from 'motion/react';
-import { ArrowUp, Plus } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { motion, useScroll, useTransform, AnimatePresence } from 'motion/react';
+import { ArrowUp, Plus, Loader2 } from 'lucide-react';
+import { decide, ApiError, type DecideResult } from '../lib/api';
+import { LoadingCard, ErrorCard, SearchResults } from './SearchResults';
+
+type Status = 'idle' | 'loading' | 'result' | 'error';
 
 export const Hero = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -9,12 +13,44 @@ export const Hero = () => {
   const yText = useTransform(scrollY, [0, 500], [0, 200]);
   const yBg = useTransform(scrollY, [0, 500], [0, 100]);
   const opacityText = useTransform(scrollY, [0, 300], [1, 0]);
-  
+
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState<Status>('idle');
+  const [result, setResult] = useState<DecideResult | null>(null);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const runSearch = async (q: string, brand?: string) => {
+    if (!q.trim()) return;
+    setStatus('loading');
+    setErrorMessage('');
+    try {
+      const data = await decide(q, brand);
+      setResult(data);
+      setStatus('result');
+    } catch (err) {
+      setErrorMessage(err instanceof ApiError ? err.message : '요청 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      setStatus('error');
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    runSearch(query);
+  };
+
+  const handleReset = () => {
+    setStatus('idle');
+    setResult(null);
+    setErrorMessage('');
+  };
+
+  const isSearching = status !== 'idle';
+
   return (
-    <section ref={containerRef} className="relative h-screen flex items-center justify-center overflow-hidden px-6 bg-white">
+    <section ref={containerRef} className="relative min-h-screen flex items-center justify-center px-6 py-32 bg-white">
       
       {/* 1. Cinematic Grain & Gradient Background */}
-      <motion.div style={{ y: yBg }} className="absolute inset-0 z-0 pointer-events-none">
+      <motion.div style={{ y: yBg }} className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
         {/* Subtle Noise Texture */}
         <div className="absolute inset-0 opacity-[0.05] mix-blend-overlay bg-[url('https://grainy-gradients.vercel.app/noise.svg')]" />
         
@@ -72,7 +108,10 @@ export const Hero = () => {
           transition={{ duration: 1, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
           className="w-full max-w-4xl mx-auto mb-12"
         >
-          <div className="flex items-center gap-3 pl-2 pr-2 py-2 rounded-full border border-black/10 bg-white/70 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.06)]">
+          <form
+            onSubmit={handleSubmit}
+            className="flex items-center gap-3 pl-2 pr-2 py-2 rounded-full border border-black/10 bg-white/70 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.06)]"
+          >
             <label
               htmlFor="hero-image-upload"
               aria-label="이미지 업로드"
@@ -83,46 +122,72 @@ export const Hero = () => {
             </label>
             <input
               type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              disabled={status === 'loading'}
               placeholder="무엇이든 구매하세요"
-              className="flex-1 bg-transparent text-base md:text-lg font-light text-neutral-800 placeholder:text-neutral-400 outline-none"
+              className="flex-1 bg-transparent text-base md:text-lg font-light text-neutral-800 placeholder:text-neutral-400 outline-none disabled:opacity-50"
             />
             <button
-              type="button"
+              type="submit"
               aria-label="Send"
-              className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-transform hover:scale-105"
+              disabled={status === 'loading' || !query.trim()}
+              className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-transform hover:scale-105 disabled:opacity-50 disabled:hover:scale-100"
               style={{ backgroundColor: '#4ADE80' }}
             >
-              <ArrowUp className="w-5 h-5 text-white" strokeWidth={2.5} />
+              {status === 'loading' ? (
+                <Loader2 className="w-5 h-5 text-white animate-spin" strokeWidth={2.5} />
+              ) : (
+                <ArrowUp className="w-5 h-5 text-white" strokeWidth={2.5} />
+              )}
             </button>
-          </div>
+          </form>
         </motion.div>
 
-        <motion.p
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 1, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
-          className="text-xl md:text-3xl tracking-normal italic text-neutral-500 mb-12"
-          style={{ fontFamily: "'Times New Roman', Times, serif" }}
-        >
-          Compare less, Étiquette more
-        </motion.p>
+        <AnimatePresence mode="wait">
+          {!isSearching ? (
+            <motion.div key="marketing" exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.3 }}>
+              <motion.p
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 1, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                className="text-xl md:text-3xl tracking-normal italic text-neutral-500 mb-12"
+                style={{ fontFamily: "'Times New Roman', Times, serif" }}
+              >
+                Compare less, Étiquette more
+              </motion.p>
 
-        <motion.div
-          initial={{ opacity: 0, y: 30 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 1, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="flex flex-col md:flex-row items-center gap-6 md:gap-16 text-lg font-light text-neutral-600 max-w-4xl mx-auto"
-        >
-          <p className="md:text-right flex-1 leading-relaxed">
-            Redefining price comparison with clarity<br />
-            and intelligent depth.
-          </p>
-          <div className="w-px h-16 bg-black/10 hidden md:block" />
-          <p className="md:text-left flex-1 leading-relaxed">
-            Based in Korea, Seoul<br />
-            Working Globally
-          </p>
-        </motion.div>
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 1, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                className="flex flex-col md:flex-row items-center gap-6 md:gap-16 text-lg font-light text-neutral-600 max-w-4xl mx-auto"
+              >
+                <p className="md:text-right flex-1 leading-relaxed">
+                  Redefining price comparison with clarity<br />
+                  and intelligent depth.
+                </p>
+                <div className="w-px h-16 bg-black/10 hidden md:block" />
+                <p className="md:text-left flex-1 leading-relaxed">
+                  Based in Korea, Seoul<br />
+                  Working Globally
+                </p>
+              </motion.div>
+            </motion.div>
+          ) : (
+            <motion.div key="results" className="w-full">
+              {status === 'loading' && <LoadingCard query={query} />}
+              {status === 'error' && <ErrorCard message={errorMessage} onReset={handleReset} />}
+              {status === 'result' && result && (
+                <SearchResults
+                  result={result}
+                  onSelectBrand={(brand) => runSearch(query, brand)}
+                  onReset={handleReset}
+                />
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.div>
 
       {/* Minimal Scroll Indicator */}
