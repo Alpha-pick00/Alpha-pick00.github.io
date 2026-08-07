@@ -120,6 +120,7 @@ const AuthArea = () => {
 export const Sidebar = () => {
   const [isOpen, setIsOpen] = useState(false);
   const { history, loadFromHistory, deleteFromHistory, clearAllHistory, handleReset } = useSearch();
+  const { user } = useAuth();
 
   const openWithAction = (action: () => void) => {
     action();
@@ -156,7 +157,7 @@ export const Sidebar = () => {
             >
               <div className="flex items-center justify-between px-5 pt-6 pb-4">
                 <span
-                  className="text-xl font-medium tracking-tighter"
+                  className="text-2xl font-medium tracking-tighter"
                   style={{ fontFamily: "'Times New Roman', Times, serif", color: '#4ADE80' }}
                 >
                   Étiquette
@@ -219,19 +220,23 @@ export const Sidebar = () => {
                 )}
               </div>
 
-              <div className="px-5 pt-3 pb-1">
-                <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400">환경설정</span>
-              </div>
-              <div className="px-3 pb-4">
-                <button
-                  type="button"
-                  onClick={clearAllHistory}
-                  disabled={history.length === 0}
-                  className="w-full text-left px-2.5 py-2 rounded-lg text-sm font-light text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
-                >
-                  전체 기록 삭제
-                </button>
-              </div>
+              {user && (
+                <>
+                  <div className="px-5 pt-3 pb-1">
+                    <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400">환경설정</span>
+                  </div>
+                  <div className="px-3 pb-4">
+                    <button
+                      type="button"
+                      onClick={clearAllHistory}
+                      disabled={history.length === 0}
+                      className="w-full text-left px-2.5 py-2 rounded-lg text-sm font-light text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+                    >
+                      전체 기록 삭제
+                    </button>
+                  </div>
+                </>
+              )}
 
               <div className="border-t border-black/5 p-3">
                 <AuthArea />
