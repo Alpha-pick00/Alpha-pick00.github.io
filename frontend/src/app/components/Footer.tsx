@@ -12,16 +12,6 @@ export const Footer = () => {
           <div className="grid md:grid-cols-[1.5fr_1fr] gap-20 mb-32">
             
             <div>
-              <motion.h2 
-                initial={{ opacity: 0, y: 50 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                className="text-6xl md:text-[6.5rem] font-medium tracking-tighter leading-[0.9] mb-16"
-              >
-                Let's <br />
-                <span style={{ color: '#4ADE80', fontSize: '54px' }}>Étiquette</span>
-              </motion.h2>
-              
               <div className="flex flex-col gap-10">
                  <button 
                    onClick={() => setIsFormOpen(true)}
