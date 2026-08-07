@@ -25,7 +25,7 @@ export const Navbar = () => {
     { name: 'Work', to: '/work' },
     { name: 'About', to: '/#about' },
     { name: 'Services', to: '/#services' },
-    { name: 'Contact', to: '/#contact' }
+    { name: 'Contact', to: 'mailto:parkminsung45@icloud.com' }
   ];
 
   return (
@@ -56,13 +56,23 @@ export const Navbar = () => {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: i * 0.1 }}
             >
-              <Link
-                to={item.to}
-                className="text-sm uppercase tracking-widest hover:text-black/70 transition-colors relative group"
-              >
-                {item.name}
-                <span className="absolute -bottom-1 left-0 w-0 h-px bg-black transition-all group-hover:w-full" />
-              </Link>
+              {item.to.startsWith('mailto:') ? (
+                <a
+                  href={item.to}
+                  className="text-sm uppercase tracking-widest hover:text-black/70 transition-colors relative group"
+                >
+                  {item.name}
+                  <span className="absolute -bottom-1 left-0 w-0 h-px bg-black transition-all group-hover:w-full" />
+                </a>
+              ) : (
+                <Link
+                  to={item.to}
+                  className="text-sm uppercase tracking-widest hover:text-black/70 transition-colors relative group"
+                >
+                  {item.name}
+                  <span className="absolute -bottom-1 left-0 w-0 h-px bg-black transition-all group-hover:w-full" />
+                </Link>
+              )}
             </motion.div>
           ))}
         </div>
@@ -85,15 +95,25 @@ export const Navbar = () => {
               transition={{ type: "tween", duration: 0.4 }}
               className="fixed inset-0 bg-white flex flex-col items-center justify-center gap-12 md:hidden"
             >
-              {navItems.map((item) => (
-                <Link
-                  key={item.name}
-                  to={item.to}
-                  className="text-4xl font-medium tracking-tight hover:text-neutral-500 transition-colors"
-                >
-                  {item.name}
-                </Link>
-              ))}
+              {navItems.map((item) =>
+                item.to.startsWith('mailto:') ? (
+                  <a
+                    key={item.name}
+                    href={item.to}
+                    className="text-4xl font-medium tracking-tight hover:text-neutral-500 transition-colors"
+                  >
+                    {item.name}
+                  </a>
+                ) : (
+                  <Link
+                    key={item.name}
+                    to={item.to}
+                    className="text-4xl font-medium tracking-tight hover:text-neutral-500 transition-colors"
+                  >
+                    {item.name}
+                  </Link>
+                )
+              )}
             </motion.div>
           )}
         </AnimatePresence>

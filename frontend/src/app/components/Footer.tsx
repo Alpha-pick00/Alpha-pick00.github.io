@@ -16,7 +16,7 @@ export const Footer = () => {
                 initial={{ opacity: 0, y: 50 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
-                className="text-6xl md:text-[7.5rem] font-medium tracking-tighter leading-[0.9] mb-16"
+                className="text-6xl md:text-[6.5rem] font-medium tracking-tighter leading-[0.9] mb-16"
               >
                 Let's <br />
                 <span style={{ color: '#4ADE80' }}>Étiquette</span>
@@ -31,8 +31,8 @@ export const Footer = () => {
                      <ArrowUpRight className="w-8 h-8 group-hover:rotate-45 transition-transform duration-500" />
                    </div>
                    <div>
-                     <span className="block text-4xl font-light tracking-tighter text-neutral-950 group-hover:translate-x-2 transition-transform duration-300">Start a <span style={{ color: '#4ADE80' }}>Étiquette</span></span>
-                     <span className="block text-sm font-mono uppercase tracking-widest text-neutral-500 mt-1 group-hover:text-neutral-600 transition-colors">We are currently available</span>
+                     <span className="block text-4xl font-light tracking-tighter text-neutral-950 group-hover:translate-x-2 transition-transform duration-300">Start a Business with <span style={{ color: '#4ADE80' }}>Étiquette</span></span>
+                     <span className="block text-sm font-mono uppercase tracking-widest text-neutral-500 mt-1 group-hover:text-neutral-600 transition-colors">We're looking for a business partner</span>
                    </div>
                  </button>
               </div>
@@ -42,10 +42,15 @@ export const Footer = () => {
               <div>
                 <h4 className="font-mono text-xs uppercase tracking-widest text-neutral-500 mb-6">Sitemap</h4>
                 <ul className="space-y-4">
-                  {['Home', 'Work', 'About', 'Contact'].map((link) => (
-                    <li key={link}>
-                      <a href={`#${link.toLowerCase()}`} className="text-lg font-light text-neutral-600 hover:text-neutral-950 transition-colors">
-                        {link}
+                  {[
+                    { label: 'Home', href: '#home' },
+                    { label: 'Work', href: '#work' },
+                    { label: 'About', href: '#about' },
+                    { label: 'Contact', href: 'mailto:parkminsung45@icloud.com' },
+                  ].map((link) => (
+                    <li key={link.label}>
+                      <a href={link.href} className="text-lg font-light text-neutral-600 hover:text-neutral-950 transition-colors">
+                        {link.label}
                       </a>
                     </li>
                   ))}
@@ -128,7 +133,7 @@ const ContactModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
               <div className="mt-12">
                 <span className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-6 block">04 / Contact</span>
                 <h3 className="text-4xl md:text-5xl font-medium tracking-tighter mb-2">
-                  Start <br />
+                  Start a Business with <br />
                   <span style={{ color: '#4ADE80' }}>Étiquette</span>
                 </h3>
                 <p className="text-neutral-600 font-light mb-12">
