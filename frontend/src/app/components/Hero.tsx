@@ -192,7 +192,12 @@ export const Hero = () => {
             <input
               type="text"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                if (status === 'result' || status === 'error') {
+                  handleReset();
+                }
+                setQuery(e.target.value);
+              }}
               onKeyDown={handleKeyDown}
               onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
               disabled={isBusy}
