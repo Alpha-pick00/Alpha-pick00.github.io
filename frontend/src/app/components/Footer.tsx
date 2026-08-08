@@ -58,6 +58,30 @@ export const Footer = () => {
               All rights reserved.
             </p>
           </div>
+
+          <div className="mt-6 pt-6 border-t border-black/5 text-center">
+            <p className="text-xs font-light text-neutral-400 leading-relaxed">
+              Étiquette | 사업자등록번호 86-1969045 (Seoul, Korea)
+              <br className="md:hidden" />
+              <span className="hidden md:inline"> | </span>
+              통신판매업 신고: 2025-공정-0020호 |{' '}
+              <a
+                href="https://www.ftc.go.kr/bizCommPop.do?wrkr_no=861969045"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-neutral-950 transition-colors"
+              >
+                사업자정보확인
+              </a>{' '}
+              | 호스팅제공자: AWS Cloud Services
+              <br className="md:hidden" />
+              <span className="hidden md:inline"> | </span>
+              대표전화: 1-415-505-5563 |{' '}
+              <a href="mailto:parkminsung45@icloud.com" className="hover:text-neutral-950 transition-colors">
+                parkminsung45@icloud.com
+              </a>
+            </p>
+          </div>
         </div>
       </footer>
 
