@@ -94,36 +94,37 @@ export const About = () => {
               <span className="italic font-serif" style={{ color: '#4ADE80' }}>smarter</span> choices.
             </motion.h2>
 
-            <div className="grid md:grid-cols-2 gap-12 text-lg font-light text-neutral-600 leading-relaxed">
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: 0.2, duration: 0.8 }}
-                className="space-y-6"
-              >
-                <p>
-                  탭으로 가득한 세상에서, 우리는 단 하나의 답을 선택합니다. 수십 개의 창 너머로 당신의 시선을 붙잡으려는 모든 플랫폼, 모든 가격, 모든 프로모션. 우리는 소음을 더하는 대신, 소음을 끝내는 경험을 만듭니다.
-                </p>
-                <p>
-                  우리의 철학은 단순합니다. 가장 좋은 비교는 당신이 직접 하지 않아도 되는 비교입니다. 우리는 더 많은 데이터를 보여주지 않습니다. 오직 중요한 것만 남겨, 하나의 확실한 추천으로 압축해 보여드립니다.
-                </p>
-              </motion.div>
-              
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: 0.3, duration: 0.8 }}
-                className="space-y-6"
-              >
-                <p>
-                  우리는 효용과 신뢰가 별개의 기능이 아니라 같은 개념이라고 믿습니다. 이유 없는 가격은 아무 의미가 없습니다. 그래서 우리가 제시하는 모든 답에는 근거가 함께합니다.
-                </p>
-                <p className="text-black/80">
-                  우리는 돈만큼이나 시간을 소중히 여기는 쇼퍼를 위해 만듭니다. 또 하나의 확인할 앱이 아니라, 모든 것을 대신 확인해주는 단 하나의 앱을 위해서요.
-                </p>
-              </motion.div>
+            <div className="grid sm:grid-cols-3 gap-10">
+              {[
+                {
+                  label: '소음 대신 답',
+                  text: '수십 개의 창, 수십 개의 가격. 우리는 그중 하나만 골라 보여드립니다.',
+                },
+                {
+                  label: '근거 있는 추천',
+                  text: '이유 없는 가격은 의미 없습니다. 모든 추천에는 근거가 함께합니다.',
+                },
+                {
+                  label: '시간을 위한 서비스',
+                  text: '돈만큼 시간도 소중하니까요. 확인은 저희가, 선택은 당신이 합니다.',
+                },
+              ].map((item, index) => (
+                <motion.div
+                  key={item.label}
+                  initial={{ opacity: 0, y: 20 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ delay: 0.2 + index * 0.1, duration: 0.8 }}
+                  className="space-y-3"
+                >
+                  <h4 className="text-xs font-mono uppercase tracking-widest" style={{ color: '#4ADE80' }}>
+                    {item.label}
+                  </h4>
+                  <p className="text-xl font-light text-neutral-700 leading-snug">
+                    {item.text}
+                  </p>
+                </motion.div>
+              ))}
             </div>
 
             {/* Stats & Trust */}

@@ -1,27 +1,27 @@
 import React, { useRef } from 'react';
 import { motion, useInView } from 'motion/react';
-import { Layout, Smartphone, Globe, Box, Zap, Search } from 'lucide-react';
+import { Bot, ScanLine, ShoppingBag, BadgeCheck } from 'lucide-react';
 
 const services = [
   {
-    icon: Layout,
-    title: "UI/UX Design",
-    description: "Crafting intuitive interfaces that guide users effortlessly through digital journeys."
+    icon: Bot,
+    title: "멀티에이전트 토론",
+    description: "ChatGPT, Gemini, DeepSeek가 각자 상품을 조사해 제안하고, Claude가 그 근거를 심사해 하나의 답으로 압축합니다."
   },
   {
-    icon: Smartphone,
-    title: "Mobile First",
-    description: "Responsive experiences that feel native on every device and screen size."
+    icon: ScanLine,
+    title: "이미지로 바로 검색",
+    description: "상품 사진 한 장만 올리면 OCR과 AI가 상품명을 읽어내 곧바로 가격 비교를 시작합니다."
   },
   {
-    icon: Globe,
-    title: "Web Development",
-    description: "Robust, scalable front-end solutions built with modern frameworks."
+    icon: ShoppingBag,
+    title: "검증된 15개 리테일러",
+    description: "쿠팡, 네이버쇼핑, G마켓 등 실제 판매 중인 국내 쇼핑몰만 골라 비교합니다."
   },
   {
-    icon: Box,
-    title: "3D & Motion",
-    description: "Immersive interactions that add depth and character to your brand."
+    icon: BadgeCheck,
+    title: "근거 있는 추천",
+    description: "가격만 나열하지 않습니다. 왜 이 상품을 골랐는지, 이유까지 함께 보여드립니다."
   }
 ];
 
