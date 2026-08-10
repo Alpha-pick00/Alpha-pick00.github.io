@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { formatDistanceToNow } from 'date-fns';
 import { ko } from 'date-fns/locale';
-import { PanelLeft, X, Plus, Trash2, LogOut } from 'lucide-react';
+import { PanelLeft, X, Plus, Trash2, LogOut, UserRound } from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
 import { useAuth } from '../context/AuthContext';
 import { startGoogleLogin, startKakaoLogin, startNaverLogin } from '../lib/auth';
@@ -129,14 +129,48 @@ export const Sidebar = () => {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setIsOpen(true)}
-        aria-label="기록 열기"
-        className={`fixed top-6 left-6 z-[60] w-11 h-11 rounded-full border border-black/10 bg-white/80 backdrop-blur-md shadow-[0_4px_20px_rgba(0,0,0,0.06)] flex items-center justify-center text-neutral-700 hover:bg-white transition-all ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
-      >
-        <PanelLeft className="w-5 h-5" strokeWidth={2} />
-      </button>
+      {/* 항상 보이는 레일 — ChatGPT/Gemini/Claude처럼 사이드바가 있다는 것 자체가 티나도록 */}
+      <aside className="fixed inset-y-0 left-0 z-[60] w-[68px] bg-white/90 backdrop-blur-md border-r border-black/10 flex flex-col items-center py-5 gap-2">
+        <button
+          type="button"
+          onClick={() => setIsOpen(true)}
+          aria-label="기록 열기"
+          className="w-10 h-10 rounded-xl flex items-center justify-center text-neutral-700 hover:bg-neutral-100 transition-colors"
+        >
+          <PanelLeft className="w-5 h-5" strokeWidth={2} />
+        </button>
+        <button
+          type="button"
+          onClick={() => openWithAction(handleReset)}
+          aria-label="새 검색"
+          className="w-10 h-10 rounded-xl flex items-center justify-center text-neutral-700 hover:bg-neutral-100 transition-colors"
+        >
+          <Plus className="w-5 h-5" strokeWidth={2} />
+        </button>
+
+        <div className="flex-1" />
+
+        <button
+          type="button"
+          onClick={() => setIsOpen(true)}
+          aria-label={user ? '계정' : '로그인'}
+          className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center hover:opacity-80 transition-opacity"
+        >
+          {user ? (
+            user.picture ? (
+              <img src={user.picture} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full rounded-full bg-neutral-950 text-white flex items-center justify-center text-sm font-medium">
+                {(user.name || user.email || '?').charAt(0).toUpperCase()}
+              </div>
+            )
+          ) : (
+            <div className="w-full h-full rounded-full bg-neutral-100 flex items-center justify-center text-neutral-400">
+              <UserRound className="w-5 h-5" />
+            </div>
+          )}
+        </button>
+      </aside>
 
       <AnimatePresence>
         {isOpen && (
