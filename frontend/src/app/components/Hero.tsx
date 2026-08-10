@@ -104,7 +104,7 @@ export const Hero = () => {
   };
 
   return (
-    <section ref={containerRef} className="relative min-h-screen flex items-center justify-center px-6 py-32 bg-white">
+    <section ref={containerRef} className="relative min-h-screen flex items-center justify-center px-6 pt-16 pb-32 bg-white">
 
       {/* 1. Cinematic Grain & Gradient Background */}
       <motion.div style={{ y: yBg }} className="absolute inset-0 z-0 pointer-events-none overflow-hidden">

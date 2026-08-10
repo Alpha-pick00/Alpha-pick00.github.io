@@ -10,8 +10,8 @@ export interface AuthUser {
   picture: string | null;
 }
 
-const TOKEN_KEY = 'etiquette-session-token';
-const OAUTH_STATE_KEY = 'etiquette-oauth-state';
+const TOKEN_KEY = 'alpha-pick-session-token';
+const OAUTH_STATE_KEY = 'alpha-pick-oauth-state';
 
 export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);

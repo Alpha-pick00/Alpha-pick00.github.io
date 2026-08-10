@@ -1,5 +1,5 @@
 
-  # Etiquette
+  # αlpha Pick
 
   ## Running the code
 

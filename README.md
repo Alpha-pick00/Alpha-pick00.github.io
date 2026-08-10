@@ -1,6 +1,6 @@
-# Etiquette
+# αlpha Pick
 
-https://cherry-pick00.github.io/Etiquette/
+https://cherry-pick00.github.io/alpha-pick/
 
 ---
 
