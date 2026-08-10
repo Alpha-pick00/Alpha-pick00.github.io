@@ -118,6 +118,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const handleReset = () => {
+    setQuery('');
     setStatus('idle');
     setResult(null);
     setErrorMessage('');
