@@ -1,6 +1,6 @@
 import { motion } from 'motion/react';
-import { ArrowUpRight, RotateCcw, Truck } from 'lucide-react';
-import type { DecideResult, BrandOption } from '../lib/api';
+import { ArrowUpRight, Check, Loader2, RotateCcw, Truck } from 'lucide-react';
+import type { AgentName, DecideResult, DecideStage, BrandOption, Proposal } from '../lib/api';
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
@@ -81,6 +81,62 @@ export const LoadingCard = ({
     </div>
   </Card>
 );
+
+const STAGE_LABEL: Record<DecideStage, string> = {
+  searching: '15개 쇼핑몰에서 검색하고 있습니다',
+  proposing: 'ChatGPT · Gemini · DeepSeek가 후보를 찾고 있습니다',
+  judging: 'Claude가 근거를 비교해 최종 추천을 고르고 있습니다',
+};
+
+const AGENT_ORDER: AgentName[] = ['gpt', 'gemini', 'deepseek'];
+
+const AgentProgressRow = ({ agent, proposal }: { agent: AgentName; proposal: Proposal | undefined }) => (
+  <div className="flex items-center gap-3 py-2.5 border-b border-black/5 last:border-b-0">
+    <div className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center">
+      {proposal ? (
+        <div className="w-5 h-5 rounded-full bg-[#4ADE80]/15 flex items-center justify-center">
+          <Check className="w-3 h-3 text-[#166534]" strokeWidth={3} />
+        </div>
+      ) : (
+        <Loader2 className="w-4 h-4 text-neutral-300 animate-spin" strokeWidth={2.5} />
+      )}
+    </div>
+    <span className="w-20 shrink-0 text-xs font-mono uppercase tracking-widest text-neutral-500">
+      {AGENT_LABEL[agent] || agent}
+    </span>
+    <p className="min-w-0 flex-1 text-sm font-light text-neutral-600 truncate">
+      {proposal
+        ? proposal.error
+          ? proposal.error
+          : `${proposal.product_name} · ${proposal.price || '가격 미확인'}`
+        : '탐색 중...'}
+    </p>
+  </div>
+);
+
+export const StreamingCard = ({ stage, proposals }: { stage: DecideStage; proposals: Proposal[] }) => {
+  const byAgent = Object.fromEntries(proposals.map((p) => [p.agent, p]));
+  return (
+    <Card>
+      <div className="flex flex-col items-center text-center py-2 gap-6">
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
+          className="w-8 h-8 rounded-full border-2 border-black/10 border-t-[#4ADE80]"
+        />
+        <p className="text-sm font-light text-neutral-500">{STAGE_LABEL[stage]}</p>
+
+        {stage !== 'searching' && (
+          <div className="w-full text-left">
+            {AGENT_ORDER.map((agent) => (
+              <AgentProgressRow key={agent} agent={agent} proposal={byAgent[agent]} />
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+};
 
 export const ErrorCard = ({ message, onReset }: { message: string; onReset: () => void }) => (
   <Card>

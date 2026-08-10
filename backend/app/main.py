@@ -1,16 +1,20 @@
+import asyncio
+import json
 from contextlib import asynccontextmanager
 
 import jwt
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import TypeAdapter
 
 from . import autocomplete, history, popularity_scheduler
 from .auth import google as google_auth
 from .auth import kakao as kakao_auth
 from .auth import naver as naver_auth
 from .auth.session import issue_session_token, verify_session_token
-from .debate import run_brand_price, run_debate
+from .debate import run_brand_price, run_debate, run_debate_stream
 from .ocr import cleanup as ocr_cleanup
 from .ocr import google_vision as google_vision_ocr
 from .schemas import (
@@ -28,6 +32,8 @@ from .schemas import (
     SaveHistoryRequest,
     User,
 )
+
+_decide_result_adapter = TypeAdapter(DecideResult)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -199,3 +205,41 @@ async def decide(request: DecideRequest, background_tasks: BackgroundTasks) -> D
 
     background_tasks.add_task(autocomplete.record_terms, _autocomplete_terms(request, result))
     return result
+
+
+@app.post("/decide/stream")
+async def decide_stream(request: DecideRequest) -> StreamingResponse:
+    """/decide와 같은 일을 하지만, 검색 완료·에이전트별 제안 완료·심사 단계마다
+    한 줄씩(NDJSON) 흘려보낸다. 그래야 프론트가 세 에이전트를 다 기다리지 않고
+    먼저 끝난 제안부터 화면에 보여줄 수 있다. 응답 헤더가 이미 200으로 나간
+    뒤라 실패해도 HTTP 상태 코드를 바꿀 수 없으므로, 에러도 "error" 이벤트로
+    흘려보낸다 — 프론트는 이 타입을 보고 에러 처리한다."""
+
+    async def event_generator():
+        try:
+            if request.brand:
+                result: DecideResult = await run_brand_price(request.query, request.brand)
+                yield json.dumps({"type": "final", "result": result.model_dump()}) + "\n"
+            else:
+                result = None
+                async for event in run_debate_stream(request.query):
+                    if event["type"] == "final":
+                        result = _decide_result_adapter.validate_python(event["result"])
+                    yield json.dumps(event) + "\n"
+        except (RuntimeError, ValueError) as exc:
+            # RuntimeError: 제안 전부 실패, ValueError: judge 응답에서 JSON을 못 찾음
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+            return
+        except Exception:
+            # 외부 LLM API 오류 등 예상 못한 실패는 내부 정보를 노출하지 않고 감싼다.
+            yield json.dumps(
+                {"type": "error", "message": "구매 결정을 처리하는 중 오류가 발생했습니다."}
+            ) + "\n"
+            return
+
+        if result is not None:
+            asyncio.create_task(
+                asyncio.to_thread(autocomplete.record_terms, _autocomplete_terms(request, result))
+            )
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")

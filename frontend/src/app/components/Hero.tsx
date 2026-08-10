@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useScroll, useTransform } from 'motion/react';
 import { ArrowUp, Loader2, Plus, Search } from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
 import { fetchAutocomplete } from '../lib/api';
-import { LoadingCard, ErrorCard, SearchResults } from './SearchResults';
+import { LoadingCard, StreamingCard, ErrorCard, SearchResults } from './SearchResults';
 
 export const Hero = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -19,6 +19,8 @@ export const Hero = () => {
     status,
     result,
     errorMessage,
+    streamingStage,
+    streamingProposals,
     runSearch,
     handleImageUpload,
     handleReset,
@@ -284,14 +286,7 @@ export const Hero = () => {
                 <LoadingCard message="이미지에서 텍스트를 읽고 있습니다" caption="잠시만 기다려주세요" />
               )}
               {status === 'loading' && (
-                <LoadingCard
-                  message={
-                    <>
-                      <span className="font-medium text-neutral-950">"{query}"</span> 에 대해 ChatGPT ·
-                      Gemini · DeepSeek가 후보를 찾고, Claude가 최종 비교하고 있습니다
-                    </>
-                  }
-                />
+                <StreamingCard stage={streamingStage || 'searching'} proposals={streamingProposals} />
               )}
               {status === 'error' && <ErrorCard message={errorMessage} onReset={handleReset} />}
               {status === 'result' && result && (
