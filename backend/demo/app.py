@@ -5,8 +5,8 @@ import streamlit as st
 
 API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000") + "/decide"
 
-st.set_page_config(page_title="Étiquette 구매 의사결정 데모", page_icon="🛍️")
-st.title("Étiquette 구매 의사결정 데모")
+st.set_page_config(page_title="αlpha Pick 구매 의사결정 데모", page_icon="🛍️")
+st.title("αlpha Pick 구매 의사결정 데모")
 st.caption("GPT + Gemini가 후보를 제안하고, Claude가 최종 추천을 결정합니다.")
 
 if "data" not in st.session_state:

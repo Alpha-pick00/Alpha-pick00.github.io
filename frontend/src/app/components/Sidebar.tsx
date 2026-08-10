@@ -160,7 +160,7 @@ export const Sidebar = () => {
                   className="text-2xl font-medium tracking-tighter"
                   style={{ fontFamily: "'Times New Roman', Times, serif", color: '#4ADE80' }}
                 >
-                  Étiquette
+                  αlpha Pick
                 </span>
                 <button
                   type="button"

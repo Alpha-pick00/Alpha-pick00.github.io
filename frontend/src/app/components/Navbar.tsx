@@ -36,17 +36,7 @@ export const Navbar = () => {
         scrolled ? 'bg-white/80 backdrop-blur-md py-4 border-b border-black/5' : 'py-8 bg-transparent'
       }`}
     >
-      <div className="container mx-auto px-6 flex justify-between items-center">
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-        >
-          <Link to="/" className="text-2xl font-bold tracking-tighter mix-blend-difference z-50" style={{ color: '#4ADE80' }}>
-            Étiquette
-          </Link>
-        </motion.div>
-
+      <div className="container mx-auto px-6 flex justify-end items-center">
         {/* Desktop Menu */}
         <div className="hidden md:flex gap-8">
           {navItems.map((item, i) => (

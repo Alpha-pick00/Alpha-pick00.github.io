@@ -27,7 +27,7 @@ from .schemas import (
     User,
 )
 
-app = FastAPI(title="Etiquette Purchase Decision API")
+app = FastAPI(title="αlpha Pick Purchase Decision API")
 
 # GitHub Pages(정적 프론트엔드)에서 이 API를 브라우저로 직접 호출하므로 CORS 허용이 필요하다.
 # 인증이 없는 API라 origin을 넓게 열어도 데이터 유출 위험은 없지만, "*"로 두면 아무 사이트나

@@ -40,7 +40,7 @@ async def search(query: str, max_results: int = 15) -> list[SearchResult]:
     주의: 이 API는 경쟁사·타 쇼핑몰 상품을 검색하는 기능이 아니다. Merchant
     Center 계정 소유자가 직접 업로드한 자신의 상품 카탈로그만 products.list로
     조회할 수 있고, 임의 키워드로 웹 전체나 다른 판매자의 상품을 찾는 엔드포인트는
-    Content API에 존재하지 않는다. Étiquette는 자체 판매 상품이 없으므로,
+    Content API에 존재하지 않는다. αlpha Pick는 자체 판매 상품이 없으므로,
     이 함수는 GOOGLE_MERCHANT_ID 계정에 실제 상품 피드가 등록되기 전까지는
     (기술적으로 연동되어 있어도) 사실상 항상 빈 결과를 반환한다.
     """

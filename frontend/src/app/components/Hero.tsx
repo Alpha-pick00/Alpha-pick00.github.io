@@ -156,7 +156,7 @@ export const Hero = () => {
           className="mb-8 text-6xl md:text-8xl font-medium tracking-tighter leading-none"
           style={{ fontFamily: "'Times New Roman', Times, serif", color: '#4ADE80' }}
         >
-          Étiquette
+          αlpha Pick
         </motion.div>
 
         <motion.div
@@ -258,7 +258,7 @@ export const Hero = () => {
                 className="text-xl md:text-3xl tracking-normal italic text-neutral-500 mb-12"
                 style={{ fontFamily: "'Times New Roman', Times, serif" }}
               >
-                Compare less, Étiquette more
+                Compare less, αlpha Pick more
               </motion.p>
 
               <motion.div
