@@ -1,10 +1,13 @@
 import asyncio
+import logging
 import re
 
 from . import search as search_module
 from .agents import deepseek, gemini, gpt, judge
+from .agents.base import NO_CANDIDATE_ERROR
 from .intent import is_bulk_query, needs_clarification
 from .schemas import (
+    AgentCandidates,
     BrandOption,
     BrandPriceResponse,
     BulkDecideResponse,
@@ -14,6 +17,31 @@ from .schemas import (
     PriceRange,
     Proposal,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _format_price_krw(price_krw: int | None) -> str:
+    return f"{price_krw:,}원" if price_krw is not None else ""
+
+
+def _top_proposal(agent_candidates: AgentCandidates) -> Proposal:
+    """에이전트가 배열로 낸 후보 중 1순위(선호도 최상위) 하나만 골라 기존
+    Proposal 형태로 맞춘다 — 프론트엔드가 에이전트당 정확히 1행을 기대하므로
+    응답 스키마는 그대로 두고, 병합 전 전체 배열은 fusion 모듈에서만 쓴다."""
+    if agent_candidates.error is not None:
+        return Proposal(agent=agent_candidates.agent, error=agent_candidates.error)
+    if not agent_candidates.candidates:
+        return Proposal(agent=agent_candidates.agent, error=NO_CANDIDATE_ERROR)
+    top = agent_candidates.candidates[0]
+    return Proposal(
+        agent=agent_candidates.agent,
+        product_name=top.product_name,
+        price=_format_price_krw(top.price_krw),
+        retailer=top.retailer,
+        url=top.url,
+        reasoning=top.reasoning,
+    )
 
 
 def _price_to_int(price: str) -> int | None:
@@ -42,13 +70,19 @@ async def run_single_debate(query: str) -> DecideResponse:
     except Exception:
         results = []
 
-    proposals: list[Proposal] = list(
+    agent_candidates: list[AgentCandidates] = list(
         await asyncio.gather(
             gpt.propose(query, results),
             gemini.propose(query, results),
             deepseek.propose(query, results),
         )
     )
+    logger.info(
+        "candidate pool sizes for %r: %s",
+        query,
+        {ac.agent: len(ac.candidates) for ac in agent_candidates},
+    )
+    proposals = [_top_proposal(ac) for ac in agent_candidates]
 
     decision = await judge.decide(query, proposals)
 

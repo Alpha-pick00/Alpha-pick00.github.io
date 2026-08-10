@@ -10,6 +10,7 @@ class SearchResult(BaseModel):
     title: str
     url: str
     snippet: str
+    score: float | None = None
 
 
 class Proposal(BaseModel):
@@ -19,6 +20,20 @@ class Proposal(BaseModel):
     retailer: str | None = None
     url: str | None = None
     reasoning: str | None = None
+    error: str | None = None
+
+
+class AgentCandidate(BaseModel):
+    product_name: str
+    price_krw: int | None = None
+    retailer: str | None = None
+    url: str | None = None
+    reasoning: str | None = None
+
+
+class AgentCandidates(BaseModel):
+    agent: AgentName
+    candidates: list[AgentCandidate] = []
     error: str | None = None
 
 

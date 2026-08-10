@@ -7,6 +7,7 @@ dist/
 .env.local
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv/
 backend/app/data/autocomplete.db
 backend/app/data/history.db

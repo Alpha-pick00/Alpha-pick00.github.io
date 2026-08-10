@@ -19,14 +19,22 @@ def is_generic_listing_url(url: str) -> bool:
 NO_CANDIDATE_ERROR = "적절한 상품 후보를 찾지 못했습니다."
 
 
-def proposal_data_or_error(data: dict) -> dict:
-    """product_name이 비어 있거나 url이 일반 목록 페이지면 빈 필드 그대로 두지 말고
-    error로 표시한다. 그래야 judge가 내용 없는 제안을 실제 후보처럼 다루지 않는다."""
-    if is_generic_listing_url(data.get("url") or ""):
-        return {"error": NO_CANDIDATE_ERROR}
-    if not (data.get("product_name") or "").strip():
-        return {"error": NO_CANDIDATE_ERROR}
-    return data
+def filter_candidates(items: list, max_items: int = 3) -> list[dict]:
+    """product_name이 비어 있거나 url이 일반 목록 페이지인 후보는 제외한다.
+    개수를 억지로 채우지 않고, 유효한 후보만 에이전트가 제시한 선호 순서 그대로
+    최대 max_items개까지 남긴다."""
+    filtered = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if is_generic_listing_url(item.get("url") or ""):
+            continue
+        if not (item.get("product_name") or "").strip():
+            continue
+        filtered.append(item)
+        if len(filtered) >= max_items:
+            break
+    return filtered
 
 
 PRICE_CONFIDENCE_GUIDANCE = (
@@ -35,18 +43,29 @@ PRICE_CONFIDENCE_GUIDANCE = (
     "실제와 다른 가격을 적느니 price를 빈 문자열로 두세요."
 )
 
+PRICE_KRW_GUIDANCE = (
+    "price_krw는 검색 결과 텍스트에 그 상품 자체의 가격으로 명확히 숫자가 나와 있을 때만, "
+    "쉼표나 '원' 같은 문자 없이 순수 정수로 적으세요. "
+    "다른 용량/수량/판촉가와 헷갈리거나 정확한 숫자를 확신할 수 없으면 "
+    "실제와 다른 가격을 적느니 price_krw를 null로 두세요."
+)
+
 PROPOSAL_INSTRUCTIONS = (
-    "당신은 쇼핑 후보를 조사해 하나의 상품을 추천하는 에이전트입니다. "
-    "아래 검색 결과를 참고해 사용자의 질의에 가장 적합한 상품 하나를 고르고, "
-    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
-    '{"product_name": "...", "price": "...", "retailer": "...", "url": "...", "reasoning": "..."}\n\n'
+    "당신은 쇼핑 후보를 조사해 상품을 추천하는 에이전트입니다. "
+    "아래 검색 결과를 참고해 사용자의 질의에 적합한 상품 후보를 최대 3개까지, "
+    "당신이 가장 적합하다고 판단하는 순서대로 배열에 담아 반환하세요. "
+    "근거가 확실한 후보가 1개뿐이면 1개만 반환하세요 — 개수를 채우려고 "
+    "억지 후보를 만들어내지 마세요. 같은 상품을 중복해서 넣지 마세요. "
+    "반드시 아래 JSON 배열 형식으로만 답하세요. 다른 텍스트나 코드펜스를 덧붙이지 마세요.\n\n"
+    '[{"product_name": "...", "price_krw": 12900, "retailer": "...", '
+    '"url": "...", "reasoning": "..."}, ...]\n\n'
     "url은 반드시 아래 검색 결과에 나온 URL을 그대로(수정 없이) 복사해서 쓰세요. "
     "검색 결과에 없는 URL을 새로 만들어내지 마세요. "
     "검색창/카테고리 목록 같은 일반 검색 페이지(예: query= 뒤가 비어있는 URL, "
     "검색 결과 전체 목록 페이지)는 후보에서 아예 제외하세요. "
     "특정 상품 하나를 가리키는 상세 페이지 URL을 가진 항목만 후보로 삼으세요. "
-    f"{PRICE_CONFIDENCE_GUIDANCE} "
-    "검색 결과가 없거나 적절한 상품을 찾을 수 없으면 모든 필드를 빈 문자열로 두세요."
+    f"{PRICE_KRW_GUIDANCE} "
+    "검색 결과가 없거나 적절한 상품을 찾을 수 없으면 빈 배열 []을 반환하세요."
 )
 
 

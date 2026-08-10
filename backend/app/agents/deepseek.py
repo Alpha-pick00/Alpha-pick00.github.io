@@ -1,14 +1,13 @@
 from openai import AsyncOpenAI
 
 from ..config import settings
-from ..schemas import BulkProposal, Proposal, SearchResult
+from ..schemas import AgentCandidate, AgentCandidates, BulkProposal, SearchResult
 from .base import (
     build_bulk_prompt,
     build_prompt,
     filter_bulk_options,
+    filter_candidates,
     parse_json_array,
-    parse_json_object,
-    proposal_data_or_error,
 )
 
 # DeepSeek은 OpenAI 호환 API라 openai SDK를 base_url만 바꿔서 그대로 쓴다.
@@ -19,19 +18,18 @@ def _client() -> AsyncOpenAI:
     return AsyncOpenAI(api_key=settings.deepseek_api_key, base_url=DEEPSEEK_BASE_URL)
 
 
-async def propose(query: str, search_results: list[SearchResult]) -> Proposal:
+async def propose(query: str, search_results: list[SearchResult]) -> AgentCandidates:
     try:
         client = _client()
         response = await client.chat.completions.create(
             model=settings.deepseek_model,
             messages=[{"role": "user", "content": build_prompt(query, search_results)}],
-            response_format={"type": "json_object"},
         )
-        data = parse_json_object(response.choices[0].message.content or "")
-        data = proposal_data_or_error(data)
-        return Proposal(agent="deepseek", **data)
+        items = parse_json_array(response.choices[0].message.content or "")
+        items = filter_candidates(items)
+        return AgentCandidates(agent="deepseek", candidates=[AgentCandidate(**i) for i in items])
     except Exception as exc:
-        return Proposal(agent="deepseek", error=str(exc))
+        return AgentCandidates(agent="deepseek", error=str(exc))
 
 
 async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkProposal:

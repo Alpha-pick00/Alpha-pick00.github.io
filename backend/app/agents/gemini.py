@@ -2,14 +2,13 @@ from google import genai
 from google.genai import types
 
 from ..config import settings
-from ..schemas import BulkProposal, Proposal, SearchResult
+from ..schemas import AgentCandidate, AgentCandidates, BulkProposal, SearchResult
 from .base import (
     build_bulk_prompt,
     build_prompt,
     filter_bulk_options,
+    filter_candidates,
     parse_json_array,
-    parse_json_object,
-    proposal_data_or_error,
 )
 
 # Gemini는 GPT의 response_format={"type": "json_object"}에 대응하는 기능이
@@ -18,7 +17,7 @@ from .base import (
 JSON_CONFIG = types.GenerateContentConfig(response_mime_type="application/json")
 
 
-async def propose(query: str, search_results: list[SearchResult]) -> Proposal:
+async def propose(query: str, search_results: list[SearchResult]) -> AgentCandidates:
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
@@ -26,11 +25,11 @@ async def propose(query: str, search_results: list[SearchResult]) -> Proposal:
             contents=build_prompt(query, search_results),
             config=JSON_CONFIG,
         )
-        data = parse_json_object(response.text or "")
-        data = proposal_data_or_error(data)
-        return Proposal(agent="gemini", **data)
+        items = parse_json_array(response.text or "")
+        items = filter_candidates(items)
+        return AgentCandidates(agent="gemini", candidates=[AgentCandidate(**i) for i in items])
     except Exception as exc:
-        return Proposal(agent="gemini", error=str(exc))
+        return AgentCandidates(agent="gemini", error=str(exc))
 
 
 async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkProposal:
