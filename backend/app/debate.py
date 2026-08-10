@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from typing import Any, AsyncIterator
 
 from . import search as search_module
 from .agents import deepseek, gemini, gpt, judge
@@ -64,6 +65,22 @@ async def run_debate(query: str) -> DecideResponse | BulkDecideResponse | Clarif
     return await run_single_debate(query)
 
 
+async def run_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
+    """단일 상품 검색만 단계별 이벤트로 스트리밍한다. bulk/clarify는 흐름 자체가
+    다르고(브랜드 목록 선택, 가격대별 정리) 단계를 쪼갤 만한 지점이 마땅치 않아,
+    최종 결과 하나만 "final" 이벤트로 보낸다 — 프론트는 이벤트 타입 하나만 보고
+    두 경우 다 처리하면 된다."""
+    if is_bulk_query(query):
+        yield {"type": "final", "result": (await run_bulk_debate(query)).model_dump()}
+        return
+    if needs_clarification(query):
+        yield {"type": "final", "result": (await run_clarify(query)).model_dump()}
+        return
+
+    async for event in run_single_debate_stream(query):
+        yield event
+
+
 async def run_single_debate(query: str) -> DecideResponse:
     try:
         results = await search_module.search(query)
@@ -87,6 +104,44 @@ async def run_single_debate(query: str) -> DecideResponse:
     decision = await judge.decide(query, proposals)
 
     return DecideResponse(query=query, proposals=proposals, decision=decision)
+
+
+async def run_single_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
+    """run_single_debate와 같은 결과를 만들지만, 검색/각 에이전트 완료/심사 단계마다
+    이벤트를 내보낸다. 세 에이전트는 asyncio.gather로 한꺼번에 기다리지 않고
+    as_completed로 먼저 끝나는 순서대로 흘려보내, 사용자가 셋 다 끝날 때까지
+    기다리지 않고 진행 상황을 볼 수 있게 한다."""
+    yield {"type": "status", "stage": "searching"}
+    try:
+        results = await search_module.search(query)
+    except Exception:
+        results = []
+
+    yield {"type": "status", "stage": "proposing"}
+
+    tasks = [
+        asyncio.create_task(gpt.propose(query, results)),
+        asyncio.create_task(gemini.propose(query, results)),
+        asyncio.create_task(deepseek.propose(query, results)),
+    ]
+    agent_candidates: list[AgentCandidates] = []
+    for task in asyncio.as_completed(tasks):
+        ac = await task
+        agent_candidates.append(ac)
+        yield {"type": "proposal", "proposal": _top_proposal(ac).model_dump()}
+
+    logger.info(
+        "candidate pool sizes for %r: %s",
+        query,
+        {ac.agent: len(ac.candidates) for ac in agent_candidates},
+    )
+
+    yield {"type": "status", "stage": "judging"}
+    proposals = [_top_proposal(ac) for ac in agent_candidates]
+    decision = await judge.decide(query, proposals)
+
+    result = DecideResponse(query=query, proposals=proposals, decision=decision)
+    yield {"type": "final", "result": result.model_dump()}
 
 
 async def run_bulk_debate(query: str) -> BulkDecideResponse:

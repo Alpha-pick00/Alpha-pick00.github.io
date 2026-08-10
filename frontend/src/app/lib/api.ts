@@ -125,6 +125,53 @@ export async function decide(query: string, brand?: string): Promise<DecideResul
   return response.json();
 }
 
+export type DecideStage = 'searching' | 'proposing' | 'judging';
+
+export type DecideStreamEvent =
+  | { type: 'status'; stage: DecideStage }
+  | { type: 'proposal'; proposal: Proposal }
+  | { type: 'final'; result: DecideResult }
+  | { type: 'error'; message: string };
+
+/** /decide와 같은 일을 하지만, 서버가 단계별로 흘려보내는 NDJSON(줄바꿈으로 구분된 JSON)을
+ * 그때그때 onEvent로 넘겨준다 — 세 에이전트를 다 기다리지 않고 먼저 끝난 제안부터 보여줄 수 있다. */
+export async function decideStream(
+  query: string,
+  onEvent: (event: DecideStreamEvent) => void,
+  brand?: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const response = await fetch(`${API_URL}/decide/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(brand ? { query, brand } : { query }),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(body?.detail || `요청이 실패했습니다 (${response.status})`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let newlineIndex = buffer.indexOf('\n');
+    while (newlineIndex !== -1) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (line) onEvent(JSON.parse(line) as DecideStreamEvent);
+      newlineIndex = buffer.indexOf('\n');
+    }
+  }
+}
+
 export async function extractOcr(file: File): Promise<OcrExtractResponse> {
   const formData = new FormData();
   formData.append('image', file);

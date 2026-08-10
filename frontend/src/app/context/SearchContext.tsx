@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
-  decide,
+  decideStream,
   extractOcr,
   fetchServerHistory,
   saveServerHistory,
@@ -8,6 +8,8 @@ import {
   clearServerHistory,
   ApiError,
   type DecideResult,
+  type DecideStage,
+  type Proposal,
   type ServerHistoryEntry,
 } from '../lib/api';
 import { getStoredToken } from '../lib/auth';
@@ -36,6 +38,8 @@ interface SearchContextValue {
   result: DecideResult | null;
   errorMessage: string;
   history: HistoryEntry[];
+  streamingStage: DecideStage | null;
+  streamingProposals: Proposal[];
   runSearch: (q: string, brand?: string) => Promise<void>;
   handleImageUpload: (file: File) => Promise<void>;
   handleReset: () => void;
@@ -53,6 +57,8 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   const [result, setResult] = useState<DecideResult | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
+  const [streamingStage, setStreamingStage] = useState<DecideStage | null>(null);
+  const [streamingProposals, setStreamingProposals] = useState<Proposal[]>([]);
 
   // 로그인 상태가 바뀌면 기록 소스를 전환한다 — 로그인하면 그 계정의 서버 기록을
   // 불러오고, 로그아웃하면 이 브라우저의 로컬 기록으로 되돌아간다.
@@ -83,8 +89,28 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
     if (!q.trim()) return;
     setStatus('loading');
     setErrorMessage('');
+    setStreamingStage('searching');
+    setStreamingProposals([]);
     try {
-      const data = await decide(q, brand);
+      let data: DecideResult | null = null;
+      let streamError: string | null = null;
+
+      await decideStream(q, (event) => {
+        if (event.type === 'status') {
+          setStreamingStage(event.stage);
+        } else if (event.type === 'proposal') {
+          setStreamingProposals((prev) => [...prev, event.proposal]);
+        } else if (event.type === 'final') {
+          data = event.result;
+        } else if (event.type === 'error') {
+          streamError = event.message;
+        }
+      }, brand);
+
+      if (streamError || !data) {
+        throw new ApiError(streamError || '요청 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      }
+
       setResult(data);
       setStatus('result');
       persistHistoryEntry(q, data).catch(() => {});
@@ -93,6 +119,9 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
         err instanceof ApiError ? err.message : '요청 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.'
       );
       setStatus('error');
+    } finally {
+      setStreamingStage(null);
+      setStreamingProposals([]);
     }
   };
 
@@ -160,6 +189,8 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
         result,
         errorMessage,
         history,
+        streamingStage,
+        streamingProposals,
         runSearch,
         handleImageUpload,
         handleReset,
