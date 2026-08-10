@@ -139,8 +139,19 @@ export const Sidebar = () => {
 
   return (
     <>
-      {/* 항상 보이는 레일 — ChatGPT/Gemini/Claude처럼 사이드바가 있다는 것 자체가 티나도록 */}
-      <aside className="fixed inset-y-0 left-0 z-[60] w-[68px] bg-white/90 backdrop-blur-md border-r border-black/10 flex flex-col items-center py-5 gap-2">
+      {/* 모바일 전용 플로팅 토글 — 작은 화면에서는 68px 레일이 화면을 너무 많이 잡아먹으므로
+          md 이상에서만 레일을 보여주고, 그 아래에서는 이 버튼 하나로 대체한다. */}
+      <button
+        type="button"
+        onClick={() => setIsOpen(true)}
+        aria-label="기록 열기"
+        className={`md:hidden fixed top-4 left-4 z-[60] w-11 h-11 rounded-full border border-black/10 bg-white/80 backdrop-blur-md shadow-[0_4px_20px_rgba(0,0,0,0.06)] flex items-center justify-center text-neutral-700 hover:bg-white transition-all ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+      >
+        <PanelLeft className="w-5 h-5" strokeWidth={2} />
+      </button>
+
+      {/* 데스크톱/태블릿 레일 — ChatGPT/Gemini/Claude처럼 사이드바가 있다는 것 자체가 티나도록 */}
+      <aside className="hidden md:flex fixed inset-y-0 left-0 z-[60] w-[68px] bg-white/90 backdrop-blur-md border-r border-black/10 flex-col items-center py-5 gap-2">
         <button
           type="button"
           onClick={() => setIsOpen(true)}
@@ -208,7 +219,7 @@ export const Sidebar = () => {
               animate={{ x: 0 }}
               exit={{ x: '-100%' }}
               transition={{ type: 'tween', duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-              className="fixed inset-y-0 left-0 z-[71] w-[300px] bg-white border-r border-black/10 flex flex-col"
+              className="fixed inset-y-0 left-0 z-[71] w-[85vw] max-w-[300px] bg-white border-r border-black/10 flex flex-col"
             >
               <div className="flex items-center justify-between px-5 pt-6 pb-4">
                 <span
