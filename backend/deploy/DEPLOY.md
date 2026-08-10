@@ -19,8 +19,8 @@ sudo apt update
 sudo apt install -y nginx certbot python3-certbot-nginx
 
 # 저장소
-git clone https://github.com/Cherry-Pick00/Etiquette.git
-cd Etiquette/backend
+git clone https://github.com/Cherry-Pick00/alpha-pick.git
+cd alpha-pick/backend
 cp .env.example .env
 vi .env   # 실제 API 키 채워넣기 (이 파일은 git에 올라가지 않음)
 ```
@@ -50,9 +50,9 @@ DOMAIN="$(echo $PUBLIC_IP | tr '.' '-').nip.io"
 echo "$DOMAIN"   # 예: 3-38-123-45.nip.io — 이 값을 기억해둔다
 
 # 2) nginx 설정
-sudo cp etiquette-api.nginx.conf /etc/nginx/sites-available/etiquette-api
-sudo sed -i "s/YOUR_DOMAIN/$DOMAIN/" /etc/nginx/sites-available/etiquette-api
-sudo ln -s /etc/nginx/sites-available/etiquette-api /etc/nginx/sites-enabled/
+sudo cp alpha-pick-api.nginx.conf /etc/nginx/sites-available/alpha-pick-api
+sudo sed -i "s/YOUR_DOMAIN/$DOMAIN/" /etc/nginx/sites-available/alpha-pick-api
+sudo ln -s /etc/nginx/sites-available/alpha-pick-api /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 
 # 3) TLS 인증서 발급 (443 블록을 certbot이 자동으로 추가)
@@ -80,7 +80,7 @@ Actions → Variables)에 넣을 값이다.
 ## 5. 코드 업데이트할 때
 
 ```bash
-cd ~/Etiquette
+cd ~/alpha-pick
 git pull
 cd backend/deploy
 docker compose up -d --build

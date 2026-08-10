@@ -7,7 +7,7 @@ export interface HistoryEntry {
   result: DecideResult;
 }
 
-const STORAGE_KEY = 'etiquette-search-history';
+const STORAGE_KEY = 'alpha-pick-search-history';
 const MAX_ENTRIES = 50;
 
 export function loadHistory(): HistoryEntry[] {
