@@ -9,3 +9,4 @@ google-auth==2.56.3
 httpx==0.28.1
 python-multipart==0.0.20
 pyjwt==2.13.0
+rapidfuzz==3.14.1
