@@ -44,6 +44,10 @@ class Decision(BaseModel):
     url: str
     reasoning: str
     chosen_agent: AgentName
+    # "danawa_offer": app.price_table이 다나와 실측 가격표의 A등급(링크 생성
+    # 가능) offer와 대조해 price/url을 검증된 값으로 교체했다는 뜻.
+    # "llm_guess"(기본값): 그런 대조 없이 LLM이 제안한 값 그대로.
+    price_source: Literal["danawa_offer", "llm_guess"] = "llm_guess"
 
 
 class DecideRequest(BaseModel):
@@ -51,11 +55,30 @@ class DecideRequest(BaseModel):
     brand: str | None = None
 
 
+class PriceTableOffer(BaseModel):
+    seller: str
+    price_krw: int
+    delivery_text: str | None = None
+    domain: str | None = None
+    trust: float | None = None
+    linkable: bool
+    rank: int
+
+
+class PriceTable(BaseModel):
+    source: str = "danawa"
+    source_pcode: str | None = None
+    product_name: str | None = None
+    offers: list[PriceTableOffer]
+    spread: float | None = None
+
+
 class DecideResponse(BaseModel):
     mode: Literal["single"] = "single"
     query: str
     proposals: list[Proposal]
     decision: Decision
+    price_table: PriceTable | None = None
 
 
 class BrandOption(BaseModel):

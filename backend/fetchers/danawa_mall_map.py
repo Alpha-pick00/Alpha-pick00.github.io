@@ -21,14 +21,22 @@ cmpnyc는 판매처 하나당 정확히 1개로 고정되어 있음을 44개 off
 url_rule 값의 의미:
   - "redirect_resolved": bridge -> 제휴링크를 follow_redirects로 추적하면
     최종 URL을 얻는다(최종 응답이 403이어도 response.url은 유효 - 쿠팡/SSG
-    계열에서 실측 확인). resolve_outlink()가 그대로 쓸 수 있다.
-  - "param:{이름}": 게이트웨이 URL의 그 쿼리 파라미터에 완전한 목적지 URL이
-    이미 들어있다(추가 리다이렉트 추적 불필요).
+    계열에서 실측 확인). app.price_table.resolve_purchase_url()이
+    danawa.resolve_outlink()를 호출해 실제 네트워크 요청을 보낸다.
+  - "template:{python format string}": 네트워크 요청 없이 bridge_url 자신의
+    link_pcode 쿼리 파라미터를 그대로 대입하면 목적지 URL이 완성된다
+    (11번가 - 검증 D에서 goUrl 파라미터의 목적지 상품 ID가 link_pcode와
+    정확히 일치함을 확인했다. bridge를 열어 goUrl을 읽을 필요조차 없다).
   - None: 아직 확인된 규칙이 없다. domain이 채워져 있어도 링크는 못 만든다.
 
 미검증 항목(domain=None, url_rule=None)에 대해 규칙을 추측해서 채우지 말 것 -
 검증 E-2가 429 두 번째 발생으로 중단되어 15종 중 8종은 실제로 한 번도
 열어보지 못했다.
+
+TRUST_TIER: domain -> 신뢰도 점수. 다나와 판매처 목록 자체에는 평점/배지 등
+신뢰도 신호가 전혀 없었다(검증 B) - 대신 outlink 도메인을 대리 지표로 쓴다.
+domain=None인 offer는 등급을 매기지 말고 None으로 남긴다(0.3으로 강등 금지 -
+모르는 것과 낮은 것은 다르다). domain은 있지만 아래 어느 집합에도 없으면 0.3.
 """
 
 from __future__ import annotations
@@ -47,7 +55,11 @@ CMPNYC_MAP: dict[str, MallMapping] = {
     "TP40F": {"seller": "쿠팡", "domain": "coupang.com", "url_rule": "redirect_resolved"},
 
     # --- 검증 D (게이트웨이 쿼리 파라미터 해부)에서 확인 ---
-    "TH201": {"seller": "11번가", "domain": "11st.co.kr", "url_rule": "param:goUrl"},
+    "TH201": {
+        "seller": "11번가",
+        "domain": "11st.co.kr",
+        "url_rule": "template:https://m.11st.co.kr/products/ma/{link_pcode}",
+    },
 
     # --- 검증 E-1: item-no -> 표준 URL 조립 가설, 미확정 ---
     # 옥션은 가설 URL이 403(봇 차단)으로 상품명 대조 자체가 불가해 가설을
@@ -84,3 +96,21 @@ CMPNYC_MAP: dict[str, MallMapping] = {
 
 def lookup(cmpnyc: str) -> MallMapping | None:
     return CMPNYC_MAP.get(cmpnyc)
+
+
+TRUST_TIER: dict[float, set[str]] = {
+    1.0: {
+        "coupang.com",
+        "11st.co.kr",
+        "gmarket.co.kr",
+        "auction.co.kr",
+        "ssg.com",
+        "shinsegaemall.ssg.com",
+        "emart.ssg.com",
+        "lotteon.com",
+        "shinsegaetvshopping.com",
+        "skstoa.com",
+    },
+    0.7: {"smartstore.naver.com"},
+    # 그 외 관측된 도메인은 0.3 (app.price_table._trust_for_domain의 fallback).
+}

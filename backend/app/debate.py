@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 
+from . import price_table as price_table_module
 from . import search as search_module
 from .agents import deepseek, gemini, gpt, judge
 from .agents.base import NO_CANDIDATE_ERROR
@@ -70,13 +71,17 @@ async def run_single_debate(query: str) -> DecideResponse:
     except Exception:
         results = []
 
-    agent_candidates: list[AgentCandidates] = list(
-        await asyncio.gather(
-            gpt.propose(query, results),
-            gemini.propose(query, results),
-            deepseek.propose(query, results),
-        )
+    # 다나와 페치는 LLM 3개와 asyncio.gather로 동시 실행한다 - 순차로 붙이면
+    # 그만큼 응답이 느려진다. price_table_module.fetch_price_tables는 무슨
+    # 일이 있어도 예외를 던지지 않고 실패 시 빈 리스트를 반환하므로, 이
+    # gather 자체가 실패해서 본 파이프라인이 막히는 일은 없다.
+    gpt_result, gemini_result, deepseek_result, danawa_tables = await asyncio.gather(
+        gpt.propose(query, results),
+        gemini.propose(query, results),
+        deepseek.propose(query, results),
+        price_table_module.fetch_price_tables(results),
     )
+    agent_candidates: list[AgentCandidates] = [gpt_result, gemini_result, deepseek_result]
     logger.info(
         "candidate pool sizes for %r: %s",
         query,
@@ -86,7 +91,14 @@ async def run_single_debate(query: str) -> DecideResponse:
 
     decision = await judge.decide(query, proposals)
 
-    return DecideResponse(query=query, proposals=proposals, decision=decision)
+    primary = price_table_module.pick_primary(danawa_tables)
+    price_table = None
+    if primary is not None:
+        table, raw_result = primary
+        price_table = table
+        decision = await price_table_module.enrich_decision(decision, raw_result)
+
+    return DecideResponse(query=query, proposals=proposals, decision=decision, price_table=price_table)
 
 
 async def run_bulk_debate(query: str) -> BulkDecideResponse:
