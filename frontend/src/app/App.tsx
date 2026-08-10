@@ -28,7 +28,7 @@ const Preloader = () => (
       className="flex flex-col items-center gap-4"
     >
       <h1 className="text-4xl md:text-6xl font-bold tracking-tighter" style={{ color: '#4ADE80' }}>
-        Étiquette
+        αlpha Pick
       </h1>
       <motion.div 
         initial={{ width: 0 }}
