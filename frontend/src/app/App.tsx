@@ -93,7 +93,7 @@ function App() {
           </AnimatePresence>
 
           {!loading && (
-            <div className="bg-white min-h-screen text-neutral-950 selection:bg-black/20 pl-[68px]">
+            <div className="bg-white min-h-screen text-neutral-950 selection:bg-black/20 md:pl-[68px]">
               <Navbar />
               <Sidebar />
               <Routes>
