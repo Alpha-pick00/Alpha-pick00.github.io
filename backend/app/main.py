@@ -1,9 +1,11 @@
+from contextlib import asynccontextmanager
+
 import jwt
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from . import autocomplete, history
+from . import autocomplete, history, popularity_scheduler
 from .auth import google as google_auth
 from .auth import kakao as kakao_auth
 from .auth import naver as naver_auth
@@ -27,7 +29,14 @@ from .schemas import (
     User,
 )
 
-app = FastAPI(title="αlpha Pick Purchase Decision API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    popularity_scheduler.start()
+    yield
+    popularity_scheduler.stop()
+
+
+app = FastAPI(title="αlpha Pick Purchase Decision API", lifespan=lifespan)
 
 # GitHub Pages(정적 프론트엔드)에서 이 API를 브라우저로 직접 호출하므로 CORS 허용이 필요하다.
 # 인증이 없는 API라 origin을 넓게 열어도 데이터 유출 위험은 없지만, "*"로 두면 아무 사이트나
