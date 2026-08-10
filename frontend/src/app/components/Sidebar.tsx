@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { formatDistanceToNow } from 'date-fns';
 import { ko } from 'date-fns/locale';
-import { PanelLeft, X, Plus, Trash2, LogOut, UserRound } from 'lucide-react';
+import { PanelLeft, X, Plus, Search, Trash2, LogOut, UserRound, Settings } from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
 import { useAuth } from '../context/AuthContext';
 import { startGoogleLogin, startKakaoLogin, startNaverLogin } from '../lib/auth';
@@ -119,13 +119,23 @@ const AuthArea = () => {
 
 export const Sidebar = () => {
   const [isOpen, setIsOpen] = useState(false);
+  const [historySearch, setHistorySearch] = useState('');
   const { history, loadFromHistory, deleteFromHistory, clearAllHistory, handleReset } = useSearch();
   const { user } = useAuth();
 
   const openWithAction = (action: () => void) => {
     action();
-    setIsOpen(false);
+    closeSidebar();
   };
+
+  const closeSidebar = () => {
+    setIsOpen(false);
+    setHistorySearch('');
+  };
+
+  const filteredHistory = historySearch.trim()
+    ? history.filter((entry) => entry.query.toLowerCase().includes(historySearch.trim().toLowerCase()))
+    : history;
 
   return (
     <>
@@ -149,6 +159,17 @@ export const Sidebar = () => {
         </button>
 
         <div className="flex-1" />
+
+        {user && (
+          <button
+            type="button"
+            onClick={() => setIsOpen(true)}
+            aria-label="설정"
+            className="w-10 h-10 rounded-xl flex items-center justify-center text-neutral-700 hover:bg-neutral-100 transition-colors"
+          >
+            <Settings className="w-5 h-5" strokeWidth={2} />
+          </button>
+        )}
 
         <button
           type="button"
@@ -179,7 +200,7 @@ export const Sidebar = () => {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsOpen(false)}
+              onClick={closeSidebar}
               className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[70]"
             />
             <motion.div
@@ -198,7 +219,7 @@ export const Sidebar = () => {
                 </span>
                 <button
                   type="button"
-                  onClick={() => setIsOpen(false)}
+                  onClick={closeSidebar}
                   aria-label="닫기"
                   className="p-1.5 text-neutral-400 hover:text-neutral-950 transition-colors"
                 >
@@ -217,16 +238,29 @@ export const Sidebar = () => {
                 </button>
               </div>
 
+              <div className="px-3 mt-2">
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-100">
+                  <Search className="w-4 h-4 text-neutral-400 shrink-0" strokeWidth={2} />
+                  <input
+                    type="text"
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                    placeholder="채팅 검색"
+                    className="flex-1 min-w-0 bg-transparent text-sm font-light text-neutral-800 placeholder:text-neutral-400 outline-none"
+                  />
+                </div>
+              </div>
+
               <div className="mt-6 px-5">
                 <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400">기록</span>
               </div>
               <div className="flex-1 min-h-0 overflow-y-auto px-3 mt-2 space-y-1">
-                {history.length === 0 ? (
+                {filteredHistory.length === 0 ? (
                   <p className="px-2 py-4 text-sm font-light text-neutral-400">
-                    아직 검색 기록이 없습니다.
+                    {history.length === 0 ? '아직 검색 기록이 없습니다.' : '일치하는 기록이 없습니다.'}
                   </p>
                 ) : (
-                  history.map((entry) => (
+                  filteredHistory.map((entry) => (
                     <div
                       key={entry.id}
                       className="group flex items-center gap-1 rounded-lg hover:bg-neutral-100 transition-colors"
