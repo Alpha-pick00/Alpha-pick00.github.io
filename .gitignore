@@ -11,3 +11,4 @@ __pycache__/
 .venv/
 backend/app/data/autocomplete.db
 backend/app/data/history.db
+backend/app/data/search_cache.db

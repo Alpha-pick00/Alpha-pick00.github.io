@@ -2,7 +2,7 @@ import asyncio
 
 import httpx
 
-from . import google_merchant
+from . import google_merchant, search_cache
 from .config import settings
 from .schemas import SearchResult
 
@@ -69,9 +69,16 @@ async def search(query: str, max_results: int = 12) -> list[SearchResult]:
     """Tavily 스크래핑 + Google Merchant(내 상품 피드) 결과를 합쳐서 반환한다.
     google_merchant.search()는 설정이 없거나 계정에 매칭되는 상품이 없으면
     빈 리스트를 반환하므로, 지금은 사실상 Tavily 결과만 나온다(google_merchant
-    모듈의 docstring 참고)."""
+    모듈의 docstring 참고).
+
+    같은 질의가 반복되면 search_cache에서 재사용한다 — 항상 FETCH_SIZE만큼
+    받아서 캐시해두고, 더 적은 max_results를 요청한 호출은 앞에서 잘라 쓴다."""
+    cached = search_cache.get(query)
+    if cached is not None:
+        return cached[:max_results]
+
     merchant_task = google_merchant.search(query)
-    tavily_task = _tavily_search(query, max_results)
+    tavily_task = _tavily_search(query, search_cache.FETCH_SIZE)
     merchant_results, tavily_results = await asyncio.gather(
         merchant_task, tavily_task, return_exceptions=True
     )
@@ -84,7 +91,9 @@ async def search(query: str, max_results: int = 12) -> list[SearchResult]:
     seen_urls = {r.url for r in merchant_results}
     merged = list(merchant_results)
     merged += [r for r in tavily_results if r.url not in seen_urls]
-    return merged
+
+    search_cache.set(query, merged)
+    return merged[:max_results]
 
 
 async def extract(url: str) -> str | None:
