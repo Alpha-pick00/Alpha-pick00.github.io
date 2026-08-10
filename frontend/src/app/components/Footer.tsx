@@ -21,7 +21,7 @@ export const Footer = () => {
                      <ArrowUpRight className="w-8 h-8 group-hover:rotate-45 transition-transform duration-500" />
                    </div>
                    <div>
-                     <span className="block text-4xl font-light tracking-tighter text-neutral-950 group-hover:translate-x-2 transition-transform duration-300">Start a Business with <span style={{ color: '#4ADE80' }}>αlpha Pick</span></span>
+                     <span className="block text-4xl font-light tracking-tighter text-neutral-950 group-hover:translate-x-2 transition-transform duration-300">Start a Business with <span style={{ color: 'rgb(64,117,38)' }}>αlpha Pick</span></span>
                      <span className="block text-sm font-mono uppercase tracking-widest text-neutral-500 mt-1 group-hover:text-neutral-600 transition-colors">We're looking for a business partner</span>
                    </div>
                  </button>
@@ -52,7 +52,7 @@ export const Footer = () => {
 
           <div className="flex flex-col md:flex-row justify-between items-center pt-12 border-t border-black/5 gap-6">
             <p className="font-mono text-xs uppercase tracking-widest text-neutral-400">
-              © 2026 <span style={{ color: '#4ADE80' }}>αlpha Pick</span>.
+              © 2026 <span style={{ color: 'rgb(64,117,38)' }}>αlpha Pick</span>.
             </p>
             <p className="font-mono text-xs uppercase tracking-widest text-neutral-400">
               All rights reserved.
@@ -148,7 +148,7 @@ const ContactModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
                 <span className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-6 block">04 / Contact</span>
                 <h3 className="text-4xl md:text-5xl font-medium tracking-tighter mb-2">
                   Start a Business with <br />
-                  <span style={{ color: '#4ADE80' }}>αlpha Pick</span>
+                  <span style={{ color: 'rgb(64,117,38)' }}>αlpha Pick</span>
                 </h3>
                 <p className="text-neutral-600 font-light mb-12">
                   Tell us about your vision. We'll help you build it.
