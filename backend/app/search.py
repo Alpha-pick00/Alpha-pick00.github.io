@@ -61,7 +61,7 @@ async def _tavily_search(query: str, max_results: int) -> list[SearchResult]:
         snippet = r.get("content", "")
         # raw_content가 있으면 스니펫보다 정보가 많으므로 우선 사용(토큰 절약을 위해 앞부분만)
         text = raw[:1500] if raw else snippet
-        results.append(SearchResult(title=r["title"], url=r["url"], snippet=text))
+        results.append(SearchResult(title=r["title"], url=r["url"], snippet=text, score=r.get("score")))
     return results
 
 
