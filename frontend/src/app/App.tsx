@@ -27,7 +27,7 @@ const Preloader = () => (
       transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
       className="flex flex-col items-center gap-4"
     >
-      <h1 className="text-4xl md:text-6xl font-bold tracking-tighter" style={{ color: '#4ADE80' }}>
+      <h1 className="text-4xl md:text-6xl font-bold tracking-tighter" style={{ color: 'rgb(64,117,38)' }}>
         αlpha Pick
       </h1>
       <motion.div 

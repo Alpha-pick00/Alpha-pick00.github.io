@@ -74,7 +74,7 @@ export const About = () => {
         <div className="flex items-center gap-6 mb-24">
            <div className="flex items-baseline gap-3">
               <span className="font-serif italic text-lg text-neutral-950">01</span>
-              <span className="text-xs font-mono uppercase tracking-[0.3em] text-neutral-600">About <span style={{ color: '#4ADE80' }}>αlpha Pick</span></span>
+              <span className="text-xs font-mono uppercase tracking-[0.3em] text-neutral-600">About <span style={{ color: 'rgb(64,117,38)' }}>αlpha Pick</span></span>
            </div>
            <div className="h-px w-32 bg-gradient-to-r from-black/30 to-transparent" />
         </div>

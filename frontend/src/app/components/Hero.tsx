@@ -154,7 +154,7 @@ export const Hero = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, ease: "easeOut" }}
           className="mb-8 text-6xl md:text-8xl font-medium tracking-tighter leading-none"
-          style={{ fontFamily: "'Times New Roman', Times, serif", color: '#4ADE80' }}
+          style={{ fontFamily: "'Times New Roman', Times, serif", color: 'rgb(64,117,38)' }}
         >
           αlpha Pick
         </motion.div>

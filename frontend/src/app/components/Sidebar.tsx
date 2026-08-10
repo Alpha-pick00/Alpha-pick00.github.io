@@ -224,7 +224,7 @@ export const Sidebar = () => {
               <div className="flex items-center justify-between px-5 pt-6 pb-4">
                 <span
                   className="text-2xl font-medium tracking-tighter"
-                  style={{ fontFamily: "'Times New Roman', Times, serif", color: '#4ADE80' }}
+                  style={{ fontFamily: "'Times New Roman', Times, serif", color: 'rgb(64,117,38)' }}
                 >
                   αlpha Pick
                 </span>
