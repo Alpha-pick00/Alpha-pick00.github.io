@@ -19,7 +19,7 @@ sudo apt update
 sudo apt install -y nginx certbot python3-certbot-nginx
 
 # 저장소
-git clone https://github.com/Cherry-Pick00/alpha-pick.git
+git clone https://github.com/Alpha-pick00/Alpha-pick00.github.io.git alpha-pick
 cd alpha-pick/backend
 cp .env.example .env
 vi .env   # 실제 API 키 채워넣기 (이 파일은 git에 올라가지 않음)
@@ -88,5 +88,5 @@ docker compose up -d --build
 
 ## 6. CORS
 
-`app/main.py`에 `https://cherry-pick00.github.io`와 로컬 개발 origin만 허용해뒀다.
+`app/main.py`에 `https://alpha-pick00.github.io`와 로컬 개발 origin만 허용해뒀다.
 커스텀 도메인으로 프론트를 옮기면 `allow_origins`에 그 도메인도 추가해야 브라우저에서 호출 가능.
