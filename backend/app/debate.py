@@ -17,6 +17,7 @@ from .schemas import (
     DecideResponse,
     PriceRange,
     Proposal,
+    SearchResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,17 @@ async def run_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
         yield event
 
 
-async def run_single_debate(query: str) -> DecideResponse:
+async def _extract_clarify_options(query: str, results: list[SearchResult]) -> ClarifyResponse | None:
+    """검색 결과에서 브랜드/용량/수량을 뽑아본다. 아무것도 못 찾으면 None.
+    이미 가져온 검색 결과를 그대로 받아 재검색하지 않는다 — run_single_debate가
+    전체 실패했을 때 같은 결과로 이 함수를 다시 시도하는 용도로도 쓰인다."""
+    options = await gpt.extract_options(query, results)
+    if not (options.brands or options.volumes or options.quantities):
+        return None
+    return ClarifyResponse(query=query, options=options)
+
+
+async def run_single_debate(query: str) -> DecideResponse | ClarifyResponse:
     try:
         results = await search_module.search(query)
     except Exception:
@@ -100,6 +111,18 @@ async def run_single_debate(query: str) -> DecideResponse:
         {ac.agent: len(ac.candidates) for ac in agent_candidates},
     )
     proposals = [_top_proposal(ac) for ac in agent_candidates]
+
+    if all(p.error is not None for p in proposals):
+        # 세 에이전트가 전부 특정 상품 후보를 못 찾았다 — "아이스크림"처럼 카테고리
+        # 자체가 너무 넓은 질의일 때 흔하다(검색 결과가 상품 상세 페이지가 아니라
+        # 목록/카테고리 페이지뿐이라 URL 기준 필터를 못 통과함). 완전 실패로 끝내는
+        # 대신, 같은 검색 결과에서 브랜드만이라도 뽑아 되물어본다 — 특정 상품 URL을
+        # 찾는 것보다 브랜드명이 텍스트에 스치듯 언급됐는지 보는 게 기준이 훨씬
+        # 관대해서 성공률이 높다.
+        clarify = await _extract_clarify_options(query, results)
+        if clarify is not None:
+            return clarify
+        raise RuntimeError(NO_CANDIDATE_ERROR)
 
     decision = await judge.decide(query, proposals)
 
@@ -136,8 +159,17 @@ async def run_single_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
         {ac.agent: len(ac.candidates) for ac in agent_candidates},
     )
 
-    yield {"type": "status", "stage": "judging"}
     proposals = [_top_proposal(ac) for ac in agent_candidates]
+
+    if all(p.error is not None for p in proposals):
+        # run_single_debate와 동일한 카테고리-질의 완화 처리 — 주석은 그쪽 참고.
+        clarify = await _extract_clarify_options(query, results)
+        if clarify is not None:
+            yield {"type": "final", "result": clarify.model_dump()}
+            return
+        raise RuntimeError(NO_CANDIDATE_ERROR)
+
+    yield {"type": "status", "stage": "judging"}
     decision = await judge.decide(query, proposals)
 
     result = DecideResponse(query=query, proposals=proposals, decision=decision)
@@ -172,12 +204,11 @@ async def run_clarify(query: str) -> DecideResponse | ClarifyResponse:
     except Exception:
         results = []
 
-    options = await gpt.extract_options(query, results)
+    clarify = await _extract_clarify_options(query, results)
+    if clarify is not None:
+        return clarify
 
-    if not (options.brands or options.volumes or options.quantities):
-        return await run_single_debate(query)
-
-    return ClarifyResponse(query=query, options=options)
+    return await run_single_debate(query)
 
 
 async def run_brand_price(query: str, brand: str) -> BrandPriceResponse:
