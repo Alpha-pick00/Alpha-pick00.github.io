@@ -1,6 +1,6 @@
 # αlpha Pick
 
-https://cherry-pick00.github.io/alpha-pick/
+https://alpha-pick00.github.io/
 
 ---
 

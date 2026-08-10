@@ -36,7 +36,7 @@ app = FastAPI(title="αlpha Pick Purchase Decision API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://cherry-pick00.github.io",
+        "https://alpha-pick00.github.io",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
