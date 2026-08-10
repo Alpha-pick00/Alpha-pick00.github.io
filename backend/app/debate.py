@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 
 from . import search as search_module
@@ -16,6 +17,8 @@ from .schemas import (
     PriceRange,
     Proposal,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _format_price_krw(price_krw: int | None) -> str:
@@ -73,6 +76,11 @@ async def run_single_debate(query: str) -> DecideResponse:
             gemini.propose(query, results),
             deepseek.propose(query, results),
         )
+    )
+    logger.info(
+        "candidate pool sizes for %r: %s",
+        query,
+        {ac.agent: len(ac.candidates) for ac in agent_candidates},
     )
     proposals = [_top_proposal(ac) for ac in agent_candidates]
 
