@@ -65,6 +65,20 @@ def get(query: str) -> list[SearchResult] | None:
     return [SearchResult(**item) for item in json.loads(results_json)]
 
 
+def top_queries(limit: int, min_hits: int = 1) -> list[str]:
+    """hits 기준 상위 질의 목록 — 인기 질의 우선 갱신 스케줄러가 사용.
+    set()이 hits를 초기화하지 않으므로, 갱신을 반복해도 인기 순위는 유지된다."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT query_key FROM search_cache WHERE hits >= ? ORDER BY hits DESC LIMIT ?",
+            (min_hits, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [row[0] for row in rows]
+
+
 def set(query: str, results: list[SearchResult]) -> None:
     """빈 결과는 캐시하지 않는다 — 일시적 검색 실패가 TTL 동안 그대로 굳어버리는 것을 막기 위해."""
     if not results:

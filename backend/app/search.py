@@ -65,18 +65,12 @@ async def _tavily_search(query: str, max_results: int) -> list[SearchResult]:
     return results
 
 
-async def search(query: str, max_results: int = 12) -> list[SearchResult]:
-    """Tavily 스크래핑 + Google Merchant(내 상품 피드) 결과를 합쳐서 반환한다.
+async def _fetch(query: str) -> list[SearchResult]:
+    """Tavily 스크래핑 + Google Merchant(내 상품 피드) 결과를 실제로 호출해 병합한다.
     google_merchant.search()는 설정이 없거나 계정에 매칭되는 상품이 없으면
     빈 리스트를 반환하므로, 지금은 사실상 Tavily 결과만 나온다(google_merchant
-    모듈의 docstring 참고).
-
-    같은 질의가 반복되면 search_cache에서 재사용한다 — 항상 FETCH_SIZE만큼
-    받아서 캐시해두고, 더 적은 max_results를 요청한 호출은 앞에서 잘라 쓴다."""
-    cached = search_cache.get(query)
-    if cached is not None:
-        return cached[:max_results]
-
+    모듈의 docstring 참고). 캐시를 거치지 않는 순수 조회 — search()의 캐시 미스
+    경로와 refresh()의 강제 갱신 경로가 이 함수를 공유한다."""
     merchant_task = google_merchant.search(query)
     tavily_task = _tavily_search(query, search_cache.FETCH_SIZE)
     merchant_results, tavily_results = await asyncio.gather(
@@ -91,9 +85,26 @@ async def search(query: str, max_results: int = 12) -> list[SearchResult]:
     seen_urls = {r.url for r in merchant_results}
     merged = list(merchant_results)
     merged += [r for r in tavily_results if r.url not in seen_urls]
+    return merged
 
+
+async def search(query: str, max_results: int = 12) -> list[SearchResult]:
+    """같은 질의가 반복되면 search_cache에서 재사용한다 — 항상 FETCH_SIZE만큼
+    받아서 캐시해두고, 더 적은 max_results를 요청한 호출은 앞에서 잘라 쓴다."""
+    cached = search_cache.get(query)
+    if cached is not None:
+        return cached[:max_results]
+
+    merged = await _fetch(query)
     search_cache.set(query, merged)
     return merged[:max_results]
+
+
+async def refresh(query: str) -> None:
+    """TTL을 기다리지 않고 캐시를 강제로 새로 채운다 — 인기 질의 우선 갱신
+    스케줄러(popularity_scheduler)가 사용."""
+    merged = await _fetch(query)
+    search_cache.set(query, merged)
 
 
 async def extract(url: str) -> str | None:
