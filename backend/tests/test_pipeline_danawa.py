@@ -7,7 +7,7 @@ import asyncio
 
 from fastapi.testclient import TestClient
 
-from app.debate import run_single_debate
+from app.debate import run_danawa_only_debate, run_single_debate
 from app.main import app
 from app.price_table import (
     MAX_DANAWA_URLS,
@@ -873,3 +873,107 @@ def test_fetch_price_tables_caps_total_urls_at_max_danawa_urls(monkeypatch):
 
     assert len(fetched_urls) == MAX_DANAWA_URLS == 3
     assert {_query_param(u, "pcode") for u in fetched_urls} == {"1", "10", "11"}
+
+
+# -- run_danawa_only_debate: LLM 호출 0번, 규칙 기반 다나와 전용 경로 ---------------
+
+
+def _forbid_llm_calls(monkeypatch):
+    """gpt/gemini/deepseek/judge 중 하나라도 불리면 테스트가 즉시 실패하게 만든다 -
+    "LLM 호출 0번"이라는 계약을 실제로 검증하기 위함."""
+
+    async def _boom(*args, **kwargs):
+        raise AssertionError("LLM이 호출됐다 - run_danawa_only_debate는 LLM을 절대 부르면 안 된다")
+
+    monkeypatch.setattr("app.agents.gpt.propose", _boom)
+    monkeypatch.setattr("app.agents.gemini.propose", _boom)
+    monkeypatch.setattr("app.agents.deepseek.propose", _boom)
+    monkeypatch.setattr("app.agents.judge.decide", _boom)
+
+
+def test_run_danawa_only_debate_never_calls_any_llm(monkeypatch):
+    _forbid_llm_calls(monkeypatch)
+    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
+
+    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
+
+    async def _fake_fetch(url):
+        return parse_danawa_html(url, html)
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/1", "1"
+
+    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fake_fetch)
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+
+    result = asyncio.run(run_danawa_only_debate("테스트 상품"))
+
+    assert result.proposals == []
+    assert result.decision.chosen_agent == "danawa"
+    assert result.decision.price_source == "danawa_offer"
+    assert result.decision.retailer == "쿠팡"
+    assert result.decision.url == "https://www.coupang.com/vp/products/1"
+    assert result.price_table is not None
+
+
+def test_run_danawa_only_debate_raises_when_no_price_table(monkeypatch):
+    _forbid_llm_calls(monkeypatch)
+    _patch_search(monkeypatch, None)  # 다나와 URL 자체를 못 찾는 경우
+
+    try:
+        asyncio.run(run_danawa_only_debate("존재하지 않는 상품"))
+        raise AssertionError("RuntimeError가 났어야 한다")
+    except RuntimeError as exc:
+        assert "찾지 못했다" in str(exc)
+
+
+def test_run_danawa_only_debate_raises_when_no_a_grade_offer(monkeypatch):
+    _forbid_llm_calls(monkeypatch)
+    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
+
+    # bridge_url의 cmpnyc가 CMPNYC_MAP에 없는 미확인 판매처 - linkable=False뿐이라
+    # A등급이 하나도 없다.
+    html = _danawa_html("테스트 상품", [_offer_li("미확인몰", "10,000", "UNKNOWN_CODE_XYZ")])
+
+    async def _fake_fetch(url):
+        return parse_danawa_html(url, html)
+
+    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fake_fetch)
+
+    try:
+        asyncio.run(run_danawa_only_debate("테스트 상품"))
+        raise AssertionError("RuntimeError가 났어야 한다")
+    except RuntimeError as exc:
+        assert "A등급" in str(exc)
+
+
+def test_decide_danawa_only_endpoint_returns_502_on_no_price_table(monkeypatch):
+    _forbid_llm_calls(monkeypatch)
+    _patch_search(monkeypatch, None)
+
+    resp = client.post("/decide/danawa-only", json={"query": "존재하지 않는 상품"})
+
+    assert resp.status_code == 502
+
+
+def test_decide_danawa_only_endpoint_returns_200_with_no_proposals(monkeypatch):
+    _forbid_llm_calls(monkeypatch)
+    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
+
+    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
+
+    async def _fake_fetch(url):
+        return parse_danawa_html(url, html)
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/1", "1"
+
+    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fake_fetch)
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+
+    resp = client.post("/decide/danawa-only", json={"query": "테스트 상품"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["proposals"] == []
+    assert data["decision"]["chosen_agent"] == "danawa"

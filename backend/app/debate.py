@@ -14,6 +14,7 @@ from .schemas import (
     BulkDecideResponse,
     BulkProposal,
     ClarifyResponse,
+    Decision,
     DecideResponse,
     PriceRange,
     Proposal,
@@ -113,6 +114,50 @@ async def run_single_debate(query: str) -> DecideResponse:
     )
 
     return DecideResponse(query=query, proposals=proposals, decision=decision, price_table=price_table)
+
+
+async def run_danawa_only_debate(query: str) -> DecideResponse:
+    """LLM API 비용 절감을 위한 임시 로컬 실험 경로 - gpt/gemini/deepseek
+    제안도, judge 최종 결정도 전부 건너뛴다. LLM 호출 0번. 다나와 실측
+    가격표(Tavily + 직접검색 합집합)에서 A등급(구매 링크 생성 가능) 최저가
+    offer를 규칙 기반으로 그대로 최종 추천으로 쓴다.
+
+    run_debate()에서 자동으로 타지 않는다 - /decide/danawa-only 전용
+    엔드포인트에서만 명시적으로 호출한다. 다나와 데이터가 아예 없거나
+    A등급 offer가 없으면(=구매 링크를 만들 수 없으면) RuntimeError를 던진다 -
+    "링크 없는 추천은 만들지 않는다" 원칙은 LLM 없이도 동일하게 지킨다."""
+    try:
+        results = await search_module.search(query)
+    except Exception:
+        results = []
+
+    danawa_tables = await price_table_module.fetch_price_tables(query, results)
+
+    primary = price_table_module.pick_primary(danawa_tables)
+    if primary is None:
+        raise RuntimeError(f"다나와에서 '{query}'에 대한 가격 정보를 찾지 못했다(검색/실측 모두 실패).")
+
+    table, raw_result = primary
+    offer = price_table_module.cheapest_linkable_raw_offer(raw_result)
+    if offer is None:
+        raise RuntimeError(f"'{table.product_name}' 가격표는 있지만 구매 링크를 만들 수 있는(A등급) 판매처가 없다.")
+
+    resolved_url = await price_table_module.resolve_purchase_url(offer)
+    if resolved_url is None:
+        raise RuntimeError(f"'{table.product_name}' 최저가 판매처({offer['seller']}) 구매 링크 해석에 실패했다.")
+
+    decision = Decision(
+        product_name=table.product_name or query,
+        price=f"{offer['price_krw']:,}원",
+        retailer=offer["seller"],
+        url=resolved_url,
+        reasoning="다나와 실측 최저가(A등급, 구매링크 검증됨) - LLM 미사용, 규칙 기반 선택",
+        chosen_agent="danawa",
+        price_source="danawa_offer",
+    )
+    decision = await price_table_module.exclude_price_comparison_site_as_final_pick(decision, [], danawa_tables)
+
+    return DecideResponse(query=query, proposals=[], decision=decision, price_table=table)
 
 
 async def run_bulk_debate(query: str) -> BulkDecideResponse:

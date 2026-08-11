@@ -8,7 +8,7 @@ from .auth import google as google_auth
 from .auth import kakao as kakao_auth
 from .auth import naver as naver_auth
 from .auth.session import issue_session_token, verify_session_token
-from .debate import run_brand_price, run_debate
+from .debate import run_brand_price, run_danawa_only_debate, run_debate
 from .ocr import cleanup as ocr_cleanup
 from .ocr import google_vision as google_vision_ocr
 from .schemas import (
@@ -190,3 +190,19 @@ async def decide(request: DecideRequest, background_tasks: BackgroundTasks) -> D
 
     background_tasks.add_task(autocomplete.record_terms, _autocomplete_terms(request, result))
     return result
+
+
+@app.post("/decide/danawa-only", response_model=DecideResponse)
+async def decide_danawa_only(request: DecideRequest) -> DecideResponse:
+    """임시 실험 엔드포인트 - LLM 호출 0번(gpt/gemini/deepseek 제안, judge 결정
+    전부 생략), 다나와 실측 가격표만으로 규칙 기반 추천. LLM API 비용 절감
+    목적의 로컬 테스트 경로라 /decide와 별도로 둔다 - 프론트엔드는 아직
+    이 경로를 쓰지 않는다."""
+    try:
+        return await run_danawa_only_debate(request.query)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail="다나와 전용 처리 중 오류가 발생했습니다."
+        ) from exc
