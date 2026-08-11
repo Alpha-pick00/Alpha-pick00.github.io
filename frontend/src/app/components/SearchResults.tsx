@@ -1,6 +1,6 @@
 import { motion } from 'motion/react';
-import { ArrowUpRight, Check, Loader2, RotateCcw, Truck } from 'lucide-react';
-import type { AgentName, DecideResult, DecideStage, BrandOption, Proposal } from '../lib/api';
+import { AlertTriangle, ArrowUpRight, Check, RotateCcw, Truck } from 'lucide-react';
+import type { DecideResult, DecideStage, BrandOption, Proposal } from '../lib/api';
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
@@ -83,60 +83,75 @@ export const LoadingCard = ({
 );
 
 const STAGE_LABEL: Record<DecideStage, string> = {
+  refining: '질의를 다듬고 있습니다',
   searching: '15개 쇼핑몰에서 검색하고 있습니다',
   proposing: 'ChatGPT · Gemini · DeepSeek가 후보를 찾고 있습니다',
+  challenging: 'DeepSeek가 근거를 검증하고 있습니다',
   judging: 'Claude가 근거를 비교해 최종 추천을 고르고 있습니다',
 };
 
-const AGENT_ORDER: AgentName[] = ['gpt', 'gemini', 'deepseek'];
+const ProposedByChips = ({ proposedBy }: { proposedBy: string[] | null | undefined }) =>
+  proposedBy && proposedBy.length > 0 ? (
+    <span className="text-[10px] font-mono uppercase tracking-widest text-neutral-400">
+      {proposedBy.map((a) => AGENT_LABEL[a] || a).join(' · ')}
+    </span>
+  ) : null;
 
-const AgentProgressRow = ({ agent, proposal }: { agent: AgentName; proposal: Proposal | undefined }) => (
-  <div className="flex items-center gap-3 py-2.5 border-b border-black/5 last:border-b-0">
-    <div className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center">
-      {proposal ? (
-        <div className="w-5 h-5 rounded-full bg-[#4ADE80]/15 flex items-center justify-center">
-          <Check className="w-3 h-3 text-[#166534]" strokeWidth={3} />
-        </div>
-      ) : (
-        <Loader2 className="w-4 h-4 text-neutral-300 animate-spin" strokeWidth={2.5} />
+const VerifiedBadge = ({ verified }: { verified: boolean | null | undefined }) => {
+  if (verified === true) {
+    return (
+      <div className="shrink-0 w-5 h-5 rounded-full bg-[#4ADE80]/15 flex items-center justify-center">
+        <Check className="w-3 h-3 text-[#166534]" strokeWidth={3} />
+      </div>
+    );
+  }
+  if (verified === false) {
+    return (
+      <div className="shrink-0 w-5 h-5 rounded-full bg-amber-500/15 flex items-center justify-center">
+        <AlertTriangle className="w-3 h-3 text-amber-700" strokeWidth={2.5} />
+      </div>
+    );
+  }
+  return <div className="shrink-0 w-5 h-5 rounded-full bg-black/5" />;
+};
+
+const CandidateProgressRow = ({ proposal }: { proposal: Proposal }) => (
+  <div className="flex items-start gap-3 py-2.5 border-b border-black/5 last:border-b-0">
+    <VerifiedBadge verified={proposal.verified} />
+    <div className="min-w-0 flex-1">
+      <div className="flex items-center gap-2">
+        <p className="min-w-0 flex-1 text-sm font-light text-neutral-600 truncate">
+          {proposal.error ? proposal.error : `${proposal.product_name} · ${proposal.price || '가격 미확인'}`}
+        </p>
+        <ProposedByChips proposedBy={proposal.proposed_by} />
+      </div>
+      {proposal.challenge_note && (
+        <p className="mt-0.5 text-xs font-light text-neutral-400 truncate">{proposal.challenge_note}</p>
       )}
     </div>
-    <span className="w-20 shrink-0 text-xs font-mono uppercase tracking-widest text-neutral-500">
-      {AGENT_LABEL[agent] || agent}
-    </span>
-    <p className="min-w-0 flex-1 text-sm font-light text-neutral-600 truncate">
-      {proposal
-        ? proposal.error
-          ? proposal.error
-          : `${proposal.product_name} · ${proposal.price || '가격 미확인'}`
-        : '탐색 중...'}
-    </p>
   </div>
 );
 
-export const StreamingCard = ({ stage, proposals }: { stage: DecideStage; proposals: Proposal[] }) => {
-  const byAgent = Object.fromEntries(proposals.map((p) => [p.agent, p]));
-  return (
-    <Card>
-      <div className="flex flex-col items-center text-center py-2 gap-6">
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
-          className="w-8 h-8 rounded-full border-2 border-black/10 border-t-[#4ADE80]"
-        />
-        <p className="text-sm font-light text-neutral-500">{STAGE_LABEL[stage]}</p>
+export const StreamingCard = ({ stage, proposals }: { stage: DecideStage; proposals: Proposal[] }) => (
+  <Card>
+    <div className="flex flex-col items-center text-center py-2 gap-6">
+      <motion.div
+        animate={{ rotate: 360 }}
+        transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
+        className="w-8 h-8 rounded-full border-2 border-black/10 border-t-[#4ADE80]"
+      />
+      <p className="text-sm font-light text-neutral-500">{STAGE_LABEL[stage]}</p>
 
-        {stage !== 'searching' && (
-          <div className="w-full text-left">
-            {AGENT_ORDER.map((agent) => (
-              <AgentProgressRow key={agent} agent={agent} proposal={byAgent[agent]} />
-            ))}
-          </div>
-        )}
-      </div>
-    </Card>
-  );
-};
+      {proposals.length > 0 && (
+        <div className="w-full text-left">
+          {proposals.map((p, i) => (
+            <CandidateProgressRow key={p.url ?? i} proposal={p} />
+          ))}
+        </div>
+      )}
+    </div>
+  </Card>
+);
 
 export const ErrorCard = ({ message, onReset }: { message: string; onReset: () => void }) => (
   <Card>
@@ -147,36 +162,54 @@ export const ErrorCard = ({ message, onReset }: { message: string; onReset: () =
   </Card>
 );
 
+const OptionButton = ({ value, onClick }: { value: string; onClick: () => void }) => (
+  <button
+    onClick={onClick}
+    className="px-4 py-2 rounded-full border border-black/10 text-sm font-light hover:bg-neutral-950 hover:text-white hover:border-neutral-950 transition-all"
+  >
+    {value}
+  </button>
+);
+
 interface Props {
   result: DecideResult;
-  onSelectBrand: (brand: string) => void;
+  onSelectOption: (value: string) => void;
   onReset: () => void;
 }
 
-export const SearchResults = ({ result, onSelectBrand, onReset }: Props) => {
+export const SearchResults = ({ result, onSelectOption, onReset }: Props) => {
   if (result.mode === 'clarify') {
     const { brands, volumes, quantities } = result.options;
+    // 브랜드 → 용량 → 개수 순으로, 아직 애매한 것만 물어본다 — 하나 고르면 그 값이
+    // 검색어에 누적되고(SearchContext.runSearch가 query state를 갱신) 다시 검색해서
+    // 이번엔 남은 기준(예: 용량)만 애매하면 그것만 다시 보여준다. 한 번에 다 보여주지
+    // 않는 이유: 브랜드를 안 정한 채 용량부터 고르면 다른 브랜드의 용량과 섞여
+    // 의미가 없어진다.
+    // 실제로 2개 이상이라 "애매한" 기준만 먼저 물어본다(백엔드의 _is_ambiguous와
+    // 같은 ">1" 기준) — 1개짜리 기준까지 매번 단계로 넣으면, 브랜드가 이미 하나로
+    // 좁혀졌는데도 계속 "브랜드를 선택하세요"만 반복 노출돼 앞으로 못 나간다.
+    // 그래도 애매한 게 하나도 없는데 이 화면까지 왔다면(기존 폴백 경로 — 브랜드
+    // 하나만 겨우 찾은 경우 등) 그 값이라도 눌러서 진행할 수 있게 ">0"으로 대체한다.
+    const step: 'brand' | 'volume' | 'quantity' | null =
+      (brands.length > 1 ? 'brand' : volumes.length > 1 ? 'volume' : quantities.length > 1 ? 'quantity' : null) ??
+      (brands.length > 0 ? 'brand' : volumes.length > 0 ? 'volume' : quantities.length > 0 ? 'quantity' : null);
+    const options = step === 'brand' ? brands : step === 'volume' ? volumes : step === 'quantity' ? quantities : [];
+    const stepLabel = {
+      brand: '브랜드를 선택하면 좁혀드려요',
+      volume: '용량을 선택하면 좁혀드려요',
+      quantity: '개수를 선택하면 좁혀드려요',
+    }[step ?? 'brand'];
+
     return (
       <Card>
         <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
-          브랜드를 선택하면 최저가를 찾아드려요
+          {stepLabel}
         </span>
         <div className="flex flex-wrap gap-2">
-          {brands.map((brand) => (
-            <button
-              key={brand}
-              onClick={() => onSelectBrand(brand)}
-              className="px-4 py-2 rounded-full border border-black/10 text-sm font-light hover:bg-neutral-950 hover:text-white hover:border-neutral-950 transition-all"
-            >
-              {brand}
-            </button>
+          {options.map((value) => (
+            <OptionButton key={value} value={value} onClick={() => onSelectOption(value)} />
           ))}
         </div>
-        {(volumes.length > 0 || quantities.length > 0) && (
-          <p className="mt-4 text-xs font-light text-neutral-400">
-            {[...volumes, ...quantities].join(' · ')}
-          </p>
-        )}
         <ResetLink onReset={onReset} />
       </Card>
     );
@@ -224,10 +257,19 @@ export const SearchResults = ({ result, onSelectBrand, onReset }: Props) => {
 
   // mode === 'single'
   const { decision, proposals } = result;
+  const winningProposal = proposals.find((p) => p.url === decision.url);
+  const winningProposers = winningProposal?.proposed_by?.length
+    ? winningProposal.proposed_by
+    : [decision.chosen_agent];
+  const headerLabel =
+    winningProposers.length > 1
+      ? `${winningProposers.map((a) => AGENT_LABEL[a] || a).join(' · ')} 공동 제안 채택`
+      : `${AGENT_LABEL[winningProposers[0]] || winningProposers[0]} 제안 채택`;
+
   return (
     <Card>
       <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
-        최종 추천 · {AGENT_LABEL[decision.chosen_agent] || decision.chosen_agent} 제안 채택
+        최종 추천 · {headerLabel}
       </span>
       <a
         href={decision.url}
@@ -248,15 +290,16 @@ export const SearchResults = ({ result, onSelectBrand, onReset }: Props) => {
       </a>
       <p className="text-sm font-light text-neutral-600 leading-relaxed mb-6">{decision.reasoning}</p>
 
-      <div className="pt-4 border-t border-black/5 grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {proposals.map((p) => (
-          <div key={p.agent} className="text-xs">
-            <span className="font-mono uppercase tracking-widest text-neutral-400">
-              {AGENT_LABEL[p.agent] || p.agent}
-            </span>
-            <p className="mt-1 font-light text-neutral-600 truncate">
-              {p.error ? p.error : `${p.product_name} · ${p.price || '가격 미확인'}`}
-            </p>
+      <div className="pt-4 border-t border-black/5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {proposals.map((p, i) => (
+          <div key={p.url ?? i} className="flex items-start gap-2 text-xs">
+            <VerifiedBadge verified={p.verified} />
+            <div className="min-w-0">
+              <ProposedByChips proposedBy={p.proposed_by} />
+              <p className="mt-1 font-light text-neutral-600 truncate">
+                {p.error ? p.error : `${p.product_name} · ${p.price || '가격 미확인'}`}
+              </p>
+            </div>
           </div>
         ))}
       </div>

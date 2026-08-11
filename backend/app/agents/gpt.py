@@ -2,8 +2,6 @@ from openai import AsyncOpenAI
 
 from ..config import settings
 from ..schemas import (
-    AgentCandidate,
-    AgentCandidates,
     BrandOption,
     BulkProposal,
     ClarifyOptions,
@@ -14,27 +12,11 @@ from .base import (
     build_bulk_prompt,
     build_clarify_prompt,
     build_price_confirm_prompt,
-    build_prompt,
     filter_bulk_options,
-    filter_candidates,
     is_generic_listing_url,
     parse_json_array,
     parse_json_object,
 )
-
-
-async def propose(query: str, search_results: list[SearchResult]) -> AgentCandidates:
-    try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
-        response = await client.chat.completions.create(
-            model=settings.gpt_model,
-            messages=[{"role": "user", "content": build_prompt(query, search_results)}],
-        )
-        items = parse_json_array(response.choices[0].message.content or "")
-        items = filter_candidates(items)
-        return AgentCandidates(agent="gpt", candidates=[AgentCandidate(**i) for i in items])
-    except Exception as exc:
-        return AgentCandidates(agent="gpt", error=str(exc))
 
 
 async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkProposal:

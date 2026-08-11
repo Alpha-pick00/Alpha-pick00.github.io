@@ -21,6 +21,9 @@ class Proposal(BaseModel):
     url: str | None = None
     reasoning: str | None = None
     error: str | None = None
+    verified: bool | None = None
+    challenge_note: str | None = None
+    proposed_by: list[AgentName] | None = None
 
 
 class AgentCandidate(BaseModel):
@@ -37,6 +40,22 @@ class AgentCandidates(BaseModel):
     error: str | None = None
 
 
+class RefinedQuery(BaseModel):
+    query: str
+    error: str | None = None
+
+
+class ChallengeVerdict(BaseModel):
+    url: str | None = None
+    verified: bool
+    note: str = ""
+
+
+class ChallengeResult(BaseModel):
+    verdicts: list[ChallengeVerdict] = []
+    error: str | None = None
+
+
 class Decision(BaseModel):
     product_name: str
     price: str
@@ -46,9 +65,27 @@ class Decision(BaseModel):
     chosen_agent: AgentName
 
 
+class JudgeVerdict(BaseModel):
+    """judge LlmAgent의 output_schema — chosen_agent 없이 선택한 상품만 반환하고,
+    실제 chosen_agent는 adk_pipeline이 url로 역매칭해서 채운다(제안자가 여럿일
+    수 있어 LLM에게 단일 리터럴을 직접 고르게 하지 않는다)."""
+
+    product_name: str
+    price: str
+    retailer: str
+    url: str
+    reasoning: str
+
+
 class DecideRequest(BaseModel):
     query: str
     brand: str | None = None
+    # Human-in-the-loop으로 브랜드/용량/개수를 이미 하나 골라 검색어에 이어붙여
+    # 재검색하는 요청이면 True — is_bulk_query()/needs_clarification() 같은
+    # "첫 질의가 애매한지" 판단용 휴리스틱을 건너뛴다. 이미 특정 상품을 좁혀가는
+    # 중인데, 예컨대 "80ml"처럼 용량이 붙은 재검색어가 새 대량구매 질의로
+    # 오판되는 걸 막기 위함.
+    skip_intent_check: bool = False
 
 
 class DecideResponse(BaseModel):

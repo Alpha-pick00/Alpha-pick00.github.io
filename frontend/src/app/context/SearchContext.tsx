@@ -40,7 +40,7 @@ interface SearchContextValue {
   history: HistoryEntry[];
   streamingStage: DecideStage | null;
   streamingProposals: Proposal[];
-  runSearch: (q: string, brand?: string) => Promise<void>;
+  runSearch: (q: string, brand?: string, skipIntentCheck?: boolean) => Promise<void>;
   handleImageUpload: (file: File) => Promise<void>;
   handleReset: () => void;
   loadFromHistory: (entry: HistoryEntry) => void;
@@ -85,8 +85,12 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
     setHistory(saveHistoryEntry(q, data));
   };
 
-  const runSearch = async (q: string, brand?: string) => {
+  const runSearch = async (q: string, brand?: string, skipIntentCheck?: boolean) => {
     if (!q.trim()) return;
+    // 검색어 자체를 상태로도 반영해둔다 — Human-in-the-loop으로 브랜드→용량→수량을
+    // 순차 선택할 때, 각 선택이 "원래 입력한 질의"가 아니라 "직전까지 좁혀온 질의"에
+    // 이어붙어야 누적된다(안 그러면 용량을 고르는 순간 앞서 고른 브랜드가 날아간다).
+    setQuery(q);
     setStatus('loading');
     setErrorMessage('');
     setStreamingStage('searching');
@@ -105,7 +109,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
         } else if (event.type === 'error') {
           streamError = event.message;
         }
-      }, brand);
+      }, brand, undefined, skipIntentCheck);
 
       if (streamError || !data) {
         throw new ApiError(streamError || '요청 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');

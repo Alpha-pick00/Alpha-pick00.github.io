@@ -1,8 +1,11 @@
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 
 import jwt
+
+logging.basicConfig(level=logging.INFO)
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -14,7 +17,7 @@ from .auth import google as google_auth
 from .auth import kakao as kakao_auth
 from .auth import naver as naver_auth
 from .auth.session import issue_session_token, verify_session_token
-from .debate import run_brand_price, run_debate, run_debate_stream
+from .debate import run_brand_price, run_debate, run_debate_stream, run_single_debate, run_single_debate_stream
 from .ocr import cleanup as ocr_cleanup
 from .ocr import google_vision as google_vision_ocr
 from .schemas import (
@@ -192,6 +195,8 @@ async def decide(request: DecideRequest, background_tasks: BackgroundTasks) -> D
     try:
         if request.brand:
             result = await run_brand_price(request.query, request.brand)
+        elif request.skip_intent_check:
+            result = await run_single_debate(request.query)
         else:
             result = await run_debate(request.query)
     except (RuntimeError, ValueError) as exc:
@@ -222,7 +227,12 @@ async def decide_stream(request: DecideRequest) -> StreamingResponse:
                 yield json.dumps({"type": "final", "result": result.model_dump()}) + "\n"
             else:
                 result = None
-                async for event in run_debate_stream(request.query):
+                stream = (
+                    run_single_debate_stream(request.query)
+                    if request.skip_intent_check
+                    else run_debate_stream(request.query)
+                )
+                async for event in stream:
                     if event["type"] == "final":
                         result = _decide_result_adapter.validate_python(event["result"])
                     yield json.dumps(event) + "\n"

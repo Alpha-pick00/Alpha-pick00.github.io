@@ -3,47 +3,23 @@ import logging
 import re
 from typing import Any, AsyncIterator
 
+from . import adk_pipeline
 from . import search as search_module
 from .agents import deepseek, gemini, gpt, judge
-from .agents.base import NO_CANDIDATE_ERROR
 from .intent import is_bulk_query, needs_clarification
 from .schemas import (
-    AgentCandidates,
     BrandOption,
     BrandPriceResponse,
     BulkDecideResponse,
     BulkProposal,
+    ClarifyOptions,
     ClarifyResponse,
     DecideResponse,
     PriceRange,
-    Proposal,
     SearchResult,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _format_price_krw(price_krw: int | None) -> str:
-    return f"{price_krw:,}원" if price_krw is not None else ""
-
-
-def _top_proposal(agent_candidates: AgentCandidates) -> Proposal:
-    """에이전트가 배열로 낸 후보 중 1순위(선호도 최상위) 하나만 골라 기존
-    Proposal 형태로 맞춘다 — 프론트엔드가 에이전트당 정확히 1행을 기대하므로
-    응답 스키마는 그대로 두고, 병합 전 전체 배열은 fusion 모듈에서만 쓴다."""
-    if agent_candidates.error is not None:
-        return Proposal(agent=agent_candidates.agent, error=agent_candidates.error)
-    if not agent_candidates.candidates:
-        return Proposal(agent=agent_candidates.agent, error=NO_CANDIDATE_ERROR)
-    top = agent_candidates.candidates[0]
-    return Proposal(
-        agent=agent_candidates.agent,
-        product_name=top.product_name,
-        price=_format_price_krw(top.price_krw),
-        retailer=top.retailer,
-        url=top.url,
-        reasoning=top.reasoning,
-    )
 
 
 def _price_to_int(price: str) -> int | None:
@@ -82,101 +58,53 @@ async def run_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
         yield event
 
 
+def _dedupe_case_insensitive(items: list[str]) -> list[str]:
+    """검색 결과가 여러 판매처에서 오다 보니 같은 값이 대소문자만 다르게
+    뽑히는 경우가 있다("APPLE" vs "Apple") — 실제로는 같은 선택지인데
+    사용자에게 중복으로 보여주거나 애매함 판정을 오탐시키지 않도록 정리한다.
+    처음 나온 표기를 그대로 유지하고 순서도 보존한다."""
+    seen: set[str] = set()
+    deduped = []
+    for item in items:
+        key = item.casefold()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    return deduped
+
+
 async def _extract_clarify_options(query: str, results: list[SearchResult]) -> ClarifyResponse | None:
     """검색 결과에서 브랜드/용량/수량을 뽑아본다. 아무것도 못 찾으면 None.
     이미 가져온 검색 결과를 그대로 받아 재검색하지 않는다 — run_single_debate가
     전체 실패했을 때 같은 결과로 이 함수를 다시 시도하는 용도로도 쓰인다."""
-    options = await gpt.extract_options(query, results)
+    raw = await gpt.extract_options(query, results)
+    options = ClarifyOptions(
+        brands=_dedupe_case_insensitive(raw.brands),
+        volumes=_dedupe_case_insensitive(raw.volumes),
+        quantities=_dedupe_case_insensitive(raw.quantities),
+    )
     if not (options.brands or options.volumes or options.quantities):
         return None
     return ClarifyResponse(query=query, options=options)
 
 
 async def run_single_debate(query: str) -> DecideResponse | ClarifyResponse:
-    try:
-        results = await search_module.search(query)
-    except Exception:
-        results = []
-
-    agent_candidates: list[AgentCandidates] = list(
-        await asyncio.gather(
-            gpt.propose(query, results),
-            gemini.propose(query, results),
-            deepseek.propose(query, results),
-        )
-    )
-    logger.info(
-        "candidate pool sizes for %r: %s",
-        query,
-        {ac.agent: len(ac.candidates) for ac in agent_candidates},
-    )
-    proposals = [_top_proposal(ac) for ac in agent_candidates]
-
-    if all(p.error is not None for p in proposals):
-        # 세 에이전트가 전부 특정 상품 후보를 못 찾았다 — "아이스크림"처럼 카테고리
-        # 자체가 너무 넓은 질의일 때 흔하다(검색 결과가 상품 상세 페이지가 아니라
-        # 목록/카테고리 페이지뿐이라 URL 기준 필터를 못 통과함). 완전 실패로 끝내는
-        # 대신, 같은 검색 결과에서 브랜드만이라도 뽑아 되물어본다 — 특정 상품 URL을
-        # 찾는 것보다 브랜드명이 텍스트에 스치듯 언급됐는지 보는 게 기준이 훨씬
-        # 관대해서 성공률이 높다.
-        clarify = await _extract_clarify_options(query, results)
-        if clarify is not None:
-            return clarify
-        raise RuntimeError(NO_CANDIDATE_ERROR)
-
-    decision = await judge.decide(query, proposals)
-
-    return DecideResponse(query=query, proposals=proposals, decision=decision)
+    """정제→검색→제안(GPT·Gemini·DeepSeek 병렬)→필터링+병합→검증→매칭→심사
+    역할 분리 파이프라인 — 실제 오케스트레이션은 adk_pipeline(ADK SequentialAgent)이
+    담당한다. 이 함수는 main.py/run_debate가 기대하는 기존 시그니처를 유지하는
+    얇은 래퍼."""
+    return await adk_pipeline.run(query)
 
 
 async def run_single_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
-    """run_single_debate와 같은 결과를 만들지만, 검색/각 에이전트 완료/심사 단계마다
-    이벤트를 내보낸다. 세 에이전트는 asyncio.gather로 한꺼번에 기다리지 않고
-    as_completed로 먼저 끝나는 순서대로 흘려보내, 사용자가 셋 다 끝날 때까지
-    기다리지 않고 진행 상황을 볼 수 있게 한다."""
-    yield {"type": "status", "stage": "searching"}
-    try:
-        results = await search_module.search(query)
-    except Exception:
-        results = []
-
-    yield {"type": "status", "stage": "proposing"}
-
-    tasks = [
-        asyncio.create_task(gpt.propose(query, results)),
-        asyncio.create_task(gemini.propose(query, results)),
-        asyncio.create_task(deepseek.propose(query, results)),
-    ]
-    agent_candidates: list[AgentCandidates] = []
-    for task in asyncio.as_completed(tasks):
-        ac = await task
-        agent_candidates.append(ac)
-        yield {"type": "proposal", "proposal": _top_proposal(ac).model_dump()}
-
-    logger.info(
-        "candidate pool sizes for %r: %s",
-        query,
-        {ac.agent: len(ac.candidates) for ac in agent_candidates},
-    )
-
-    proposals = [_top_proposal(ac) for ac in agent_candidates]
-
-    if all(p.error is not None for p in proposals):
-        # run_single_debate와 동일한 카테고리-질의 완화 처리 — 주석은 그쪽 참고.
-        clarify = await _extract_clarify_options(query, results)
-        if clarify is not None:
-            yield {"type": "final", "result": clarify.model_dump()}
-            return
-        raise RuntimeError(NO_CANDIDATE_ERROR)
-
-    yield {"type": "status", "stage": "judging"}
-    decision = await judge.decide(query, proposals)
-
-    result = DecideResponse(query=query, proposals=proposals, decision=decision)
-    yield {"type": "final", "result": result.model_dump()}
+    """run_single_debate와 같은 결과를 만들지만, 파이프라인 단계마다(정제/검색/
+    제안/검증/심사) NDJSON 이벤트를 흘려보낸다 — adk_pipeline.run_stream이 실제
+    오케스트레이션과 이벤트 번역을 담당."""
+    async for event in adk_pipeline.run_stream(query):
+        yield event
 
 
-async def run_bulk_debate(query: str) -> BulkDecideResponse:
+async def run_bulk_debate(query: str) -> BulkDecideResponse | DecideResponse | ClarifyResponse:
     try:
         results = await search_module.search(query, max_results=10)
     except Exception:
@@ -191,6 +119,16 @@ async def run_bulk_debate(query: str) -> BulkDecideResponse:
     )
 
     decision = await judge.organize_options(query, proposals)
+
+    if len(decision.options) <= 1:
+        # is_bulk_query()는 "숫자+단위가 있으면 대량구매성"이라는 근사치
+        # 휴리스틱이라, "메로나 빙그레 70mL"처럼 애초에 특정 상품 하나를
+        # 가리키는 질의도 걸릴 수 있다(코드 주석에 이미 명시된 한계). 실제로
+        # 갈리는 브랜드가 0~1개뿐이면 "여러 브랜드 비교"라는 전제 자체가
+        # 성립하지 않으므로, 브랜드별 비교 포맷 대신 단일상품 파이프라인으로
+        # 다시 판단한다.
+        return await run_single_debate(query)
+
     price_range = _compute_price_range(decision.options)
 
     return BulkDecideResponse(
