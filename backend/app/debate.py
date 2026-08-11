@@ -89,7 +89,17 @@ async def run_single_debate(query: str) -> DecideResponse:
     )
     proposals = [_top_proposal(ac) for ac in agent_candidates]
 
-    decision = await judge.decide(query, proposals)
+    # PART 4-2: 다나와 A등급 최저가 후보를 judge의 선택지 풀에 직접 추가한다
+    # (판매처+가격 매칭에 의존하지 않는 경로 - LLM이 고른 상품과 다나와 페이지가
+    # 애초에 다른 상품이라 매칭이 실패하는 절반가량의 쿼리에서도 다나와 데이터가
+    # 후보로는 정상적으로 노출된다). DecideResponse.proposals(응답에 노출되는
+    # 필드)에는 넣지 않는다 - 프론트엔드가 "에이전트 3개" 레이아웃을 가정할 수
+    # 있어, judge에게 넘기는 후보 풀만 넓히고 노출 스키마는 그대로 둔다.
+    danawa_proposals = await price_table_module.build_danawa_candidates(danawa_tables, agent_candidates)
+
+    decision = await judge.decide(query, proposals + danawa_proposals)
+    if decision.chosen_agent == "danawa":
+        decision.price_source = "danawa_offer"
 
     primary = price_table_module.pick_primary(danawa_tables)
     price_table = None

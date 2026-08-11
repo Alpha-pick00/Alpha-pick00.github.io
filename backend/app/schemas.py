@@ -2,7 +2,11 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-AgentName = Literal["gpt", "gemini", "deepseek"]
+# "danawa": PART 4-2(2026-08-11 지시서) - 다나와 A등급 최저가 후보가 judge의
+# 선택 대상 풀에 직접 들어간다. 프론트엔드는 AGENT_LABEL[agent] || agent로
+# 렌더링해(frontend/src/app/components/SearchResults.tsx) 모르는 값이 와도
+# 원문 그대로 표시할 뿐 깨지지 않는다 - 확인 후 추가했다.
+AgentName = Literal["gpt", "gemini", "deepseek", "danawa"]
 AuthProvider = Literal["google", "kakao", "naver"]
 
 

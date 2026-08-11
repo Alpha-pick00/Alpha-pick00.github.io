@@ -11,6 +11,7 @@ from app.debate import run_single_debate
 from app.main import app
 from app.price_table import (
     _extract_quantity_tokens,
+    build_danawa_candidates,
     build_price_table,
     cheapest_linkable_raw_offer,
     enrich_decision,
@@ -568,3 +569,106 @@ def test_select_danawa_urls_caps_at_three():
         "https://prod.danawa.com/info?pcode=3",
         "https://prod.danawa.com/info?pcode=2",
     ]
+
+
+# -- PART 4-2: 다나와 후보를 judge 선택지 풀에 직접 추가 -----------------------
+
+
+def test_build_danawa_candidates_produces_agent_danawa_proposal(monkeypatch):
+    html = _danawa_html("전혀 다른 상품명", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+    table = build_price_table(result)
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/1", "1"
+
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+
+    proposals = asyncio.run(build_danawa_candidates([(table, result)], agent_candidates=[]))
+
+    assert len(proposals) == 1
+    assert proposals[0].agent == "danawa"
+    assert proposals[0].product_name == "전혀 다른 상품명"
+    assert proposals[0].price == "23,000원"
+    assert proposals[0].retailer == "쿠팡"
+    assert proposals[0].url == "https://www.coupang.com/vp/products/1"
+    assert "danawa.com" not in proposals[0].url
+
+
+def test_build_danawa_candidates_skips_page_without_a_grade_offer(monkeypatch):
+    html = _danawa_html("B등급만 있는 상품", [_offer_li("옥션", "20,000", "EE715")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+    table = build_price_table(result)
+
+    proposals = asyncio.run(build_danawa_candidates([(table, result)], agent_candidates=[]))
+
+    assert proposals == []
+
+
+def test_build_danawa_candidates_records_consensus_with_matching_llm_agent(monkeypatch):
+    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+    table = build_price_table(result)
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/1", "1"
+
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+
+    gpt_candidates = AgentCandidates(
+        agent="gpt",
+        candidates=[
+            AgentCandidate(
+                product_name="테스트 상품", price_krw=23000, retailer="쿠팡",
+                url="https://www.coupang.com/vp/products/1", reasoning="gpt 근거",
+            )
+        ],
+    )
+
+    proposals = asyncio.run(build_danawa_candidates([(table, result)], agent_candidates=[gpt_candidates]))
+
+    assert len(proposals) == 1
+    assert "gpt" in proposals[0].reasoning
+    assert "합의" in proposals[0].reasoning
+
+
+def test_judge_choosing_danawa_sets_price_source_and_real_url(monkeypatch):
+    _patch_llm_layer(monkeypatch)
+    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
+
+    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    async def _fake_fetch(url):
+        return result
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/1", "1"
+
+    async def _judge_picks_danawa(query, proposals):
+        danawa_pick = next(p for p in proposals if p.agent == "danawa")
+        return Decision(
+            product_name=danawa_pick.product_name,
+            price=danawa_pick.price,
+            retailer=danawa_pick.retailer,
+            url=danawa_pick.url,
+            reasoning="다나와 실측가가 가장 신뢰도 높음",
+            chosen_agent="danawa",
+        )
+
+    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fake_fetch)
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+    monkeypatch.setattr("app.agents.judge.decide", _judge_picks_danawa)
+
+    resp = client.post("/decide", json={"query": "테스트 상품"})
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["decision"]["chosen_agent"] == "danawa"
+    assert data["decision"]["price_source"] == "danawa_offer"
+    assert data["decision"]["url"] == "https://www.coupang.com/vp/products/1"
+    assert "danawa.com" not in data["decision"]["url"]
+    # 노출 스키마의 proposals는 LLM 3개 그대로 - 다나와 후보는 judge 선택지
+    # 풀에만 들어가고 응답 구조 자체는 안 바뀐다.
+    assert len(data["proposals"]) == 3
+    assert all(p["agent"] != "danawa" for p in data["proposals"])

@@ -10,9 +10,13 @@ JUDGE_INSTRUCTIONS = (
     "다나와·에누리 같은 가격비교 사이트는 실제 판매처가 아니므로 "
     "retailer나 url로 최종 선택하지 마세요 - 그 사이트가 비교해서 보여주는 "
     "실제 판매처(쿠팡, 11번가 등)를 골라야 합니다. "
+    "제안 중 agent가 'danawa'로 표시된 것은 여러 판매처의 실제 가격을 비교한 "
+    "가격비교 데이터에서 나온 후보입니다 - retailer와 price가 실측 확인된 값이라 "
+    "다른 제안보다 가격 신뢰도가 높으니 우선 고려하세요(단, 이 경우에도 retailer와 "
+    "url 자체는 이미 실제 판매처를 가리키므로 그대로 최종 선택해도 됩니다). "
     "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
     '{"product_name": "...", "price": "...", "retailer": "...", "url": "...", '
-    '"reasoning": "...", "chosen_agent": "gpt|gemini|deepseek"}'
+    '"reasoning": "...", "chosen_agent": "gpt|gemini|deepseek|danawa"}'
 )
 
 ORGANIZE_INSTRUCTIONS = (
