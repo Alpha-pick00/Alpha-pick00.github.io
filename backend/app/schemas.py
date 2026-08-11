@@ -75,6 +75,14 @@ class PriceTable(BaseModel):
     product_name: str | None = None
     offers: list[PriceTableOffer]
     spread: float | None = None
+    # B-3a 실측: 다나와 상세페이지는 판매처 최대 10개만 정적 HTML에 노출한다.
+    # 검색결과 페이지의 "N몰" 표기(있을 때만)로 total_mall_count가 채워지면,
+    # 그게 offers_shown보다 클 때 is_partial=True - "최저가"가 아니라
+    # "확인된 최저가"라는 뜻이고 price_label에 그대로 반영된다.
+    total_mall_count: int | None = None
+    offers_shown: int = 0
+    is_partial: bool = False
+    price_label: str = "최저가"
 
 
 class DecideResponse(BaseModel):

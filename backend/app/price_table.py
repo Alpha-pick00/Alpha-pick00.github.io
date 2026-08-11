@@ -113,12 +113,17 @@ def build_price_table(result: danawa.DanawaResult) -> PriceTable | None:
     prices = [o.price_krw for o in graded]
     spread = round(max(prices) / min(prices), 3) if min(prices) else None
     pcode = _query_param(result["source_url"], "pcode")
+    is_partial = result["is_partial"]
 
     return PriceTable(
         source_pcode=pcode,
         product_name=result["product_name"],
         offers=graded,
         spread=spread,
+        total_mall_count=result["total_mall_count"],
+        offers_shown=result["offers_shown"],
+        is_partial=is_partial,
+        price_label="확인된 최저가" if is_partial else "최저가",
     )
 
 

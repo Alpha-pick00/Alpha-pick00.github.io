@@ -19,7 +19,7 @@ from app.price_table import (
     select_danawa_urls,
 )
 from app.schemas import AgentCandidate, AgentCandidates, Decision, Proposal, SearchResult
-from fetchers.danawa import parse_danawa_html
+from fetchers.danawa import parse_danawa_html, with_total_mall_count
 
 client = TestClient(app)
 
@@ -714,3 +714,68 @@ def test_judge_choosing_danawa_sets_price_source_and_real_url(monkeypatch):
     # 풀에만 들어가고 응답 구조 자체는 안 바뀐다.
     assert len(data["proposals"]) == 3
     assert all(p["agent"] != "danawa" for p in data["proposals"])
+
+
+# -- B-3a/B-3b: "N몰" 표기와 상세페이지 10개 offer 사이의 정직한 표기 --------------
+
+
+def _three_offer_result() -> dict:
+    html = _danawa_html(
+        "테스트 상품",
+        [
+            _offer_li("쿠팡", "10,000", "A"),
+            _offer_li("11번가", "11,000", "B"),
+            _offer_li("G마켓", "12,000", "C"),
+        ],
+    )
+    return parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+
+def test_parse_danawa_html_defaults_total_mall_count_to_none():
+    result = _three_offer_result()
+    assert result["total_mall_count"] is None
+    assert result["offers_shown"] == 3
+    assert result["is_partial"] is False
+
+
+def test_with_total_mall_count_marks_partial_when_total_exceeds_shown():
+    result = _three_offer_result()
+    merged = with_total_mall_count(result, 150)
+    assert merged["total_mall_count"] == 150
+    assert merged["is_partial"] is True
+    # 원본은 그대로다 - 순수 함수(새 dict 반환)여야 한다
+    assert result["total_mall_count"] is None
+
+
+def test_with_total_mall_count_not_partial_when_total_equals_shown():
+    result = _three_offer_result()
+    merged = with_total_mall_count(result, 3)
+    assert merged["is_partial"] is False
+
+
+def test_with_total_mall_count_none_stays_not_partial():
+    result = _three_offer_result()
+    merged = with_total_mall_count(result, None)
+    assert merged["total_mall_count"] is None
+    assert merged["is_partial"] is False
+
+
+def test_build_price_table_exposes_partial_coverage_fields():
+    result = _three_offer_result()
+    merged = with_total_mall_count(result, 150)
+
+    table = build_price_table(merged)
+
+    assert table.total_mall_count == 150
+    assert table.offers_shown == 3
+    assert table.is_partial is True
+    assert table.price_label == "확인된 최저가"
+
+
+def test_build_price_table_price_label_stays_default_when_not_partial():
+    result = _three_offer_result()
+
+    table = build_price_table(result)
+
+    assert table.is_partial is False
+    assert table.price_label == "최저가"
