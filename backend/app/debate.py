@@ -134,33 +134,22 @@ async def run_single_debate(query: str) -> DecideResponse:
 async def run_danawa_only_debate(query: str) -> DecideResponse:
     """LLM API 비용 절감을 위한 임시 로컬 실험 경로 - gpt/gemini/deepseek
     제안도, judge 최종 결정도 전부 건너뛴다. LLM 호출 0번. 다나와 실측
-    가격표(Tavily + 직접검색 합집합)에서 A등급(구매 링크 생성 가능) 최저가
-    offer를 규칙 기반으로 그대로 최종 추천으로 쓴다.
+    가격표(다나와 직접검색만)에서 A등급(구매 링크 생성 가능) 최저가 offer를
+    규칙 기반으로 그대로 최종 추천으로 쓴다.
 
     run_debate()에서 자동으로 타지 않는다 - /decide/danawa-only 전용
     엔드포인트에서만 명시적으로 호출한다. 다나와 데이터가 아예 없거나
     A등급 offer가 없으면(=구매 링크를 만들 수 없으면) RuntimeError를 던진다 -
     "링크 없는 추천은 만들지 않는다" 원칙은 LLM 없이도 동일하게 지킨다.
 
-    속도 최적화(사용자 요청) - 이 경로엔 LLM 에이전트가 없어서 Tavily 검색
-    결과를 다른 누구와도 공유할 필요가 없다. run_single_debate()와 달리
-    Tavily 검색과 다나와 직접 검색이 서로 완전히 독립적이므로 순서대로
-    기다리지 않고 asyncio.gather로 동시에 쏜다 - 둘 중 느린 쪽 시간만
-    든다(단, search.danawa.com의 10초 Crawl-delay가 걸리면 그게 항상
-    더 느려서 이 병렬화로는 못 줄인다)."""
-    async def _safe_tavily_search() -> list:
-        try:
-            return await search_module.search(query)
-        except Exception:
-            return []
-
-    results, search_urls = await asyncio.gather(
-        _safe_tavily_search(),
-        price_table_module._search_danawa_urls(query),
-    )
-
-    tavily_urls = price_table_module.select_danawa_urls(results)
-    urls = price_table_module._merge_and_cap_urls(tavily_urls, search_urls)
+    속도 최적화(사용자 요청, 두 번째 라운드) - 캐시 안 된 쿼리를 실측해보니
+    Tavily 검색 자체가 15~20초로 압도적 병목이었다(다나와 직접검색은
+    2~4초, 상세페이지 5건 페치는 3~4초). 이 경로는 LLM 에이전트가 없어서
+    Tavily 결과가 다른 어디에도 안 쓰이므로, Tavily를 아예 호출하지
+    않고 search_danawa()만으로 pcode를 찾는다 - 후보 수는 줄지만(합집합의
+    Tavily 쪽 절반을 잃음) 응답은 몇 배 빨라진다. run_single_debate()(LLM
+    경로)는 Tavily 결과를 LLM 에이전트와도 공유해야 해서 그대로 둔다."""
+    urls = await price_table_module._search_danawa_urls(query)
     danawa_tables = await price_table_module.fetch_price_tables_for_urls(urls)
 
     primary = price_table_module.pick_primary(danawa_tables)

@@ -898,9 +898,21 @@ def _forbid_llm_calls(monkeypatch):
     monkeypatch.setattr("app.agents.judge.decide", _boom)
 
 
+def _patch_direct_danawa_search(monkeypatch, pcode: str | None):
+    """run_danawa_only_debate는 Tavily를 아예 안 쓰고 search_danawa()만으로
+    pcode를 찾으므로(속도 최적화 2차 - Tavily 15~20초 병목 제거), 이 테스트들은
+    _patch_search가 아니라 search_danawa 자체를 직접 목킹해야 한다."""
+    items = [{"pcode": pcode, "product_name": "테스트 상품", "total_mall_count": None}] if pcode else []
+
+    async def _search_danawa(query, limit=5):
+        return items
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
+
+
 def test_run_danawa_only_debate_never_calls_any_llm(monkeypatch):
     _forbid_llm_calls(monkeypatch)
-    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
+    _patch_direct_danawa_search(monkeypatch, "1")
 
     html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
 
@@ -925,7 +937,7 @@ def test_run_danawa_only_debate_never_calls_any_llm(monkeypatch):
 
 def test_run_danawa_only_debate_raises_when_no_price_table(monkeypatch):
     _forbid_llm_calls(monkeypatch)
-    _patch_search(monkeypatch, None)  # 다나와 URL 자체를 못 찾는 경우
+    _patch_direct_danawa_search(monkeypatch, None)  # 다나와 URL 자체를 못 찾는 경우
 
     try:
         asyncio.run(run_danawa_only_debate("존재하지 않는 상품"))
@@ -936,7 +948,7 @@ def test_run_danawa_only_debate_raises_when_no_price_table(monkeypatch):
 
 def test_run_danawa_only_debate_raises_when_no_a_grade_offer(monkeypatch):
     _forbid_llm_calls(monkeypatch)
-    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
+    _patch_direct_danawa_search(monkeypatch, "1")
 
     # bridge_url의 cmpnyc가 CMPNYC_MAP에 없는 미확인 판매처 - linkable=False뿐이라
     # A등급이 하나도 없다.
@@ -956,7 +968,7 @@ def test_run_danawa_only_debate_raises_when_no_a_grade_offer(monkeypatch):
 
 def test_decide_danawa_only_endpoint_returns_502_on_no_price_table(monkeypatch):
     _forbid_llm_calls(monkeypatch)
-    _patch_search(monkeypatch, None)
+    _patch_direct_danawa_search(monkeypatch, None)
 
     resp = client.post("/decide/danawa-only", json={"query": "존재하지 않는 상품"})
 
@@ -965,7 +977,7 @@ def test_decide_danawa_only_endpoint_returns_502_on_no_price_table(monkeypatch):
 
 def test_decide_danawa_only_endpoint_returns_200_with_no_proposals(monkeypatch):
     _forbid_llm_calls(monkeypatch)
-    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
+    _patch_direct_danawa_search(monkeypatch, "1")
 
     html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
 
@@ -993,7 +1005,7 @@ def test_decide_auto_routes_to_danawa_only_when_no_llm_key_configured(monkeypatc
     # 걸려 502가 난다.
     monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: False)
     monkeypatch.setattr("app.autocomplete.record_terms", lambda terms: None)
-    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
+    _patch_direct_danawa_search(monkeypatch, "1")
 
     html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
 
