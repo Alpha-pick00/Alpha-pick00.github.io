@@ -42,6 +42,7 @@ from fetchers import danawa
 from fetchers.danawa_mall_map import CMPNYC_MAP, TRUST_TIER
 from fusion.dedup import NAME_SIMILARITY_THRESHOLD
 
+from .exclusive_tokens import exclusive_tokens_conflict
 from .schemas import Decision, PriceTable, PriceTableOffer, Proposal, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -260,6 +261,10 @@ def _product_name_matches(decision_name: str, danawa_name: str) -> bool:
     if _tokens_conflict(_extract_model_tokens(decision_name), _extract_model_tokens(danawa_name)):
         return False
     if _tokens_conflict(_extract_quantity_tokens(decision_name), _extract_quantity_tokens(danawa_name)):
+        return False
+    # 백미/발아현미처럼 순한글 단어 하나가 결정적 차이인 경우 - token_set_ratio는
+    # 공통 토큰이 많으면 이런 차이를 그냥 덮어버린다(실측 93.0점, 85 통과).
+    if exclusive_tokens_conflict(decision_name, danawa_name):
         return False
     return True
 

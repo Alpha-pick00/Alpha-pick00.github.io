@@ -331,6 +331,28 @@ def test_quantity_token_conflict_blocks_match():
     assert enriched.price_source == "llm_guess"
 
 
+# -- PART 1: 배타 토큰 충돌(백미 vs 발아현미)이면 매칭 실패 (실제 관측 케이스) --
+
+
+def test_exclusive_token_conflict_blocks_match_end_to_end():
+    html = _danawa_html("햇반 발아현미 210g (24개)", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    decision = Decision(
+        product_name="햇반 백미 210g (24개)",
+        price="25,900원",
+        retailer="마켓컬리",
+        url="https://www.kurly.com/goods/1",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    enriched = asyncio.run(enrich_decision(decision, result))
+
+    assert enriched.price_source == "llm_guess"
+    assert enriched.retailer == "마켓컬리"
+
+
 # -- STEP 6: "무이자 12개월"이 수량 토큰으로 오인되지 않는가 --------------------
 
 
