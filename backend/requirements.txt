@@ -10,3 +10,5 @@ httpx==0.28.1
 python-multipart==0.0.20
 pyjwt==2.13.0
 rapidfuzz==3.14.1
+beautifulsoup4==4.15.0
+lxml==6.1.1

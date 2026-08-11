@@ -25,7 +25,7 @@ from urllib.parse import quote, urlsplit
 import asyncio
 
 import httpx
-from bs4 import BeautifulSoup
+from lxml import html as lxml_html
 
 logger = logging.getLogger(__name__)
 
@@ -77,15 +77,30 @@ class DanawaSearchItem(TypedDict):
     total_mall_count: int | None
 
 
+def _has_class(tag: str, class_name: str) -> str:
+    """BeautifulSoup의 `tag.class_name` CSS 선택자와 동일한(토큰 단위) class
+    매칭을 XPath로 표현한다. `contains(@class, ...)`만 쓰면 예를 들어
+    class="prod_item_ad"도 "prod_item"에 잘못 걸릴 수 있어 양옆에 공백을
+    덧붙인 뒤 대조한다."""
+    return f".//{tag}[contains(concat(' ', normalize-space(@class), ' '), ' {class_name} ')]"
+
+
+def _text_with_spaces(el) -> str:
+    """BeautifulSoup의 get_text(' ', strip=True)와 동일한 효과 - <b> 같은
+    강조 태그로 텍스트 조각이 나뉘어 있어도 조각 사이에 공백을 넣어 합친다
+    (B-2 실측: 안 하면 "삼성전자갤럭시버즈3프로"처럼 토큰이 붙어버린다)."""
+    return " ".join(t.strip() for t in el.xpath(".//text()") if t.strip())
+
+
 def _extract_total_mall_count(item_li) -> int | None:
     """li.prod_item 안 div.prod_pricelist에서 "정품" 카테고리 행만 골라 "N몰"
     숫자를 뽑는다. 한 상품에 정품/해외구매/중고 행이 섞여 나올 수 있어(B-3a
     실측) "정품"이 명시된 행이 아니면 무시한다."""
-    pricelist = item_li.select_one("div.prod_pricelist")
-    if pricelist is None:
+    pricelists = item_li.xpath(_has_class("div", "prod_pricelist"))
+    if not pricelists:
         return None
-    for row in pricelist.select("li[id^='productInfoDetail_']"):
-        text = row.get_text(" ", strip=True)
+    for row in pricelists[0].xpath(".//li[starts-with(@id, 'productInfoDetail_')]"):
+        text = _text_with_spaces(row)
         if "정품" not in text:
             continue
         match = re.search(r"(\d+)\s*몰", text)
@@ -96,35 +111,40 @@ def _extract_total_mall_count(item_li) -> int | None:
 
 def parse_search_html(html: str, limit: int = 5) -> list[DanawaSearchItem]:
     """네트워크 없이 순수하게 검색결과 HTML만 파싱한다(parse_danawa_html과 같은
-    패턴 - 테스트는 전부 이 함수를 통해서 한다)."""
+    패턴 - 테스트는 전부 이 함수를 통해서 한다).
+
+    BeautifulSoup 대신 lxml.html을 직접 쓴다 - "노트북"처럼 결과가 많은
+    쿼리는 검색결과 페이지가 5MB를 넘는데, BeautifulSoup의 트리 구성
+    오버헤드만으로 5.8초가 걸리는 걸 실측했다(lxml 직접 파싱은 0.3초).
+    사용자가 "검색 하나에 15초"라고 보고한 지연의 실제 원인이었다."""
     if NO_RESULT_TEXT in html:
         return []
 
-    soup = BeautifulSoup(html, "lxml")
+    doc = lxml_html.fromstring(html)
     items: list[DanawaSearchItem] = []
     seen_pcodes: set[str] = set()
 
-    for li in soup.select("li.prod_item"):
+    for li in doc.xpath(_has_class("li", "prod_item")):
         if len(items) >= limit:
             break
         # 방어 코드 - 정적 HTML의 li.prod_item에는 파워쇼핑 광고가 원래 섞이지
         # 않는다는 걸 B-2/B-3a에서 확인했지만(<template> 안에만 있음), 혹시
         # 모를 구조 변경에 대비해 남겨둔다.
-        if li.select_one("span.icon__ad") is not None:
+        if li.xpath(_has_class("span", "icon__ad")):
             continue
 
-        name_a = li.select_one("p.prod_name a")
-        if name_a is None:
+        name_links = li.xpath(_has_class("p", "prod_name") + "/a")
+        if not name_links:
             continue
         # <b> 강조 태그로 토큰이 사이 공백 없이 붙어버리는 문제(B-2 실측) -
         # separator를 반드시 줘야 "삼성전자갤럭시버즈3프로"가 아니라
         # "삼성전자 갤럭시 버즈3 프로"로 나온다.
-        product_name = name_a.get_text(" ", strip=True)
+        product_name = _text_with_spaces(name_links[0])
         if not product_name:
             continue
 
-        code_el = li.select_one("[data-product-code]")
-        pcode = code_el.get("data-product-code") if code_el is not None else None
+        code_els = li.xpath(".//*[@data-product-code]")
+        pcode = code_els[0].get("data-product-code") if code_els else None
         if not pcode or pcode in seen_pcodes:
             continue
         seen_pcodes.add(pcode)
