@@ -150,11 +150,13 @@ def test_decide_returns_llm_only_when_danawa_times_out(monkeypatch):
 
 
 def test_no_a_grade_offer_leaves_decision_unreplaced():
-    # EE715(옥션)/EE128(G마켓)는 CMPNYC_MAP에서 domain은 있지만 url_rule=None
-    # (B등급) - A등급이 전혀 없는 페이지를 만든다.
+    # TW627F(호갱마켓)/TY6C4(우리집식탁매니저)는 CMPNYC_MAP에서 domain은
+    # 있지만(smartstore.naver.com) url_rule=None(B등급, E-2가 429로 중단돼
+    # 미검증) - A등급이 전혀 없는 페이지를 만든다. (EE715/EE128은 옥션/G마켓
+    # resolve_outlink 재검증 후 A등급으로 바뀌어서 더 이상 이 용도로 못 쓴다.)
     html = _danawa_html(
         "테스트 상품",
-        [_offer_li("옥션", "20,000", "EE715"), _offer_li("G마켓", "21,000", "EE128")],
+        [_offer_li("호갱마켓", "20,000", "TW627F"), _offer_li("우리집식탁매니저", "21,000", "TY6C4")],
     )
     result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
 
@@ -163,15 +165,15 @@ def test_no_a_grade_offer_leaves_decision_unreplaced():
     original = Decision(
         product_name="테스트 상품",
         price="20,000원",
-        retailer="옥션",
-        url="https://www.auction.co.kr/guess",
+        retailer="호갱마켓",
+        url="https://smartstore.naver.com/guess",
         reasoning="테스트",
         chosen_agent="gpt",
     )
     enriched = asyncio.run(enrich_decision(original, result))
 
     assert enriched.price_source == "llm_guess"
-    assert enriched.url == "https://www.auction.co.kr/guess"
+    assert enriched.url == "https://smartstore.naver.com/guess"
     assert enriched.price == "20,000원"
 
 
@@ -182,14 +184,14 @@ def test_cheapest_linkable_offer_skips_cheaper_b_grade():
     html = _danawa_html(
         "테스트 상품",
         [
-            _offer_li("옥션", "19,000", "EE715"),  # B등급, 더 저렴
+            _offer_li("호갱마켓", "19,000", "TW627F"),  # B등급, 더 저렴
             _offer_li("쿠팡", "23,000", "TP40F", link_pcode="555"),  # A등급
         ],
     )
     result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
 
     table = build_price_table(result)
-    assert table.offers[0].seller == "옥션"
+    assert table.offers[0].seller == "호갱마켓"
     assert table.offers[0].price_krw == 19000
     assert table.offers[0].linkable is False
     assert table.offers[1].seller == "쿠팡"
@@ -198,6 +200,31 @@ def test_cheapest_linkable_offer_skips_cheaper_b_grade():
     cheapest_linkable = cheapest_linkable_raw_offer(result)
     assert cheapest_linkable["seller"] == "쿠팡"
     assert cheapest_linkable["price_krw"] == 23000
+
+
+def test_gmarket_and_auction_are_a_grade_after_resolve_outlink_reverification():
+    # 맥북에어 M2 실사례(2026-08-11): 옥션/G마켓이 domain은 알아도 url_rule=None
+    # 이라 A등급에서 통째로 빠져서, 실제로는 더 비싼 11번가/롯데ON이 "최저가"로
+    # 추천되는 문제가 있었다. resolve_outlink()가 옥션/G마켓 bridge_url에서도
+    # 정상 동작한다는 걸 실측 확인하고 redirect_resolved로 바꿨다 - 회귀 방지용.
+    html = _danawa_html(
+        "테스트 상품",
+        [
+            _offer_li("옥션", "1,300,000", "EE715"),
+            _offer_li("G마켓", "1,310,000", "EE128"),
+            _offer_li("11번가", "1,880,000", "TH201", link_pcode="999"),
+        ],
+    )
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+    table = build_price_table(result)
+
+    by_seller = {o.seller: o for o in table.offers}
+    assert by_seller["옥션"].linkable is True
+    assert by_seller["G마켓"].linkable is True
+
+    cheapest = cheapest_linkable_raw_offer(result)
+    assert cheapest["seller"] == "옥션"
+    assert cheapest["price_krw"] == 1300000
 
 
 # -- 5. domain=None offer의 trust는 None (0.3 아님) ----------------------------
@@ -657,7 +684,7 @@ def test_build_danawa_candidates_produces_agent_danawa_proposal(monkeypatch):
 
 
 def test_build_danawa_candidates_skips_page_without_a_grade_offer(monkeypatch):
-    html = _danawa_html("B등급만 있는 상품", [_offer_li("옥션", "20,000", "EE715")])
+    html = _danawa_html("B등급만 있는 상품", [_offer_li("호갱마켓", "20,000", "TW627F")])
     result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
     table = build_price_table(result)
 

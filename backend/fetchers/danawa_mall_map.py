@@ -61,14 +61,18 @@ CMPNYC_MAP: dict[str, MallMapping] = {
         "url_rule": "template:https://m.11st.co.kr/products/ma/{link_pcode}",
     },
 
-    # --- 검증 E-1: item-no -> 표준 URL 조립 가설, 미확정 ---
-    # 옥션은 가설 URL이 403(봇 차단)으로 상품명 대조 자체가 불가해 가설을
-    # 폐기했다. gateway_domain(link.auction.co.kr)은 실제로 받은 응답이므로
-    # 몰 정체(domain)는 확신하지만, url_rule은 아직 없다.
-    "EE715": {"seller": "옥션", "domain": "auction.co.kr", "url_rule": None},
-    # G마켓은 옥션에서 403이 떠서 지시대로 시도조차 하지 않았다. domain은
-    # gateway_domain(link.gmarket.co.kr) 근거로 채우지만 url_rule은 없다.
-    "EE128": {"seller": "G마켓", "domain": "gmarket.co.kr", "url_rule": None},
+    # --- 검증 E-1(구): item-no -> 표준 URL 조립 가설(직접 URL 추정)은 403으로
+    # 폐기했었다. 이후 재검증(2026-08-11, 맥북에어 M2 사례에서 실측) - 그건
+    # "URL을 추정해서 직접 GET"하는 별개 방법이 막힌 것뿐이고, 다른 판매처들과
+    # 똑같이 쓰는 범용 브릿지 추적(resolve_outlink, goLink -> 제휴 리다이렉트
+    # follow_redirects)은 옥션/G마켓 둘 다 한 번도 시도해본 적이 없었다.
+    # 실제로 해보니 정상적으로 게이트웨이 URL을 돌려준다:
+    #   옥션: https://link.auction.co.kr/gate/pcs?item-no=...
+    #   G마켓: https://link.gmarket.co.kr/gate/pcs?item-no=...
+    # 이 둘이 A등급(linkable)에서 통째로 빠져있던 탓에, 흔히 최저가권인 두
+    # 오픈마켓을 제외하고 더 비싼 판매처가 "최저가"로 추천되는 문제가 있었다.
+    "EE715": {"seller": "옥션", "domain": "auction.co.kr", "url_rule": "redirect_resolved"},
+    "EE128": {"seller": "G마켓", "domain": "gmarket.co.kr", "url_rule": "redirect_resolved"},
 
     # --- 검증 E-2: 대표 offer 1건씩 리다이렉트 추적, 성공 ---
     "EE309": {"seller": "롯데ON", "domain": "lotteon.com", "url_rule": "redirect_resolved"},
