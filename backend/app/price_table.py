@@ -150,25 +150,10 @@ async def _search_danawa_urls(query: str, limit: int = MAX_DANAWA_URLS) -> list[
     return [f"https://prod.danawa.com/info/?pcode={item['pcode']}" for item in items]
 
 
-async def fetch_price_tables(
-    query: str,
-    results: list[SearchResult],
-) -> list[tuple[PriceTable, danawa.DanawaResult]]:
-    """LLM 호출들과 asyncio.gather로 나란히 실행되는 걸 전제로 한 진입점.
-    무슨 일이 있어도 예외를 던지지 않는다 - 실패하면 빈 리스트를 반환해
-    본 파이프라인(LLM 기반 추천)을 절대 막지 않는다.
-
-    (PriceTable, DanawaResult) 튜플로 반환하는 이유: PriceTable은 응답에
-    그대로 노출되는 공개 스키마라 bridge_url이 없다. 최종 추천 확정 후
-    resolve_purchase_url()을 부르려면 원본 DanawaOffer(bridge_url 포함)가
-    필요해서 함께 들고 다닌다 - bridge_url은 이 튜플 밖으로 나가지 않는다.
-
-    URL 출처는 Tavily(select_danawa_urls)와 다나와 직접 검색
+def _merge_and_cap_urls(tavily_urls: list[str], search_urls: list[str]) -> list[str]:
+    """URL 출처는 Tavily(select_danawa_urls)와 다나와 직접 검색
     (_search_danawa_urls) 두 경로의 합집합이다 - 대체가 아니다. pcode
     기준으로 중복 제거 후 상한(MAX_DANAWA_URLS)을 그대로 적용한다."""
-    tavily_urls = select_danawa_urls(results)
-    search_urls = await _search_danawa_urls(query)
-
     urls: list[str] = []
     seen_keys: set[str] = set()
     for u in tavily_urls + search_urls:
@@ -177,8 +162,20 @@ async def fetch_price_tables(
             continue
         seen_keys.add(key)
         urls.append(u)
-    urls = urls[:MAX_DANAWA_URLS]
+    return urls[:MAX_DANAWA_URLS]
 
+
+async def fetch_price_tables_for_urls(
+    urls: list[str],
+) -> list[tuple[PriceTable, danawa.DanawaResult]]:
+    """이미 합집합+상한이 적용된 URL 목록을 그대로 페치한다. fetch_price_tables()의
+    후반부를 분리한 것 - run_danawa_only_debate()가 Tavily 검색과 다나와 직접
+    검색을 asyncio.gather로 병렬 실행하려면(둘이 서로 독립적이라 순차로 기다릴
+    이유가 없다), URL을 미리 합쳐서 이 함수에 넘기는 형태가 필요했다.
+
+    무슨 일이 있어도 예외를 던지지 않는다 - 실패하면 빈 리스트를 반환해
+    본 파이프라인을 절대 막지 않는다. (PriceTable, DanawaResult) 튜플로
+    반환하는 이유는 fetch_price_tables()와 동일(bridge_url 보존)."""
     if not urls:
         return []
 
@@ -203,6 +200,30 @@ async def fetch_price_tables(
         if table is not None:
             tables.append((table, r))
     return tables
+
+
+async def fetch_price_tables(
+    query: str,
+    results: list[SearchResult],
+) -> list[tuple[PriceTable, danawa.DanawaResult]]:
+    """LLM 호출들과 asyncio.gather로 나란히 실행되는 걸 전제로 한 진입점.
+    무슨 일이 있어도 예외를 던지지 않는다 - 실패하면 빈 리스트를 반환해
+    본 파이프라인(LLM 기반 추천)을 절대 막지 않는다.
+
+    (PriceTable, DanawaResult) 튜플로 반환하는 이유: PriceTable은 응답에
+    그대로 노출되는 공개 스키마라 bridge_url이 없다. 최종 추천 확정 후
+    resolve_purchase_url()을 부르려면 원본 DanawaOffer(bridge_url 포함)가
+    필요해서 함께 들고 다닌다 - bridge_url은 이 튜플 밖으로 나가지 않는다.
+
+    results(Tavily)는 이미 호출자가 await해서 갖고 있다는 전제다
+    (run_single_debate가 LLM 에이전트들과 결과를 공유하므로) - 그래서 여기서는
+    다나와 직접 검색만 추가로 기다린다. Tavily 자체를 병렬화하고 싶으면
+    run_danawa_only_debate()처럼 _search_danawa_urls()/select_danawa_urls()를
+    호출자 쪽에서 직접 gather로 묶고 fetch_price_tables_for_urls()를 써라."""
+    tavily_urls = select_danawa_urls(results)
+    search_urls = await _search_danawa_urls(query)
+    urls = _merge_and_cap_urls(tavily_urls, search_urls)
+    return await fetch_price_tables_for_urls(urls)
 
 
 def pick_primary(

@@ -140,13 +140,28 @@ async def run_danawa_only_debate(query: str) -> DecideResponse:
     run_debate()에서 자동으로 타지 않는다 - /decide/danawa-only 전용
     엔드포인트에서만 명시적으로 호출한다. 다나와 데이터가 아예 없거나
     A등급 offer가 없으면(=구매 링크를 만들 수 없으면) RuntimeError를 던진다 -
-    "링크 없는 추천은 만들지 않는다" 원칙은 LLM 없이도 동일하게 지킨다."""
-    try:
-        results = await search_module.search(query)
-    except Exception:
-        results = []
+    "링크 없는 추천은 만들지 않는다" 원칙은 LLM 없이도 동일하게 지킨다.
 
-    danawa_tables = await price_table_module.fetch_price_tables(query, results)
+    속도 최적화(사용자 요청) - 이 경로엔 LLM 에이전트가 없어서 Tavily 검색
+    결과를 다른 누구와도 공유할 필요가 없다. run_single_debate()와 달리
+    Tavily 검색과 다나와 직접 검색이 서로 완전히 독립적이므로 순서대로
+    기다리지 않고 asyncio.gather로 동시에 쏜다 - 둘 중 느린 쪽 시간만
+    든다(단, search.danawa.com의 10초 Crawl-delay가 걸리면 그게 항상
+    더 느려서 이 병렬화로는 못 줄인다)."""
+    async def _safe_tavily_search() -> list:
+        try:
+            return await search_module.search(query)
+        except Exception:
+            return []
+
+    results, search_urls = await asyncio.gather(
+        _safe_tavily_search(),
+        price_table_module._search_danawa_urls(query),
+    )
+
+    tavily_urls = price_table_module.select_danawa_urls(results)
+    urls = price_table_module._merge_and_cap_urls(tavily_urls, search_urls)
+    danawa_tables = await price_table_module.fetch_price_tables_for_urls(urls)
 
     primary = price_table_module.pick_primary(danawa_tables)
     if primary is None:
