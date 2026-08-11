@@ -50,7 +50,12 @@ logger = logging.getLogger(__name__)
 
 DANAWA_HOST = "prod.danawa.com"
 DANAWA_ROOT_DOMAIN = "danawa.com"
-MAX_DANAWA_URLS = 3
+# 3 -> 5 (사용자 요청, 실제 사례: "옥수수수염차" 검색 시 원하던 상품이 다나와
+# 자체 검색 관련도 순위 10위라 3개 상한으로는 못 잡았다). 5도 10위까지는
+# 못 잡는다 - 다나와 관련도 순위와 가격 순위가 다르다는 게 근본 원인이라
+# 어떤 고정 상한도 모든 케이스를 보장하지 않는다. 대신 요청량이 그만큼
+# (검색 1건 + 상세 최대 5건 = 쿼리당 최대 6건) 늘어난다.
+MAX_DANAWA_URLS = 5
 
 
 def _query_param(url: str | None, name: str) -> str | None:
@@ -160,7 +165,7 @@ async def fetch_price_tables(
 
     URL 출처는 Tavily(select_danawa_urls)와 다나와 직접 검색
     (_search_danawa_urls) 두 경로의 합집합이다 - 대체가 아니다. pcode
-    기준으로 중복 제거 후 기존 상한(MAX_DANAWA_URLS=3)을 그대로 적용한다."""
+    기준으로 중복 제거 후 상한(MAX_DANAWA_URLS)을 그대로 적용한다."""
     tavily_urls = select_danawa_urls(results)
     search_urls = await _search_danawa_urls(query)
 

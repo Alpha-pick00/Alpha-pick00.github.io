@@ -614,16 +614,18 @@ def test_exclude_leaves_non_comparison_domain_untouched():
     assert replaced.price_source == "llm_guess"
 
 
-def test_select_danawa_urls_caps_at_three():
+def test_select_danawa_urls_caps_at_max_danawa_urls():
     results = [
         SearchResult(title=f"상품{i}", url=f"https://prod.danawa.com/info?pcode={i}", snippet="", score=float(i))
-        for i in range(5)
+        for i in range(7)
     ]
     selected = select_danawa_urls(results)
 
-    assert len(selected) == 3
-    # score 내림차순 상위 3개 (4, 3, 2)만 남아야 한다.
+    assert len(selected) == MAX_DANAWA_URLS == 5
+    # score 내림차순 상위 5개(6,5,4,3,2)만 남아야 한다.
     assert selected == [
+        "https://prod.danawa.com/info?pcode=6",
+        "https://prod.danawa.com/info?pcode=5",
         "https://prod.danawa.com/info?pcode=4",
         "https://prod.danawa.com/info?pcode=3",
         "https://prod.danawa.com/info?pcode=2",
@@ -863,9 +865,9 @@ def test_fetch_price_tables_falls_back_to_tavily_when_direct_search_blocked(monk
 
 
 def test_fetch_price_tables_caps_total_urls_at_max_danawa_urls(monkeypatch):
-    async def _search_danawa(query, limit=3):
+    async def _search_danawa(query, limit=5):
         return [
-            {"pcode": str(p), "product_name": f"검색상품{p}", "total_mall_count": None} for p in (10, 11, 12)
+            {"pcode": str(p), "product_name": f"검색상품{p}", "total_mall_count": None} for p in (10, 11, 12, 13, 14)
         ]
 
     monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
@@ -876,8 +878,8 @@ def test_fetch_price_tables_caps_total_urls_at_max_danawa_urls(monkeypatch):
     results = [SearchResult(title="다나와", url="https://prod.danawa.com/info?pcode=1", snippet="", score=0.9)]
     tables = asyncio.run(fetch_price_tables("테스트 쿼리", results))
 
-    assert len(fetched_urls) == MAX_DANAWA_URLS == 3
-    assert {_query_param(u, "pcode") for u in fetched_urls} == {"1", "10", "11"}
+    assert len(fetched_urls) == MAX_DANAWA_URLS == 5
+    assert {_query_param(u, "pcode") for u in fetched_urls} == {"1", "10", "11", "12", "13"}
 
 
 # -- run_danawa_only_debate: LLM 호출 0번, 규칙 기반 다나와 전용 경로 ---------------
