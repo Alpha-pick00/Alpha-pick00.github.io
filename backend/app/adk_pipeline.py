@@ -12,6 +12,7 @@ Workflow가 아직 LlmAgent의 sub-agent로 못 쓰여 미완성 상태)이지�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any, AsyncGenerator, AsyncIterator
@@ -142,6 +143,42 @@ def _merge_proposals(raw_by_agent: dict[str, str | None]) -> list[dict]:
     return merge_candidates(entries)
 
 
+# Tavily extract 호출 수 상한 — 병합 후보가 많아도 재조회 비용/지연시간을 제한한다.
+_MAX_EXTRACT_CANDIDATES = 10
+
+
+def _urls_to_extract(candidates: list[dict]) -> list[str]:
+    """재조회 대상 URL — 병합 후보 중 URL이 있는 것만, 상한선까지만 남긴다."""
+    return [c["url"] for c in candidates[:_MAX_EXTRACT_CANDIDATES] if c.get("url")]
+
+
+class _ExtractPagesNode(BaseAgent):
+    """병합된 후보들의 실제 판매 페이지 원문을 다시 가져와 상태에 저장한다.
+    challenge(DeepSeek)는 기존에는 검색 당시 잘린 스니펫(최대 1500자)만 보고
+    판단했는데, 여기서 채운 candidate_pages를 함께 주면 지금 이 URL의 실제
+    최신 본문을 근거로 재검증할 수 있다 — search.extract()는 원래도 있었지만
+    어디서도 쓰이지 않던 함수였다. 개별 URL 조회가 실패해도 그 후보만 스니펫
+    기반 검증으로 남고 나머지는 그대로 진행한다(전체를 막지 않음)."""
+
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        candidates: list[dict] = ctx.session.state.get("candidates") or []
+        urls = _urls_to_extract(candidates)
+
+        async def _safe_extract(url: str) -> tuple[str, str | None]:
+            try:
+                return url, await search_module.extract(url)
+            except Exception:
+                logger.warning("후보 페이지 재조회 실패: %r", url, exc_info=True)
+                return url, None
+
+        pages: dict[str, str] = {}
+        if urls:
+            fetched = await asyncio.gather(*(_safe_extract(u) for u in urls))
+            pages = {url: text for url, text in fetched if text}
+
+        yield Event(author=self.name, actions=EventActions(state_delta={"candidate_pages": pages}))
+
+
 class _ApplyChallengeNode(BaseAgent):
     """DeepSeek의 검증 결과를 병합된 후보와 매칭해 최종 Proposal 목록을 만든다 —
     URL 우선, 실패 시 인덱스로 폴백(LLM이 순서를 흐트러뜨릴 가능성에 대비)."""
@@ -229,7 +266,8 @@ def _build_challenge_agent() -> LlmAgent:
         query = _refined_query_text(ctx.state)
         candidates = ctx.state.get("candidates") or []
         results = _search_results_from_state(ctx.state)
-        return build_challenge_prompt(query, candidates, results)
+        candidate_pages = ctx.state.get("candidate_pages") or {}
+        return build_challenge_prompt(query, candidates, results, candidate_pages)
 
     return LlmAgent(
         name="challenge",
@@ -239,11 +277,21 @@ def _build_challenge_agent() -> LlmAgent:
     )
 
 
+def _judge_eligible_proposals(proposals: list[Proposal]) -> list[Proposal]:
+    """DeepSeek 검증에서 명확히 우려(verified=False)로 표시된 후보는 judge에게
+    아예 보여주지 않는다 — 예전에는 참고 정보로만 주고 LLM이 그래도 우려 후보를
+    고를 수 있는 구조였다. 단, 전부 우려로 표시된 경우(검증 자체가 과도하게
+    엄격했을 가능성)에는 예외적으로 전체 목록을 그대로 넘긴다 — 하나도 못
+    고르는 것보다는 최선의 후보라도 고르는 게 낫다."""
+    eligible = [p for p in proposals if p.verified is not False]
+    return eligible or proposals
+
+
 def _build_judge_agent() -> LlmAgent:
     def instruction(ctx: ReadonlyContext) -> str:
         query = _refined_query_text(ctx.state)
         proposals = [Proposal(**p) for p in (ctx.state.get("proposals") or [])]
-        return judge_module.build_judge_prompt(query, proposals)
+        return judge_module.build_judge_prompt(query, _judge_eligible_proposals(proposals))
 
     return LlmAgent(
         name="judge",
@@ -275,6 +323,7 @@ def _build_pipeline() -> SequentialAgent:
             _SearchNode(name="search"),
             propose_parallel,
             _FilterMergeNode(name="filter_merge"),
+            _ExtractPagesNode(name="extract_pages"),
             _build_challenge_agent(),
             _ApplyChallengeNode(name="apply_challenge"),
             _build_judge_agent(),
@@ -303,6 +352,12 @@ _decide_result_adapter = TypeAdapter(DecideResponse | ClarifyResponse)
 
 
 def _build_decision(state: dict, proposals: list[Proposal]) -> Decision | None:
+    """judge(LLM)는 raw_decision에 자기 나름의 product_name/price/retailer/url을
+    자유 텍스트로 다시 쓸 수 있는데, 후보 목록에 없는 값을 지어낼 위험이 있다
+    (실제로 url이 빈 후보를 골랐을 때 judge가 그럴듯한 URL을 스스로 채워 넣는
+    사례를 확인했다). raw.url로 실제 후보(matched)를 찾은 뒤에는, 검증을 거친
+    matched의 값(그라운딩된 데이터)을 우선하고 raw는 matched에 값이 없을 때만
+    보충으로 쓴다 — reasoning만은 judge가 직접 작성하는 문장이라 그대로 쓴다."""
     raw = state.get("raw_decision")
     if not raw or not proposals:
         return None
@@ -311,10 +366,10 @@ def _build_decision(state: dict, proposals: list[Proposal]) -> Decision | None:
     matched = next((p for p in proposals if p.url and p.url == url), None) or proposals[0]
 
     return Decision(
-        product_name=raw.get("product_name") or matched.product_name or "",
-        price=raw.get("price") or matched.price or "",
-        retailer=raw.get("retailer") or matched.retailer or "",
-        url=raw.get("url") or matched.url or "",
+        product_name=matched.product_name or raw.get("product_name") or "",
+        price=matched.price or raw.get("price") or "",
+        retailer=matched.retailer or raw.get("retailer") or "",
+        url=matched.url or raw.get("url") or "",
         reasoning=raw.get("reasoning") or "",
         chosen_agent=matched.agent,
     )

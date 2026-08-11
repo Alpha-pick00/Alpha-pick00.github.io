@@ -20,14 +20,19 @@ NO_CANDIDATE_ERROR = "적절한 상품 후보를 찾지 못했습니다."
 
 
 def filter_candidates(items: list, max_items: int = 3) -> list[dict]:
-    """product_name이 비어 있거나 url이 일반 목록 페이지인 후보는 제외한다.
+    """product_name이나 url이 비어 있거나, url이 일반 목록 페이지인 후보는
+    제외한다. url이 빈 후보를 그대로 통과시키면, 실제로 살 수 있는 페이지가
+    없는 후보가 병합/심사까지 흘러가 judge가 존재하지 않는 URL을 스스로
+    지어내 채우는 문제가 생긴다 — 근거가 확실하지 않으면 애초에 후보를
+    반환하지 말라고 프롬프트에도 적혀 있지만, 코드에서 한 번 더 걸러낸다.
     개수를 억지로 채우지 않고, 유효한 후보만 에이전트가 제시한 선호 순서 그대로
     최대 max_items개까지 남긴다."""
     filtered = []
     for item in items:
         if not isinstance(item, dict):
             continue
-        if is_generic_listing_url(item.get("url") or ""):
+        url = (item.get("url") or "").strip()
+        if not url or is_generic_listing_url(url):
             continue
         if not (item.get("product_name") or "").strip():
             continue
@@ -147,25 +152,6 @@ def build_brand_price_prompt(query: str, brand: str, search_results: list[Search
     return f"{instructions}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
 
 
-PRICE_CONFIRM_INSTRUCTIONS = (
-    "당신은 상품 상세 페이지의 전체 본문에서 실제 판매 가격을 확인하는 에이전트입니다. "
-    "아래는 특정 상품 페이지 하나의 전체 텍스트입니다. 이 페이지에 실제로 표시된 "
-    "최종 판매 가격(할인이 적용된 결제 가격)을 찾아 반드시 아래 JSON 형식으로만 답하세요. "
-    "다른 텍스트를 덧붙이지 마세요.\n\n"
-    '{"price": "...", "product_name": "..."}\n\n'
-    "product_name은 페이지에 나온 정확한 상품명으로 다시 채우세요. "
-    "페이지 본문에서 가격을 명확히 찾을 수 없으면 price를 빈 문자열로 두세요."
-)
-
-
-def build_price_confirm_prompt(product_name: str, page_content: str) -> str:
-    return (
-        f"{PRICE_CONFIRM_INSTRUCTIONS}\n\n"
-        f"기존에 파악한 상품명: {product_name}\n\n"
-        f"페이지 전체 텍스트:\n{page_content[:6000]}"
-    )
-
-
 REFINE_QUERY_INSTRUCTIONS = (
     "당신은 사용자의 쇼핑 검색어를 실제 쇼핑몰 검색에 더 유리하게 다듬는 에이전트입니다. "
     "질의가 이미 구체적이면(브랜드·모델명·용량 등이 명확하면) 그대로 반환하세요. "
@@ -192,6 +178,9 @@ CHALLENGE_INSTRUCTIONS = (
     "verified를 false로 표시하고 note에 어떤 값이 다른지 적으세요. "
     "애매하거나 확신이 서지 않으면 verified를 false로 남발하지 말고, "
     "명백히 근거가 없거나 질의와 무관한 경우에만 false로 표시하세요. "
+    "일부 후보에는 '실제 페이지 재조회 원문'이 함께 제공됩니다 — 이는 검색 당시 "
+    "잘린 스니펫보다 더 최신이고 완전한 정보이므로, 스니펫과 내용이 다르면 "
+    "재조회 원문을 우선 신뢰해 판단하세요. "
     "반드시 입력된 후보와 같은 개수, 같은 순서로 아래 JSON 배열 형식으로만 답하세요. "
     "다른 텍스트나 코드펜스를 덧붙이지 마세요.\n\n"
     '[{"url": "...", "verified": true, "note": "..."}, ...]\n\n'
@@ -199,7 +188,8 @@ CHALLENGE_INSTRUCTIONS = (
 )
 
 
-def _format_candidates_block(candidates: list) -> str:
+def _format_candidates_block(candidates: list, candidate_pages: dict[str, str] | None = None) -> str:
+    candidate_pages = candidate_pages or {}
     lines = []
     for i, c in enumerate(candidates, start=1):
         product_name = getattr(c, "product_name", None) or (c.get("product_name") if isinstance(c, dict) else None)
@@ -207,15 +197,22 @@ def _format_candidates_block(candidates: list) -> str:
         retailer = getattr(c, "retailer", None) if not isinstance(c, dict) else c.get("retailer")
         url = getattr(c, "url", None) if not isinstance(c, dict) else c.get("url")
         reasoning = getattr(c, "reasoning", None) if not isinstance(c, dict) else c.get("reasoning")
+        page_text = candidate_pages.get(url) if url else None
+        page_block = f"\n    실제 페이지 재조회 원문: {page_text[:2000]}" if page_text else ""
         lines.append(
             f"[{i}] 상품: {product_name} / 가격: {price_krw} / 판매처: {retailer} / "
-            f"URL: {url} / 제안 근거: {reasoning}"
+            f"URL: {url} / 제안 근거: {reasoning}{page_block}"
         )
     return "\n".join(lines) or "(후보 없음)"
 
 
-def build_challenge_prompt(query: str, candidates: list, search_results: list[SearchResult]) -> str:
-    candidates_block = _format_candidates_block(candidates)
+def build_challenge_prompt(
+    query: str,
+    candidates: list,
+    search_results: list[SearchResult],
+    candidate_pages: dict[str, str] | None = None,
+) -> str:
+    candidates_block = _format_candidates_block(candidates, candidate_pages)
     results_block = format_results_block(search_results)
     return (
         f"{CHALLENGE_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n"
