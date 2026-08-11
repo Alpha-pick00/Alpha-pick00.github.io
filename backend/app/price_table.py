@@ -13,6 +13,20 @@ STEP 3 설계(2026-08-10 지시서) 핵심:
 - 다나와 bridge URL이나 제휴 중계 URL은 이 모듈이 반환하는 어떤 값에도 담기지
   않는다 - PriceTableOffer 스키마 자체에 그 필드가 없고, 최종 추천에 쓰는
   resolve_purchase_url()도 완전히 해석된 최종 URL만 반환한다(실패 시 None).
+
+STEP 6 설계(2026-08-11 지시서) 변경 - 매칭 키를 판매처+가격에서 상품명으로:
+- STEP 5 라이브 검증에서 실패 5건 중 3건이 상품명은 완전 일치(100.0)였는데도
+  판매처가 "다나와 가격비교" 자신이라 매칭이 원천 차단됐다. 다나와 페이지
+  하나는 pcode 기준으로 특정 상품 하나를 가리키므로, LLM이 고른 상품과
+  이름이 같으면 그 페이지의 10개 offer는 "그 상품의 가격표 그 자체"다 -
+  판매처가 뭐든 상관없다.
+- enrich_decision()은 이제 product_name만 본다(rapidfuzz token_set_ratio +
+  모델명/규격·수량 토큰 충돌 가드). 가격 근접도·판매처 일치는 더 이상 보지
+  않는다 - cheapest_linkable_raw_offer()가 A등급 중 최저가를 그냥 고른다.
+- exclude_danawa_as_final_pick()은 별개 문제를 다룬다: 다나와 자신이 "판매처"로
+  최종 추천되는 경우(라이브 검증에서 실제로 3/5 관찰됨) - 수수료 0%인 곳을
+  추천하는 셈이라 pcode 일치로 확인된 자기 자신의 A등급 최저가로, 그것도
+  없으면 다나와가 아닌 다른 에이전트 제안으로 바꾼다.
 """
 
 from __future__ import annotations
@@ -22,19 +36,19 @@ import logging
 import re
 from urllib.parse import parse_qsl, urlsplit
 
+from rapidfuzz import fuzz
+
 from fetchers import danawa
 from fetchers.danawa_mall_map import CMPNYC_MAP, TRUST_TIER
+from fusion.dedup import NAME_SIMILARITY_THRESHOLD
 
-from .schemas import Decision, PriceTable, PriceTableOffer, SearchResult
+from .schemas import Decision, PriceTable, PriceTableOffer, Proposal, SearchResult
 
 logger = logging.getLogger(__name__)
 
 DANAWA_HOST = "prod.danawa.com"
+DANAWA_ROOT_DOMAIN = "danawa.com"
 MAX_DANAWA_URLS = 3
-
-# fusion/dedup.py의 PRICE_COMPAT_TOLERANCE(0.05)와 동일한 취지 - 쿠폰/배송비
-# 정도의 차이만 "같은 offer"로 본다. LLM 추천과 다나와 offer를 대조할 때 씀.
-PRICE_MATCH_TOLERANCE = 0.05
 
 
 def _query_param(url: str | None, name: str) -> str | None:
@@ -198,64 +212,152 @@ async def resolve_purchase_url(offer: danawa.DanawaOffer) -> str | None:
     return None
 
 
-def _price_to_int(price: str | None) -> int | None:
-    digits = re.sub(r"[^\d]", "", price or "")
-    return int(digits) if digits else None
+# 영숫자 혼합 토큰(SM-R630N, 16Z90U-KU7BK, V8 ...) - 하이픈으로 이어진 것도
+# 하나의 토큰으로 묶는다.
+_MODEL_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
+
+# 수량/용량 토큰. "무이자 12개월"의 "12개"를 오탐하지 않도록 "개" 뒤에 "입"도
+# "월"도 오지 않을 때만 수량으로 본다 - scripts/verify_product_identity.py에서
+# 이 정확한 버그를 한 번 잡았던 걸 그대로 반영한다.
+_QUANTITY_TOKEN_PATTERNS = [
+    re.compile(r"\d+\s*개입"),
+    re.compile(r"\d+\s*개(?!입)(?!월)"),
+    re.compile(r"\d+\s*(?:GB|TB)", re.IGNORECASE),
+    re.compile(r"\d+\s*(?:g|kg|ml|L)\b"),
+]
 
 
-def _domain_from_url(url: str | None) -> str | None:
+def _extract_model_tokens(text: str) -> set[str]:
+    tokens = set()
+    for match in _MODEL_TOKEN_PATTERN.finditer(text):
+        token = match.group(0)
+        has_digit = any(c.isdigit() for c in token)
+        has_alpha = any(c.isalpha() for c in token)
+        if has_digit and has_alpha:
+            tokens.add(token.upper())
+    return tokens
+
+
+def _extract_quantity_tokens(text: str) -> set[str]:
+    tokens = set()
+    for pattern in _QUANTITY_TOKEN_PATTERNS:
+        for match in pattern.finditer(text):
+            tokens.add(re.sub(r"\s+", "", match.group(0)).upper())
+    return tokens
+
+
+def _tokens_conflict(tokens_a: set[str], tokens_b: set[str]) -> bool:
+    """양쪽 다 토큰이 있는데 겹치는 게 하나도 없으면 충돌(다른 모델/다른
+    수량)로 본다. 한쪽만 토큰이 있으면(그 정보를 안 적었을 뿐) 무시한다."""
+    if not tokens_a or not tokens_b:
+        return False
+    return tokens_a.isdisjoint(tokens_b)
+
+
+def _product_name_matches(decision_name: str, danawa_name: str) -> bool:
+    if fuzz.token_set_ratio(decision_name, danawa_name) < NAME_SIMILARITY_THRESHOLD:
+        return False
+    if _tokens_conflict(_extract_model_tokens(decision_name), _extract_model_tokens(danawa_name)):
+        return False
+    if _tokens_conflict(_extract_quantity_tokens(decision_name), _extract_quantity_tokens(danawa_name)):
+        return False
+    return True
+
+
+def _is_danawa_domain(url: str | None) -> bool:
     if not url:
-        return None
+        return False
     host = urlsplit(url).netloc.lower()
-    return host[4:] if host.startswith("www.") else host or None
-
-
-def _price_close(a: int, b: int) -> bool:
-    if a <= 0 or b <= 0:
-        return False
-    return abs(a - b) / max(a, b) <= PRICE_MATCH_TOLERANCE
-
-
-def _seller_matches_retailer(retailer: str | None, seller: str) -> bool:
-    if not retailer:
-        return False
-    return seller in retailer or retailer in seller
+    return host == DANAWA_ROOT_DOMAIN or host.endswith("." + DANAWA_ROOT_DOMAIN)
 
 
 async def enrich_decision(decision: Decision, raw_result: danawa.DanawaResult) -> Decision:
-    """LLM judge가 고른 decision을 다나와 실측 가격표와 대조한다. A등급
-    (linkable) offer 중 판매처/가격이 decision과 사실상 같은 게 있으면 -
-    가격은 검증된 숫자로, url은 실제로 해석된 구매 링크로 교체하고
-    price_source를 "danawa_offer"로 바꾼다. 일치하는 게 없으면 decision을
-    그대로 둔다(price_source는 기본값 "llm_guess" 유지) - 다른 상품으로
-    억지로 바꿔치기하지 않는다.
+    """LLM judge가 고른 decision을 다나와 실측 가격표와 대조한다. 매칭 키는
+    상품명이다(판매처+가격 아님 - STEP 5 라이브 검증에서 판매처 기준이 진짜
+    같은 상품 3건을 전부 놓쳤다). 다나와 페이지 하나는 pcode로 특정 상품
+    하나를 가리키므로, 이름이 같으면 그 페이지의 offer 전부가 그 상품의
+    가격표다 - 판매처가 뭐든 상관없이 A등급 중 최저가를 쓴다.
 
-    링크를 못 만들면(resolve_purchase_url이 None) 교체하지 않는다 - "링크
-    없는 추천"을 만들지 않기 위해서다(STEP 3 설계)."""
-    decision_price = _price_to_int(decision.price)
-    if decision_price is None:
+    이름이 안 맞거나(rapidfuzz + 모델/수량 토큰 가드), A등급 offer가 없거나,
+    링크 해석이 실패하면 손대지 않는다(price_source="llm_guess" 유지) -
+    다른 상품으로 억지로 바꿔치기하지 않는다."""
+    danawa_name = raw_result.get("product_name")
+    if not danawa_name or not decision.product_name:
+        return decision
+    if not _product_name_matches(decision.product_name, danawa_name):
         return decision
 
-    decision_domain = _domain_from_url(decision.url)
+    offer = cheapest_linkable_raw_offer(raw_result)
+    if offer is None:
+        return decision  # A등급이 없다 - 링크 없는 추천은 내지 않는다.
 
-    for offer in raw_result["offers"]:
-        domain, url_rule = _domain_and_rule(offer)
-        if url_rule is None:
-            continue
-        if not _price_close(decision_price, offer["price_krw"]):
-            continue
-        domain_matches = domain is not None and decision_domain is not None and decision_domain == domain
-        seller_matches = _seller_matches_retailer(decision.retailer, offer["seller"])
-        if not (domain_matches or seller_matches):
-            continue
-
-        resolved_url = await resolve_purchase_url(offer)
-        if resolved_url is None:
-            continue
-
-        decision.price = f"{offer['price_krw']:,}원"
-        decision.url = resolved_url
-        decision.price_source = "danawa_offer"
+    resolved_url = await resolve_purchase_url(offer)
+    if resolved_url is None:
         return decision
+
+    decision.price = f"{offer['price_krw']:,}원"
+    decision.retailer = offer["seller"]
+    decision.url = resolved_url
+    decision.price_source = "danawa_offer"
+    return decision
+
+
+def _find_table_by_pcode(
+    tables: list[tuple[PriceTable, danawa.DanawaResult]], pcode: str
+) -> tuple[PriceTable, danawa.DanawaResult] | None:
+    for table, raw in tables:
+        if _query_param(raw["source_url"], "pcode") == pcode:
+            return table, raw
+    return None
+
+
+async def exclude_danawa_as_final_pick(
+    decision: Decision,
+    proposals: list[Proposal],
+    tables: list[tuple[PriceTable, danawa.DanawaResult]],
+) -> Decision:
+    """다나와는 수수료 0%라 최종 추천 판매처가 될 수 없다(이 어댑터를 만든
+    이유 자체가 그거다) - 그런데 라이브 검증에서 judge가 실제로 다나와
+    자신을 "판매처"로 고르는 사례가 3/5 관찰됐다. decision.url이 danawa.com이면:
+    1) pcode가 일치하는(=같은 상품이 확실한) 페치 결과가 있으면 그 A등급
+       최저가로 교체한다(상품명 대조 불필요 - pcode 일치가 더 강한 증거).
+    2) 없으면 다나와가 아닌 다른 에이전트 제안으로 넘어간다(price_source는
+       여전히 llm_guess - 검증된 게 아니라 그냥 다른 LLM 추측이다).
+    3) 그것도 없으면 다나와 URL을 그대로 두고 경고 로그만 남긴다 - 노출은
+       불가피하다."""
+    if not _is_danawa_domain(decision.url):
+        return decision
+
+    pcode = _query_param(decision.url, "pcode")
+    match = _find_table_by_pcode(tables, pcode) if pcode else None
+    if match is not None:
+        _, raw_result = match
+        offer = cheapest_linkable_raw_offer(raw_result)
+        if offer is not None:
+            resolved_url = await resolve_purchase_url(offer)
+            if resolved_url is not None:
+                decision.price = f"{offer['price_krw']:,}원"
+                decision.retailer = offer["seller"]
+                decision.url = resolved_url
+                decision.price_source = "danawa_offer"
+                return decision
+
+    for proposal in proposals:
+        if proposal.error is not None or not proposal.url or not proposal.product_name:
+            continue
+        if _is_danawa_domain(proposal.url):
+            continue
+        decision.product_name = proposal.product_name
+        decision.price = proposal.price or decision.price
+        decision.retailer = proposal.retailer or decision.retailer
+        decision.url = proposal.url
+        decision.reasoning = proposal.reasoning or decision.reasoning
+        return decision
+
+    logger.warning(
+        "final decision still points at danawa.com and no non-danawa fallback exists "
+        "(url=%s) - exposing it to the user is unavoidable here", decision.url
+    )
+    return decision
 
     return decision

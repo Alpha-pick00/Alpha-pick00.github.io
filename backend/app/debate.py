@@ -98,6 +98,8 @@ async def run_single_debate(query: str) -> DecideResponse:
         price_table = table
         decision = await price_table_module.enrich_decision(decision, raw_result)
 
+    decision = await price_table_module.exclude_danawa_as_final_pick(decision, proposals, danawa_tables)
+
     return DecideResponse(query=query, proposals=proposals, decision=decision, price_table=price_table)
 
 

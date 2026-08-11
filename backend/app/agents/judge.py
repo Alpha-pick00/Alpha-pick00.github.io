@@ -7,6 +7,9 @@ from .base import parse_json_object
 JUDGE_INSTRUCTIONS = (
     "당신은 여러 쇼핑 에이전트가 제안한 후보 중 하나를 최종 선택하는 Judge입니다. "
     "아래 제안들을 비교해 사용자에게 가장 적합한 상품 하나를 선택하고, "
+    "다나와·에누리 같은 가격비교 사이트는 실제 판매처가 아니므로 "
+    "retailer나 url로 최종 선택하지 마세요 - 그 사이트가 비교해서 보여주는 "
+    "실제 판매처(쿠팡, 11번가 등)를 골라야 합니다. "
     "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
     '{"product_name": "...", "price": "...", "retailer": "...", "url": "...", '
     '"reasoning": "...", "chosen_agent": "gpt|gemini|deepseek"}'

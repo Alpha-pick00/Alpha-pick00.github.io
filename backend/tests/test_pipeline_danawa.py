@@ -1,4 +1,4 @@
-"""STEP 3 파이프라인 연결 테스트. 네트워크 요청 금지 - 전부 monkeypatch로
+"""STEP 3/6 파이프라인 연결 테스트. 네트워크 요청 금지 - 전부 monkeypatch로
 실제 Tavily/LLM/다나와 호출을 막고, 픽스처처럼 만든 합성 HTML만 쓴다."""
 
 from __future__ import annotations
@@ -10,12 +10,14 @@ from fastapi.testclient import TestClient
 from app.debate import run_single_debate
 from app.main import app
 from app.price_table import (
+    _extract_quantity_tokens,
     build_price_table,
     cheapest_linkable_raw_offer,
     enrich_decision,
+    exclude_danawa_as_final_pick,
     select_danawa_urls,
 )
-from app.schemas import AgentCandidate, AgentCandidates, Decision, SearchResult
+from app.schemas import AgentCandidate, AgentCandidates, Decision, Proposal, SearchResult
 from fetchers.danawa import parse_danawa_html
 
 client = TestClient(app)
@@ -255,6 +257,148 @@ def test_existing_response_fields_are_preserved(monkeypatch):
 
 
 # -- 8. 다나와 URL이 4개 이상일 때 3개로 잘리는가 -------------------------------
+
+
+# -- STEP 6: 상품명 완전 일치 + 가격 없음 -> 다나와 가격으로 채워지는가 ----
+
+
+def test_name_match_fills_price_when_llm_price_missing(monkeypatch):
+    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="777")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    decision = Decision(
+        product_name="테스트 상품",
+        price="가격 정보 없음",
+        retailer="다나와",
+        url="https://example.com/guess",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/777", "777"
+
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+
+    enriched = asyncio.run(enrich_decision(decision, result))
+
+    assert enriched.price_source == "danawa_offer"
+    assert enriched.price == "23,000원"
+    assert enriched.retailer == "쿠팡"
+    assert enriched.url == "https://www.coupang.com/vp/products/777"
+
+
+# -- STEP 6: 모델명 충돌(V8 vs V15)이면 매칭 실패 -------------------------------
+
+
+def test_model_token_conflict_blocks_match_despite_high_fuzzy_ratio():
+    html = _danawa_html("다이슨 V15 무선청소기", [_offer_li("쿠팡", "500,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    decision = Decision(
+        product_name="다이슨 V8 무선청소기",
+        price="400,000원",
+        retailer="쿠팡",
+        url="https://example.com/guess",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    enriched = asyncio.run(enrich_decision(decision, result))
+
+    assert enriched.price_source == "llm_guess"
+    assert enriched.url == "https://example.com/guess"
+
+
+# -- STEP 6: 수량 충돌(24개 vs 12개)이면 매칭 실패 ------------------------------
+
+
+def test_quantity_token_conflict_blocks_match():
+    html = _danawa_html("테스트 상품 12개", [_offer_li("쿠팡", "10,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    decision = Decision(
+        product_name="테스트 상품 24개",
+        price="20,000원",
+        retailer="쿠팡",
+        url="https://example.com/guess",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    enriched = asyncio.run(enrich_decision(decision, result))
+
+    assert enriched.price_source == "llm_guess"
+
+
+# -- STEP 6: "무이자 12개월"이 수량 토큰으로 오인되지 않는가 --------------------
+
+
+def test_installment_months_not_mistaken_for_quantity_token():
+    tokens = _extract_quantity_tokens("최대 12개월 무이자할부 *결제 금액에 따라 다름")
+    assert tokens == set()
+    # 진짜 수량 표기는 여전히 잡아야 한다.
+    assert _extract_quantity_tokens("210g (24개)") == {"210G", "24개"}
+
+
+# -- STEP 6: decision.url이 danawa.com이면 A등급 offer로 교체되는가 ------------
+
+
+def test_exclude_danawa_as_final_pick_replaces_with_a_grade_offer(monkeypatch):
+    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="999")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=42", html)
+    table = build_price_table(result)
+
+    decision = Decision(
+        product_name="테스트 상품",
+        price="20,000원",
+        retailer="다나와",
+        url="https://prod.danawa.com/info?pcode=42",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/999", "999"
+
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+
+    replaced = asyncio.run(exclude_danawa_as_final_pick(decision, [], [(table, result)]))
+
+    assert replaced.price_source == "danawa_offer"
+    assert replaced.retailer == "쿠팡"
+    assert replaced.url == "https://www.coupang.com/vp/products/999"
+    assert "danawa.com" not in replaced.url
+
+
+def test_exclude_danawa_falls_back_to_other_proposal_when_no_a_grade_match():
+    # pcode가 다른 페이지라 매칭 자체가 안 되는 상황(=A등급 후보 없음).
+    html = _danawa_html("다른 상품", [_offer_li("옥션", "10,000", "EE715")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+    table = build_price_table(result)
+
+    decision = Decision(
+        product_name="테스트 상품",
+        price="20,000원",
+        retailer="다나와",
+        url="https://prod.danawa.com/info?pcode=999",  # table의 pcode(1)와 다름
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+    fallback_proposal = Proposal(
+        agent="gemini",
+        product_name="테스트 상품",
+        price="21,000원",
+        retailer="G마켓",
+        url="https://item.gmarket.co.kr/Item?goodscode=1",
+        reasoning="대체 제안",
+    )
+
+    replaced = asyncio.run(exclude_danawa_as_final_pick(decision, [fallback_proposal], [(table, result)]))
+
+    assert replaced.price_source == "llm_guess"  # 검증된 게 아니라 다른 LLM 추측일 뿐
+    assert replaced.retailer == "G마켓"
+    assert "danawa.com" not in replaced.url
 
 
 def test_select_danawa_urls_caps_at_three():
