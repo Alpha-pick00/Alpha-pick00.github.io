@@ -39,7 +39,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 from rapidfuzz import fuzz
 
-from fetchers import danawa
+from fetchers import danawa, danawa_search
 from fetchers.danawa_mall_map import CMPNYC_MAP, TRUST_TIER
 from fusion.dedup import NAME_SIMILARITY_THRESHOLD, merge_candidates
 
@@ -127,7 +127,26 @@ def build_price_table(result: danawa.DanawaResult) -> PriceTable | None:
     )
 
 
+async def _search_danawa_urls(query: str, limit: int = MAX_DANAWA_URLS) -> list[str]:
+    """search.danawa.com 직접 검색(B-3)으로 pcode를 찾아 상세페이지 URL로
+    바꾼다. 성능 실측용 임시 배선 - Tavily 경로와 합집합으로만 쓰이므로,
+    여기서 막히거나(DanawaSearchBlocked) 느려도 파이프라인은 Tavily만으로
+    계속 동작해야 한다. search.danawa.com의 Crawl-delay(10초)가 프로세스
+    전체에 걸려 있어서, 직전 10초 안에 이미 검색이 있었으면 이 호출이 그만큼
+    그대로 느려진다 - 의도된 동작이다(로컬 성능 실측 목적)."""
+    try:
+        items = await danawa_search.search_danawa(query, limit=limit)
+    except danawa_search.DanawaSearchBlocked:
+        logger.warning("danawa direct search blocked for query=%r - tavily 경로만으로 계속 진행", query)
+        return []
+    except Exception:
+        logger.exception("danawa direct search crashed for query=%r", query)
+        return []
+    return [f"https://prod.danawa.com/info/?pcode={item['pcode']}" for item in items]
+
+
 async def fetch_price_tables(
+    query: str,
     results: list[SearchResult],
 ) -> list[tuple[PriceTable, danawa.DanawaResult]]:
     """LLM 호출들과 asyncio.gather로 나란히 실행되는 걸 전제로 한 진입점.
@@ -137,8 +156,24 @@ async def fetch_price_tables(
     (PriceTable, DanawaResult) 튜플로 반환하는 이유: PriceTable은 응답에
     그대로 노출되는 공개 스키마라 bridge_url이 없다. 최종 추천 확정 후
     resolve_purchase_url()을 부르려면 원본 DanawaOffer(bridge_url 포함)가
-    필요해서 함께 들고 다닌다 - bridge_url은 이 튜플 밖으로 나가지 않는다."""
-    urls = select_danawa_urls(results)
+    필요해서 함께 들고 다닌다 - bridge_url은 이 튜플 밖으로 나가지 않는다.
+
+    URL 출처는 Tavily(select_danawa_urls)와 다나와 직접 검색
+    (_search_danawa_urls) 두 경로의 합집합이다 - 대체가 아니다. pcode
+    기준으로 중복 제거 후 기존 상한(MAX_DANAWA_URLS=3)을 그대로 적용한다."""
+    tavily_urls = select_danawa_urls(results)
+    search_urls = await _search_danawa_urls(query)
+
+    urls: list[str] = []
+    seen_keys: set[str] = set()
+    for u in tavily_urls + search_urls:
+        key = _query_param(u, "pcode") or u
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        urls.append(u)
+    urls = urls[:MAX_DANAWA_URLS]
+
     if not urls:
         return []
 

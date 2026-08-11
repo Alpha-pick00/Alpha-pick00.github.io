@@ -10,12 +10,15 @@ from fastapi.testclient import TestClient
 from app.debate import run_single_debate
 from app.main import app
 from app.price_table import (
+    MAX_DANAWA_URLS,
     _extract_quantity_tokens,
+    _query_param,
     build_danawa_candidates,
     build_price_table,
     cheapest_linkable_raw_offer,
     enrich_decision,
     exclude_price_comparison_site_as_final_pick,
+    fetch_price_tables,
     select_danawa_urls,
 )
 from app.schemas import AgentCandidate, AgentCandidates, Decision, Proposal, SearchResult
@@ -89,6 +92,15 @@ def _patch_search(monkeypatch, danawa_url: str | None):
         return results
 
     monkeypatch.setattr("app.search.search", _search)
+    # B - 다나와 직접 검색(search_danawa)도 기본적으로 빈 리스트로 막는다.
+    # 안 막으면 이 테스트들이 Tavily 경로만 검증하려는 의도와 무관하게
+    # search.danawa.com으로 실제 DNS 조회가 나간다(conftest의 소켓 차단은
+    # connect()만 막고 getaddrinfo()는 못 막음) - 직접 검색 자체를 검증하는
+    # 테스트는 이 함수를 안 쓰고 따로 patch한다.
+    async def _search_danawa(query, limit=3):
+        return []
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
 
 
 # -- 1. 다나와 페치 실패해도 /decide 200 --------------------------------------
@@ -779,3 +791,85 @@ def test_build_price_table_price_label_stays_default_when_not_partial():
 
     assert table.is_partial is False
     assert table.price_label == "최저가"
+
+
+# -- 로컬 성능 실측 배선: fetch_price_tables가 Tavily + 다나와 직접검색을 합집합으로 쓴다 --
+
+
+def _fetch_returning(pcode_to_name: dict[str, str], fetched_urls: list[str]):
+    async def _fake_fetch(url):
+        fetched_urls.append(url)
+        pcode = _query_param(url, "pcode")
+        name = pcode_to_name.get(pcode, f"상품{pcode}")
+        html = _danawa_html(name, [_offer_li("쿠팡", "10,000", "A")])
+        return parse_danawa_html(url, html)
+
+    return _fake_fetch
+
+
+def test_fetch_price_tables_merges_tavily_and_direct_search_urls_deduped_by_pcode(monkeypatch):
+    async def _search_danawa(query, limit=3):
+        return [{"pcode": "2", "product_name": "직접검색상품", "total_mall_count": None}]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
+
+    fetched_urls: list[str] = []
+    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fetch_returning({}, fetched_urls))
+
+    results = [SearchResult(title="다나와", url="https://prod.danawa.com/info?pcode=1", snippet="", score=0.9)]
+    tables = asyncio.run(fetch_price_tables("테스트 쿼리", results))
+
+    pcodes_fetched = {_query_param(u, "pcode") for u in fetched_urls}
+    assert pcodes_fetched == {"1", "2"}
+    assert len(tables) == 2
+
+
+def test_fetch_price_tables_dedupes_when_both_sources_return_same_pcode(monkeypatch):
+    async def _search_danawa(query, limit=3):
+        return [{"pcode": "1", "product_name": "중복상품", "total_mall_count": None}]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
+
+    fetched_urls: list[str] = []
+    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fetch_returning({}, fetched_urls))
+
+    results = [SearchResult(title="다나와", url="https://prod.danawa.com/info?pcode=1", snippet="", score=0.9)]
+    tables = asyncio.run(fetch_price_tables("테스트 쿼리", results))
+
+    assert len(fetched_urls) == 1  # pcode 기준 중복이라 한 번만 페치
+    assert len(tables) == 1
+
+
+def test_fetch_price_tables_falls_back_to_tavily_when_direct_search_blocked(monkeypatch):
+    from fetchers.danawa_search import DanawaSearchBlocked
+
+    async def _search_danawa(query, limit=3):
+        raise DanawaSearchBlocked(403, query)
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
+
+    fetched_urls: list[str] = []
+    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fetch_returning({}, fetched_urls))
+
+    results = [SearchResult(title="다나와", url="https://prod.danawa.com/info?pcode=1", snippet="", score=0.9)]
+    tables = asyncio.run(fetch_price_tables("테스트 쿼리", results))
+
+    assert len(tables) == 1  # 차단되어도 Tavily 경로는 살아있다
+
+
+def test_fetch_price_tables_caps_total_urls_at_max_danawa_urls(monkeypatch):
+    async def _search_danawa(query, limit=3):
+        return [
+            {"pcode": str(p), "product_name": f"검색상품{p}", "total_mall_count": None} for p in (10, 11, 12)
+        ]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
+
+    fetched_urls: list[str] = []
+    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fetch_returning({}, fetched_urls))
+
+    results = [SearchResult(title="다나와", url="https://prod.danawa.com/info?pcode=1", snippet="", score=0.9)]
+    tables = asyncio.run(fetch_price_tables("테스트 쿼리", results))
+
+    assert len(fetched_urls) == MAX_DANAWA_URLS == 3
+    assert {_query_param(u, "pcode") for u in fetched_urls} == {"1", "10", "11"}

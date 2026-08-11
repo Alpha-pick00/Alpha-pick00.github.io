@@ -79,7 +79,7 @@ async def run_single_debate(query: str) -> DecideResponse:
         gpt.propose(query, results),
         gemini.propose(query, results),
         deepseek.propose(query, results),
-        price_table_module.fetch_price_tables(results),
+        price_table_module.fetch_price_tables(query, results),
     )
     agent_candidates: list[AgentCandidates] = [gpt_result, gemini_result, deepseek_result]
     logger.info(
