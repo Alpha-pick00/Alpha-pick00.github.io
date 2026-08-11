@@ -219,7 +219,7 @@ async def build_danawa_candidates(
     agent_candidates: list[AgentCandidates],
 ) -> list[Proposal]:
     """PART 4-2 - 다나와 페이지를 매칭 대기 상태로 두지 않고 후보 풀에 직접
-    추가한다. enrich_decision()/exclude_danawa_as_final_pick()과는 별개
+    추가한다. enrich_decision()/exclude_price_comparison_site_as_final_pick()과는 별개
     경로다: 저건 judge가 이미 고른 LLM 후보를 사후에 검증/치환하고, 이건
     judge가 고르기 *전에* judge의 선택지 자체를 넓힌다. LLM이 고른 상품과
     Tavily가 물어온 다나와 페이지가 애초에 다른 상품이라 매칭이 실패하는
@@ -388,11 +388,25 @@ def _product_name_matches(decision_name: str, danawa_name: str) -> bool:
     return True
 
 
-def _is_danawa_domain(url: str | None) -> bool:
+# PART 4-3: 에누리도 다나와와 완전히 동일하게 취급한다 - 수수료 0%인 가격비교
+# 사이트를 최종 추천으로 노출하면 안 된다는 원칙은 어느 쪽이든 같다. 에누리는
+# 아직 어댑터가 없어 pcode 기반 매칭(_find_table_by_pcode)은 다나와만 적용된다.
+PRICE_COMPARISON_DOMAINS = {DANAWA_ROOT_DOMAIN, "enuri.com"}
+
+
+def _root_domain_matches(url: str | None, root: str) -> bool:
     if not url:
         return False
     host = urlsplit(url).netloc.lower()
-    return host == DANAWA_ROOT_DOMAIN or host.endswith("." + DANAWA_ROOT_DOMAIN)
+    return host == root or host.endswith("." + root)
+
+
+def _is_danawa_domain(url: str | None) -> bool:
+    return _root_domain_matches(url, DANAWA_ROOT_DOMAIN)
+
+
+def _is_price_comparison_domain(url: str | None) -> bool:
+    return any(_root_domain_matches(url, root) for root in PRICE_COMPARISON_DOMAINS)
 
 
 async def enrich_decision(decision: Decision, raw_result: danawa.DanawaResult) -> Decision:
@@ -435,41 +449,44 @@ def _find_table_by_pcode(
     return None
 
 
-async def exclude_danawa_as_final_pick(
+async def exclude_price_comparison_site_as_final_pick(
     decision: Decision,
     proposals: list[Proposal],
     tables: list[tuple[PriceTable, danawa.DanawaResult]],
 ) -> Decision:
-    """다나와는 수수료 0%라 최종 추천 판매처가 될 수 없다(이 어댑터를 만든
-    이유 자체가 그거다) - 그런데 라이브 검증에서 judge가 실제로 다나와
-    자신을 "판매처"로 고르는 사례가 3/5 관찰됐다. decision.url이 danawa.com이면:
-    1) pcode가 일치하는(=같은 상품이 확실한) 페치 결과가 있으면 그 A등급
-       최저가로 교체한다(상품명 대조 불필요 - pcode 일치가 더 강한 증거).
-    2) 없으면 다나와가 아닌 다른 에이전트 제안으로 넘어간다(price_source는
-       여전히 llm_guess - 검증된 게 아니라 그냥 다른 LLM 추측이다).
-    3) 그것도 없으면 다나와 URL을 그대로 두고 경고 로그만 남긴다 - 노출은
-       불가피하다."""
-    if not _is_danawa_domain(decision.url):
+    """다나와도 에누리도 수수료 0%인 가격비교 사이트라 최종 추천 판매처가 될
+    수 없다(이 어댑터를 만든 이유 자체가 그거다) - 그런데 라이브 검증에서
+    judge가 실제로 다나와 자신을 "판매처"로 고르는 사례가 3/5 관찰됐다.
+    decision.url이 둘 중 하나면:
+    1) 다나와 URL이고 pcode가 일치하는(=같은 상품이 확실한) 페치 결과가
+       있으면 그 A등급 최저가로 교체한다(상품명 대조 불필요 - pcode 일치가
+       더 강한 증거). 에누리는 아직 어댑터가 없어 이 단계가 없다.
+    2) 없으면 가격비교 사이트가 아닌 다른 에이전트 제안으로 넘어간다
+       (price_source는 여전히 llm_guess - 검증된 게 아니라 그냥 다른 LLM
+       추측이다).
+    3) 그것도 없으면 URL을 그대로 두고 경고 로그만 남긴다 - 노출은 불가피하다."""
+    if not _is_price_comparison_domain(decision.url):
         return decision
 
-    pcode = _query_param(decision.url, "pcode")
-    match = _find_table_by_pcode(tables, pcode) if pcode else None
-    if match is not None:
-        _, raw_result = match
-        offer = cheapest_linkable_raw_offer(raw_result)
-        if offer is not None:
-            resolved_url = await resolve_purchase_url(offer)
-            if resolved_url is not None:
-                decision.price = f"{offer['price_krw']:,}원"
-                decision.retailer = offer["seller"]
-                decision.url = resolved_url
-                decision.price_source = "danawa_offer"
-                return decision
+    if _is_danawa_domain(decision.url):
+        pcode = _query_param(decision.url, "pcode")
+        match = _find_table_by_pcode(tables, pcode) if pcode else None
+        if match is not None:
+            _, raw_result = match
+            offer = cheapest_linkable_raw_offer(raw_result)
+            if offer is not None:
+                resolved_url = await resolve_purchase_url(offer)
+                if resolved_url is not None:
+                    decision.price = f"{offer['price_krw']:,}원"
+                    decision.retailer = offer["seller"]
+                    decision.url = resolved_url
+                    decision.price_source = "danawa_offer"
+                    return decision
 
     for proposal in proposals:
         if proposal.error is not None or not proposal.url or not proposal.product_name:
             continue
-        if _is_danawa_domain(proposal.url):
+        if _is_price_comparison_domain(proposal.url):
             continue
         decision.product_name = proposal.product_name
         decision.price = proposal.price or decision.price
@@ -479,7 +496,7 @@ async def exclude_danawa_as_final_pick(
         return decision
 
     logger.warning(
-        "final decision still points at danawa.com and no non-danawa fallback exists "
+        "final decision still points at a price-comparison site and no fallback exists "
         "(url=%s) - exposing it to the user is unavoidable here", decision.url
     )
     return decision

@@ -15,7 +15,7 @@ from app.price_table import (
     build_price_table,
     cheapest_linkable_raw_offer,
     enrich_decision,
-    exclude_danawa_as_final_pick,
+    exclude_price_comparison_site_as_final_pick,
     select_danawa_urls,
 )
 from app.schemas import AgentCandidate, AgentCandidates, Decision, Proposal, SearchResult
@@ -498,7 +498,7 @@ def test_installment_months_not_mistaken_for_quantity_token():
 # -- STEP 6: decision.url이 danawa.com이면 A등급 offer로 교체되는가 ------------
 
 
-def test_exclude_danawa_as_final_pick_replaces_with_a_grade_offer(monkeypatch):
+def test_exclude_price_comparison_site_as_final_pick_replaces_with_a_grade_offer(monkeypatch):
     html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="999")])
     result = parse_danawa_html("https://prod.danawa.com/info?pcode=42", html)
     table = build_price_table(result)
@@ -517,7 +517,7 @@ def test_exclude_danawa_as_final_pick_replaces_with_a_grade_offer(monkeypatch):
 
     monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
 
-    replaced = asyncio.run(exclude_danawa_as_final_pick(decision, [], [(table, result)]))
+    replaced = asyncio.run(exclude_price_comparison_site_as_final_pick(decision, [], [(table, result)]))
 
     assert replaced.price_source == "danawa_offer"
     assert replaced.retailer == "쿠팡"
@@ -548,11 +548,53 @@ def test_exclude_danawa_falls_back_to_other_proposal_when_no_a_grade_match():
         reasoning="대체 제안",
     )
 
-    replaced = asyncio.run(exclude_danawa_as_final_pick(decision, [fallback_proposal], [(table, result)]))
+    replaced = asyncio.run(exclude_price_comparison_site_as_final_pick(decision, [fallback_proposal], [(table, result)]))
 
     assert replaced.price_source == "llm_guess"  # 검증된 게 아니라 다른 LLM 추측일 뿐
+
+
+def test_exclude_enuri_falls_back_to_other_proposal():
+    # PART 4-3: 에누리도 다나와와 동일하게 취급 - 아직 어댑터가 없어 pcode
+    # 매칭 단계는 없고, 바로 다른 에이전트 제안으로 넘어가야 한다.
+    decision = Decision(
+        product_name="테스트 상품",
+        price="20,000원",
+        retailer="에누리",
+        url="https://www.enuri.com/direct/product.jsp?g_code=1",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+    fallback_proposal = Proposal(
+        agent="gemini",
+        product_name="테스트 상품",
+        price="21,000원",
+        retailer="G마켓",
+        url="https://item.gmarket.co.kr/Item?goodscode=1",
+        reasoning="대체 제안",
+    )
+
+    replaced = asyncio.run(exclude_price_comparison_site_as_final_pick(decision, [fallback_proposal], []))
+
+    assert replaced.price_source == "llm_guess"
     assert replaced.retailer == "G마켓"
-    assert "danawa.com" not in replaced.url
+    assert "enuri.com" not in replaced.url
+
+
+def test_exclude_leaves_non_comparison_domain_untouched():
+    decision = Decision(
+        product_name="테스트 상품",
+        price="20,000원",
+        retailer="쿠팡",
+        url="https://www.coupang.com/vp/products/1",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    replaced = asyncio.run(exclude_price_comparison_site_as_final_pick(decision, [], []))
+
+    assert replaced.url == "https://www.coupang.com/vp/products/1"
+    assert replaced.retailer == "쿠팡"
+    assert replaced.price_source == "llm_guess"
 
 
 def test_select_danawa_urls_caps_at_three():

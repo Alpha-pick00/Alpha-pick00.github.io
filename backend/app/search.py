@@ -10,6 +10,10 @@ TAVILY_URL = "https://api.tavily.com/search"
 TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
 
 # frontend/src/app/components/About.tsx의 "We Compare across" 목록과 동일 (15개 플랫폼)
+# + enuri.com (PART 4-3, 2026-08-11 지시서) - 다나와처럼 판매처가 아니라
+# 가격비교 사이트지만, 다나와 하나에만 의존하면 차단됐을 때 서비스가 통째로
+# 멈춘다. 가격 데이터 소스 이중화·교차검증용으로 검색 범위에 추가한다(아직
+# 페치/파싱 어댑터는 없음 - 이건 검색 결과에 나오게만 하는 것).
 RETAILER_DOMAINS = [
     "coupang.com",
     "shopping.naver.com",
@@ -26,6 +30,7 @@ RETAILER_DOMAINS = [
     "lotteimall.com",
     "interpark.com",
     "danawa.com",
+    "enuri.com",
 ]
 
 # 상품 상세/가격 정보가 없는 콘텐츠 도메인. include_domains에 danawa.com처럼 상위
