@@ -10,6 +10,9 @@ export interface Proposal {
   url: string | null;
   reasoning: string | null;
   error: string | null;
+  verified?: boolean | null;
+  challenge_note?: string | null;
+  proposed_by?: AgentName[] | null;
 }
 
 export interface Decision {
@@ -125,7 +128,7 @@ export async function decide(query: string, brand?: string): Promise<DecideResul
   return response.json();
 }
 
-export type DecideStage = 'searching' | 'proposing' | 'judging';
+export type DecideStage = 'refining' | 'searching' | 'proposing' | 'challenging' | 'judging';
 
 export type DecideStreamEvent =
   | { type: 'status'; stage: DecideStage }
@@ -139,12 +142,17 @@ export async function decideStream(
   query: string,
   onEvent: (event: DecideStreamEvent) => void,
   brand?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  skipIntentCheck?: boolean
 ): Promise<void> {
   const response = await fetch(`${API_URL}/decide/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(brand ? { query, brand } : { query }),
+    body: JSON.stringify({
+      query,
+      ...(brand ? { brand } : {}),
+      ...(skipIntentCheck ? { skip_intent_check: true } : {}),
+    }),
     signal,
   });
 

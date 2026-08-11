@@ -11,3 +11,5 @@ python-multipart==0.0.20
 pyjwt==2.13.0
 rapidfuzz==3.14.1
 apscheduler==3.11.0
+google-adk==2.6.3
+litellm==1.96.0

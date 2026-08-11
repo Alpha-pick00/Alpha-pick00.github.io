@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useScroll, useTransform } from 'motion/react';
-import { ArrowUp, Loader2, Plus, Search } from 'lucide-react';
+import { ArrowUp, Loader2, Plus } from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
 import { fetchAutocomplete } from '../lib/api';
 import { LoadingCard, StreamingCard, ErrorCard, SearchResults } from './SearchResults';
@@ -49,9 +49,13 @@ export const Hero = () => {
 
   // 자동완성: 검색 로그가 없는 콜드스타트 제품이라, 카테고리/리테일러로 시드해둔 인덱스에
   // 실제 검색어·판정된 상품명이 쌓이며 자라나는 자체 인덱스를 prefix로 조회한다.
+  // status === 'idle'일 때(사용자가 아직 검색을 시작하지 않고 타이핑 중일 때)만
+  // 띄운다 — 안 그러면 검색이 끝나(status가 'result'로 바뀌어 isBusy가 false가
+  // 되는 순간, 또는 Human-in-the-loop으로 옵션을 골라 query가 계속 바뀔 때마다)
+  // 이 이펙트가 다시 돌면서 결과/선택 화면 뒤에 추천창이 또 뜬다.
   useEffect(() => {
     const trimmed = query.trim();
-    if (!trimmed || isBusy) {
+    if (!trimmed || isBusy || status !== 'idle') {
       setSuggestions([]);
       setShowSuggestions(false);
       return;
@@ -72,7 +76,7 @@ export const Hero = () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query, isBusy]);
+  }, [query, isBusy, status]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -240,7 +244,6 @@ export const Hero = () => {
                         index === activeIndex ? 'bg-black/5 text-neutral-900' : 'text-neutral-600 hover:bg-black/5'
                       }`}
                     >
-                      <Search className="w-4 h-4 text-neutral-400 shrink-0" strokeWidth={2} />
                       {term}
                     </button>
                   ))}
@@ -286,13 +289,13 @@ export const Hero = () => {
                 <LoadingCard message="이미지에서 텍스트를 읽고 있습니다" caption="잠시만 기다려주세요" />
               )}
               {status === 'loading' && (
-                <StreamingCard stage={streamingStage || 'searching'} proposals={streamingProposals} />
+                <StreamingCard stage={streamingStage || 'refining'} proposals={streamingProposals} />
               )}
               {status === 'error' && <ErrorCard message={errorMessage} onReset={handleReset} />}
               {status === 'result' && result && (
                 <SearchResults
                   result={result}
-                  onSelectBrand={(brand) => runSearch(query, brand)}
+                  onSelectOption={(value) => runSearch(`${query} ${value}`.trim(), undefined, true)}
                   onReset={handleReset}
                 />
               )}

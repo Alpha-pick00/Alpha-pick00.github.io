@@ -1,10 +1,13 @@
 import asyncio
+import logging
 
 import httpx
 
-from . import google_merchant, search_cache
+from . import embeddings, google_merchant, search_cache
 from .config import settings
 from .schemas import SearchResult
+
+logger = logging.getLogger(__name__)
 
 TAVILY_URL = "https://api.tavily.com/search"
 TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
@@ -90,13 +93,26 @@ async def _fetch(query: str) -> list[SearchResult]:
 
 async def search(query: str, max_results: int = 12) -> list[SearchResult]:
     """같은 질의가 반복되면 search_cache에서 재사용한다 — 항상 FETCH_SIZE만큼
-    받아서 캐시해두고, 더 적은 max_results를 요청한 호출은 앞에서 잘라 쓴다."""
+    받아서 캐시해두고, 더 적은 max_results를 요청한 호출은 앞에서 잘라 쓴다.
+    완전 일치가 없으면 의미(임베딩) 기반으로 비슷한 질의의 캐시를 재사용한다 —
+    실패해도 Tavily 조회로 그대로 폴백한다."""
     cached = search_cache.get(query)
     if cached is not None:
         return cached[:max_results]
 
+    query_embedding: list[float] | None = None
+    if settings.semantic_cache_enabled and settings.openai_api_key:
+        try:
+            query_embedding = await embeddings.embed_query(query)
+            match = search_cache.find_similar(query_embedding)
+            if match is not None:
+                _, results, _ = match
+                return results[:max_results]
+        except Exception:
+            logger.warning("의미 기반 캐시 조회 실패, Tavily로 폴백", exc_info=True)
+
     merged = await _fetch(query)
-    search_cache.set(query, merged)
+    search_cache.set(query, merged, embedding=query_embedding)
     return merged[:max_results]
 
 
