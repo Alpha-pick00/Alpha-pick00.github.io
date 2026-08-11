@@ -78,6 +78,11 @@ def _patch_llm_layer(monkeypatch):
     monkeypatch.setattr("app.agents.gemini.propose", _fake_agent("gemini"))
     monkeypatch.setattr("app.agents.deepseek.propose", _fake_agent("deepseek"))
     monkeypatch.setattr("app.agents.judge.decide", _fake_decide)
+    # run_debate()가 LLM 키 유무로 run_single_debate/run_danawa_only_debate를
+    # 자동 분기하는데(로컬 실험용, .env에 키가 없으면 다나와 전용 경로로 빠짐),
+    # 이 테스트들은 LLM 경로 자체를 검증하는 게 목적이라 개발자 로컬 .env
+    # 상태와 무관하게 항상 LLM 경로를 타도록 강제한다.
+    monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: True)
     # 실제 sqlite 자동완성 인덱스에 테스트 검색어가 쌓이지 않도록 무력화한다 -
     # /decide의 BackgroundTasks가 record_terms를 실제로 실행하기 때문.
     monkeypatch.setattr("app.autocomplete.record_terms", lambda terms: None)
@@ -977,3 +982,34 @@ def test_decide_danawa_only_endpoint_returns_200_with_no_proposals(monkeypatch):
     data = resp.json()
     assert data["proposals"] == []
     assert data["decision"]["chosen_agent"] == "danawa"
+
+
+def test_decide_auto_routes_to_danawa_only_when_no_llm_key_configured(monkeypatch):
+    # 일부러 _patch_llm_layer를 안 쓴다 - gpt/gemini/deepseek/judge를 mock하지
+    # 않은 채로도(=진짜로 안 불려야) 200이 나와야 라우팅이 제대로 됐다는 뜻이다.
+    # 잘못 라우팅되면 mock 안 된 진짜 LLM 호출이 conftest의 네트워크 차단에
+    # 걸려 502가 난다.
+    monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: False)
+    monkeypatch.setattr("app.autocomplete.record_terms", lambda terms: None)
+    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
+
+    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
+
+    async def _fake_fetch(url):
+        return parse_danawa_html(url, html)
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/1", "1"
+
+    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fake_fetch)
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+
+    # 메인 /decide 엔드포인트로 쐈는데도(=/decide/danawa-only가 아니다) LLM 키가
+    # 없으면 자동으로 다나와 전용 경로를 타야 한다.
+    resp = client.post("/decide", json={"query": "테스트 상품"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["proposals"] == []
+    assert data["decision"]["chosen_agent"] == "danawa"
+    assert data["decision"]["price_source"] == "danawa_offer"

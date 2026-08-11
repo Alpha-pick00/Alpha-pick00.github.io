@@ -6,6 +6,7 @@ from . import price_table as price_table_module
 from . import search as search_module
 from .agents import deepseek, gemini, gpt, judge
 from .agents.base import NO_CANDIDATE_ERROR
+from .config import settings
 from .intent import is_bulk_query, needs_clarification
 from .schemas import (
     AgentCandidates,
@@ -58,11 +59,25 @@ def _compute_price_range(options: list[BrandOption]) -> PriceRange | None:
     return PriceRange(min=f"{min(prices):,}원", max=f"{max(prices):,}원")
 
 
+def _any_llm_key_configured() -> bool:
+    return bool(
+        settings.openai_api_key
+        or settings.gemini_api_key
+        or settings.deepseek_api_key
+        or settings.anthropic_api_key
+    )
+
+
 async def run_debate(query: str) -> DecideResponse | BulkDecideResponse | ClarifyResponse:
     if is_bulk_query(query):
         return await run_bulk_debate(query)
     if needs_clarification(query):
         return await run_clarify(query)
+    if not _any_llm_key_configured():
+        # 임시(로컬 실험용) - LLM 키가 하나도 없으면 /decide 자체를 다나와
+        # 전용 규칙 기반 경로로 자동 전환한다. .env에 키를 하나라도 채우고
+        # 재시작하면 이 분기를 안 타고 원래 LLM 파이프라인으로 바로 돌아간다.
+        return await run_danawa_only_debate(query)
     return await run_single_debate(query)
 
 
