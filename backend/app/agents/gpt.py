@@ -11,7 +11,6 @@ from .base import (
     build_brand_price_prompt,
     build_bulk_prompt,
     build_clarify_prompt,
-    build_price_confirm_prompt,
     filter_bulk_options,
     is_generic_listing_url,
     parse_json_array,

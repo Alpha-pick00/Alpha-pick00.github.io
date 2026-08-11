@@ -6,7 +6,7 @@ from typing import Any, AsyncIterator
 from . import adk_pipeline
 from . import search as search_module
 from .agents import deepseek, gemini, gpt, judge
-from .intent import is_bulk_query, needs_clarification
+from .intent import has_count_spec, has_volume_spec, is_bulk_query, needs_clarification
 from .schemas import (
     BrandOption,
     BrandPriceResponse,
@@ -73,6 +73,20 @@ def _dedupe_case_insensitive(items: list[str]) -> list[str]:
     return deduped
 
 
+def _strip_resolved_options(query: str, options: ClarifyOptions) -> ClarifyOptions:
+    """이미 질의 텍스트에 반영된 차원(브랜드/용량/개수)은 옵션 목록에서 제거한다.
+    이걸 안 하면, 사용자가 브랜드를 골라 재검색해도 이번 라운드 검색 결과에서
+    브랜드가 다시 여러 개로 뽑힐 수 있어(옵션 추출은 매번 검색 결과를 새로 보고
+    하는 raw 추출이라 사용자가 이미 고른 값을 모름) 프론트가 "옵션이 2개 이상"
+    이라는 이유만으로 이미 답한 브랜드 선택 단계를 또 보여주게 된다."""
+    brand_resolved = any(b.casefold() in query.casefold() for b in options.brands)
+    return ClarifyOptions(
+        brands=[] if brand_resolved else options.brands,
+        volumes=[] if has_volume_spec(query) else options.volumes,
+        quantities=[] if has_count_spec(query) else options.quantities,
+    )
+
+
 async def _extract_clarify_options(query: str, results: list[SearchResult]) -> ClarifyResponse | None:
     """검색 결과에서 브랜드/용량/수량을 뽑아본다. 아무것도 못 찾으면 None.
     이미 가져온 검색 결과를 그대로 받아 재검색하지 않는다 — run_single_debate가
@@ -83,6 +97,7 @@ async def _extract_clarify_options(query: str, results: list[SearchResult]) -> C
         volumes=_dedupe_case_insensitive(raw.volumes),
         quantities=_dedupe_case_insensitive(raw.quantities),
     )
+    options = _strip_resolved_options(query, options)
     if not (options.brands or options.volumes or options.quantities):
         return None
     return ClarifyResponse(query=query, options=options)
