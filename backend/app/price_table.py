@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections import defaultdict
 from urllib.parse import parse_qsl, urlsplit
 
 from rapidfuzz import fuzz
@@ -228,15 +229,67 @@ _QUANTITY_TOKEN_PATTERNS = [
 ]
 
 
-def _extract_model_tokens(text: str) -> set[str]:
+_YEAR_MIN, _YEAR_MAX = 1990, 2035
+
+
+def _is_year_token(token: str) -> bool:
+    return len(token) == 4 and token.isdigit() and _YEAR_MIN <= int(token) <= _YEAR_MAX
+
+
+def _extract_spec_tokens(text: str) -> set[str]:
+    """영숫자 혼합 토큰(SM-R630N, M2, 128GB)과 4자리 연식(1990~2035)을 뽑는다.
+    "1000mAh"처럼 단위가 붙은 4자리는 연식 판정(순수 숫자만) 대상이 아니라
+    이미 영숫자 혼합 토큰 규칙으로 잡힌다 - 별도 처리 불필요."""
     tokens = set()
     for match in _MODEL_TOKEN_PATTERN.finditer(text):
         token = match.group(0)
         has_digit = any(c.isdigit() for c in token)
         has_alpha = any(c.isalpha() for c in token)
-        if has_digit and has_alpha:
+        if (has_digit and has_alpha) or _is_year_token(token):
             tokens.add(token.upper())
     return tokens
+
+
+def _token_family(token: str) -> str:
+    """숫자 런(연속된 숫자열)을 #로 치환해 "같은 종류의 스펙"인지 판별하는
+    키를 만든다. M2/M3 -> M#, 2024/2025 -> #, SM-R630N/SM-R631N -> SM-R#N.
+
+    자릿수가 다른 숫자는 한 글자씩 치환하면(M2->M#, 하지만 V8->V#, V15->V##)
+    같은 계열인데 family가 갈라져 충돌을 놓친다 - 실제로 "다이슨 V8" vs
+    "다이슨 V15"가 이 방식으로는 안 걸렸다(자릿수 1개 vs 2개). 숫자 런
+    전체를 한 번에 치환해야 64GB/128GB, V8/V15처럼 자릿수가 다른 값도
+    같은 family로 묶여서 비교된다.
+
+    PART 4-1: 기존의 "완전히 disjoint일 때만 충돌" 판정은 {M2,128GB} vs
+    {M3,128GB}처럼 토큰 하나(128GB)만 겹쳐도 나머지(M2 vs M3)를 그냥
+    통과시켰다(실측: iPad Air M2/M3, iPad Pro M4/M5가 그렇게 새어나갔다).
+    family 단위로 쪼개면 "같은 종류인데 값이 다른" 경우를 개별적으로 잡는다."""
+    return re.sub(r"\d+", "#", token)
+
+
+def _spec_tokens_conflict(tokens_a: set[str], tokens_b: set[str]) -> bool:
+    """양쪽에 같은 family가 모두 있는데 값 집합이 다르면 충돌. 한쪽에만 있는
+    family는 무시한다(모델명/수량 가드와 같은 논리).
+
+    값 집합이 완전히 같으면(예: "램12GB,256GB"처럼 RAM·저장용량이 둘 다
+    #GB family로 묶여도 양쪽 다 {12GB,256GB}로 동일) 충돌이 아니다 - 이걸
+    먼저 확인하지 않고 "한쪽에 값이 2개 이상이면 무조건 충돌"로 처리했더니
+    같은 문자열을 자기 자신과 비교해도 실패하는 버그가 실측(100개 배치
+    재판정)에서 나왔다. "M2와 M4가 한 이름에 같이 있는" 것처럼 진짜
+    모호한 경우는 값 집합이 다를 때만 문제이므로, 값 집합 비교 하나로
+    충분하다 - 값이 다르면(한쪽이 모호한 다중값이든 아니든) 보수적으로
+    충돌 처리된다."""
+    by_family_a: dict[str, set[str]] = defaultdict(set)
+    for token in tokens_a:
+        by_family_a[_token_family(token)].add(token)
+    by_family_b: dict[str, set[str]] = defaultdict(set)
+    for token in tokens_b:
+        by_family_b[_token_family(token)].add(token)
+
+    for family in set(by_family_a) & set(by_family_b):
+        if by_family_a[family] != by_family_b[family]:
+            return True
+    return False
 
 
 def _extract_quantity_tokens(text: str) -> set[str]:
@@ -258,7 +311,7 @@ def _tokens_conflict(tokens_a: set[str], tokens_b: set[str]) -> bool:
 def _product_name_matches(decision_name: str, danawa_name: str) -> bool:
     if fuzz.token_set_ratio(decision_name, danawa_name) < NAME_SIMILARITY_THRESHOLD:
         return False
-    if _tokens_conflict(_extract_model_tokens(decision_name), _extract_model_tokens(danawa_name)):
+    if _spec_tokens_conflict(_extract_spec_tokens(decision_name), _extract_spec_tokens(danawa_name)):
         return False
     if _tokens_conflict(_extract_quantity_tokens(decision_name), _extract_quantity_tokens(danawa_name)):
         return False

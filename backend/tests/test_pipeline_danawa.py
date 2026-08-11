@@ -331,6 +331,137 @@ def test_quantity_token_conflict_blocks_match():
     assert enriched.price_source == "llm_guess"
 
 
+# -- PART 4-1: 스펙 토큰 family 가드 (실제 100개 배치에서 관측된 케이스) -------
+
+
+def test_chip_generation_conflict_blocks_match_ipad_air():
+    html = _danawa_html("APPLE 2025 iPad Air 11 M3 (128GB)", [_offer_li("쿠팡", "1,000,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    decision = Decision(
+        product_name="APPLE 2024 iPad Air 11 M2 (128GB)",
+        price="989,970원",
+        retailer="쿠팡",
+        url="https://example.com/guess",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    enriched = asyncio.run(enrich_decision(decision, result))
+
+    assert enriched.price_source == "llm_guess"
+
+
+def test_chip_generation_conflict_blocks_match_ipad_pro():
+    html = _danawa_html("APPLE 2025 iPad Pro 13 M5 (256GB)", [_offer_li("쿠팡", "2,000,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    decision = Decision(
+        product_name="APPLE 2024 iPad Pro 13 M4 (256GB)",
+        price="1,900,000원",
+        retailer="쿠팡",
+        url="https://example.com/guess",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    enriched = asyncio.run(enrich_decision(decision, result))
+
+    assert enriched.price_source == "llm_guess"
+
+
+def test_spec_token_on_one_side_only_still_matches(monkeypatch):
+    html = _danawa_html("iPad Air M2 128GB", [_offer_li("쿠팡", "900,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    decision = Decision(
+        product_name="iPad Air M2",
+        price="900,000원",
+        retailer="쿠팡",
+        url="https://example.com/guess",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/1", "1"
+
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+
+    enriched = asyncio.run(enrich_decision(decision, result))
+
+    assert enriched.price_source == "danawa_offer"
+
+
+def test_multiple_values_in_same_family_but_identical_sets_still_matches(monkeypatch):
+    # "12GB"(램)와 "256GB"(저장용량)이 둘 다 #GB family에 묶이는데, 값
+    # 집합이 양쪽 다 동일하면 충돌이 아니어야 한다 - 자기 자신과 비교해도
+    # 실패하면 안 된다는 최소 불변식.
+    html = _danawa_html(
+        "삼성전자 갤럭시탭S10 울트라 (램12GB,256GB)", [_offer_li("쿠팡", "1,200,000", "TP40F", link_pcode="1")]
+    )
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    decision = Decision(
+        product_name="삼성전자 갤럭시탭S10 울트라 (램12GB,256GB)",
+        price="1,190,000원",
+        retailer="쿠팡",
+        url="https://example.com/guess",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/1", "1"
+
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+
+    enriched = asyncio.run(enrich_decision(decision, result))
+
+    assert enriched.price_source == "danawa_offer"
+
+
+def test_different_multi_value_specs_in_same_family_conflict():
+    html = _danawa_html("삼성전자 갤럭시탭S10 (램12GB,256GB)", [_offer_li("쿠팡", "1,000,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    decision = Decision(
+        product_name="삼성전자 갤럭시탭S10 (램8GB,128GB)",
+        price="800,000원",
+        retailer="쿠팡",
+        url="https://example.com/guess",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    enriched = asyncio.run(enrich_decision(decision, result))
+
+    assert enriched.price_source == "llm_guess"
+
+
+def test_same_spec_token_matches(monkeypatch):
+    html = _danawa_html("갤럭시 버즈3 프로 SM-R630N", [_offer_li("쿠팡", "230,000", "TP40F", link_pcode="1")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    decision = Decision(
+        product_name="갤럭시 버즈3 프로 SM-R630N",
+        price="235,000원",
+        retailer="쿠팡",
+        url="https://example.com/guess",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    async def _fake_resolve_outlink(bridge_url):
+        return "https://www.coupang.com/vp/products/1", "1"
+
+    monkeypatch.setattr("fetchers.danawa.resolve_outlink", _fake_resolve_outlink)
+
+    enriched = asyncio.run(enrich_decision(decision, result))
+
+    assert enriched.price_source == "danawa_offer"
+
+
 # -- PART 1: 배타 토큰 충돌(백미 vs 발아현미)이면 매칭 실패 (실제 관측 케이스) --
 
 
