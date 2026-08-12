@@ -2,6 +2,7 @@ import json
 
 from app.adk_pipeline import (
     _apply_challenge,
+    _augment_search_query,
     _build_decision,
     _format_price_krw,
     _is_ambiguous,
@@ -9,6 +10,7 @@ from app.adk_pipeline import (
     _merge_proposals,
     _urls_to_extract,
 )
+from app.category import CategoryClassification
 from app.schemas import ChallengeResult, ChallengeVerdict, ClarifyOptions, Proposal
 
 COUPANG_URL = "https://coupang.com/vp/products/1"
@@ -257,6 +259,26 @@ def test_is_ambiguous_false_when_volume_already_specified_in_query():
 def test_is_ambiguous_false_when_quantity_already_specified_in_query():
     options = ClarifyOptions(brands=[], volumes=[], quantities=["10개", "30개"])
     assert _is_ambiguous("메로나 빙그레 70mL 10개", options) is False
+
+
+# --- _augment_search_query (검색 단계 카테고리 가중치) ----------------------
+
+
+def test_augment_search_query_appends_detected_category():
+    """Tavily에 보내는 검색어에 분류된 카테고리를 얹어, 검색엔진 랭킹을 그
+    카테고리 쪽으로 미세 조정한다 — 강제 필터링이 아니라 원래 질의 키워드는
+    그대로 남는 완만한 가중치."""
+    query = _augment_search_query("초코파이 해태제과", CategoryClassification(category="식품"))
+
+    assert query == "초코파이 해태제과 식품"
+
+
+def test_augment_search_query_keeps_original_when_classification_failed():
+    """카테고리 분류가 실패하면(category=None) 원래 질의를 그대로 둔다 —
+    잘못된 키워드를 얹어 오히려 검색 결과를 왜곡시키는 것보다 안전하다."""
+    query = _augment_search_query("초코파이 해태제과", CategoryClassification())
+
+    assert query == "초코파이 해태제과"
 
 
 # --- _urls_to_extract (challenge 전 실제 페이지 재조회 대상) ----------------

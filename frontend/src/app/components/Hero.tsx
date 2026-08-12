@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useScroll, useTransform } from 'motion/react';
 import { ArrowUp, Loader2, Plus } from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
 import { fetchAutocomplete } from '../lib/api';
-import { LoadingCard, StreamingCard, ErrorCard, SearchResults } from './SearchResults';
+import { LoadingCard, StreamingCard, ErrorCard, SearchResults, type ClarifyStep } from './SearchResults';
 
 export const Hero = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -31,10 +31,28 @@ export const Hero = () => {
   const [activeIndex, setActiveIndex] = useState(-1);
   const searchBarRef = useRef<HTMLFormElement>(null);
 
+  // Human-in-the-loop 드릴다운(브랜드→제품→용량→개수) 중 사용자가 실제로 클릭해
+  // 답한 단계를 기록한다 — 백엔드가 "이미 답했는지"를 질의 텍스트 매칭으로
+  // 근사 판정하는 것과 별개로, 여기 있는 단계는 이번 라운드 응답이 뭘 내려주든
+  // 절대 다시 후보로 보여주지 않는다(SearchResults.tsx 참고). 새 검색을
+  // 시작하거나 리셋하면 새 드릴다운이므로 비운다.
+  const [resolvedSteps, setResolvedSteps] = useState<Set<ClarifyStep>>(new Set());
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setShowSuggestions(false);
+    setResolvedSteps(new Set());
     runSearch(query);
+  };
+
+  const handleSelectOption = (step: ClarifyStep, value: string) => {
+    setResolvedSteps((prev) => new Set(prev).add(step));
+    runSearch(`${query} ${value}`.trim(), undefined, true);
+  };
+
+  const handleResetAll = () => {
+    setResolvedSteps(new Set());
+    handleReset();
   };
 
   const onFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -200,7 +218,7 @@ export const Hero = () => {
               value={query}
               onChange={(e) => {
                 if (status === 'result' || status === 'error') {
-                  handleReset();
+                  handleResetAll();
                 }
                 setQuery(e.target.value);
               }}
@@ -291,12 +309,13 @@ export const Hero = () => {
               {status === 'loading' && (
                 <StreamingCard stage={streamingStage || 'refining'} proposals={streamingProposals} />
               )}
-              {status === 'error' && <ErrorCard message={errorMessage} onReset={handleReset} />}
+              {status === 'error' && <ErrorCard message={errorMessage} onReset={handleResetAll} />}
               {status === 'result' && result && (
                 <SearchResults
                   result={result}
-                  onSelectOption={(value) => runSearch(`${query} ${value}`.trim(), undefined, true)}
-                  onReset={handleReset}
+                  onSelectOption={handleSelectOption}
+                  onReset={handleResetAll}
+                  resolvedSteps={resolvedSteps}
                 />
               )}
             </motion.div>

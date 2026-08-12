@@ -67,6 +67,7 @@ export interface BulkDecideResponse {
 
 export interface ClarifyOptions {
   brands: string[];
+  products: string[];
   volumes: string[];
   quantities: string[];
 }

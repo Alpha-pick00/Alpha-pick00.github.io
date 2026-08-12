@@ -125,6 +125,7 @@ class BulkDecideResponse(BaseModel):
 
 class ClarifyOptions(BaseModel):
     brands: list[str] = []
+    products: list[str] = []
     volumes: list[str] = []
     quantities: list[str] = []
 
