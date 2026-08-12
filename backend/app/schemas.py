@@ -57,6 +57,13 @@ class Decision(BaseModel):
 class DecideRequest(BaseModel):
     query: str
     brand: str | None = None
+    # /decide/clarify 전용(app.debate.check_clarify_facets) - AI 상세검색을
+    # 여러 턴에 걸쳐 좁혀나갈 때(예: "핸드폰" -> "핸드폰 삼성전자") 매 라운드마다
+    # search.danawa.com을 새로 때리면 10초 Crawl-delay가 매번 붙어 느리다.
+    # base_query에 그 드릴다운의 맨 처음 검색어(이미 캐시됐을 가능성이 높다)를
+    # 넘기면, 백엔드가 그걸로 검색해 캐시를 재사용하고 나머지는 로컬 필터링만
+    # 한다 - 다른 엔드포인트는 이 필드를 무시한다.
+    base_query: str | None = None
 
 
 class PriceTableOffer(BaseModel):
@@ -127,10 +134,25 @@ class BulkDecideResponse(BaseModel):
     price_range: PriceRange | None = None
 
 
+class ClarifyFacet(BaseModel):
+    """brands/volumes/quantities는 원래 GPT가 고정된 3종류로만 뽑아내던 값이고,
+    facets는 그 외에 DeepSeek이 검색어별로 자유롭게 뽑아내는 임의의 기준(예: 카테고리,
+    제조사, 용기형태, 특징)이다 - 라벨 자체도 고정돼 있지 않아 list[dict] 형태로 둔다."""
+
+    label: str
+    options: list[str] = []
+    # 브랜드 facet이 아닌 facet에만 채워진다(app.debate._attach_brand_crossfilter) -
+    # 사용자가 브랜드를 고르면 프론트가 추가 검색 없이 이 매핑으로 이 facet의
+    # 보이는 옵션을 즉시 그 브랜드에 맞게 좁혀 보여준다(예: 브랜드="삼성전자" ->
+    # 시리즈가 갤럭시 계열만). 없거나 해당 브랜드 키가 없으면 options 전체를 보여준다.
+    options_by_brand: dict[str, list[str]] | None = None
+
+
 class ClarifyOptions(BaseModel):
     brands: list[str] = []
     volumes: list[str] = []
     quantities: list[str] = []
+    facets: list[ClarifyFacet] = []
 
 
 class ClarifyResponse(BaseModel):

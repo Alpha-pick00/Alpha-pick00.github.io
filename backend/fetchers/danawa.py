@@ -8,9 +8,14 @@
 설계상 중요한 제약(STEP 2 지시서):
 - 판매처 각각의 bridge_url(다나와 중계 URL)은 저장만 하고 절대 페치하지
   않는다. fetch_danawa_offers()는 다나와 상품 페이지 1번만 페치한다.
-- resolve_outlink()는 최종 추천으로 확정된 offer 1건에 대해서만, 파이프라인이
-  아니라 호출자가 명시적으로 불러야 한다(STEP 3에서 연결 예정, 이 파일은
-  함수만 제공하고 어디서도 자동 호출하지 않는다).
+
+(2026-08-12) 예전엔 resolve_outlink()라는 함수가 있어서 최종 추천으로
+확정된 offer 1건의 bridge_url을 서버가 직접 페치(2홉: bridge -> 제휴
+리다이렉트 URL follow_redirects)해 최종 판매처 URL을 알아냈다. 이 파일을
+지웠다 - prod.danawa.com/robots.txt에 `Disallow: /bridge/`가 명시돼 있다는
+걸 뒤늦게 발견했기 때문이다. 지금은 app.price_table.resolve_purchase_url()이
+bridge_url 문자열을 그대로 돌려준다(네트워크 없음) - 이 파일은 더 이상
+/bridge/를 페치하지 않는다.
 """
 
 from __future__ import annotations
@@ -44,8 +49,6 @@ CACHE_TTL_SEC = 20 * 60
 MIN_VALID_PRICE = 1
 MAX_VALID_PRICE = 10_000_000
 
-BRIDGE_TARGET_PATTERN = re.compile(r'goLink\("([^"]+)"\)')
-
 # 원문(raw_seller)에 배송사/부가 문구가 붙는 명백한 동일 판매처 변형만
 # 정규화한다. 이마트몰/신세계몰/SSG.COM처럼 실제로 다나와가 서로 다른
 # 행(다른 link_pcode, 다른 가격일 수 있음)으로 취급하는 것들은 섣불리
@@ -65,13 +68,6 @@ SELLER_ALIASES: dict[str, str] = {
     "auction": "옥션",
     "ssg.com": "SSG",
     "ssg": "SSG",
-}
-
-# STEP 3에서 쿠팡 파트너스 제휴 링크를 만들 때 쓸 상품 식별자 추출 규칙.
-# 지금은 쿠팡만 확인했다(STEP 1에서 실제로 이 패턴까지 리다이렉트되는 걸
-# 검증함) — 다른 몰은 브릿지를 실제로 따라가 본 적이 없어 규칙을 못 넣는다.
-_PRODUCT_ID_PATTERNS: dict[str, re.Pattern] = {
-    "coupang.com": re.compile(r"/vp/products/(\d+)"),
 }
 
 
@@ -386,8 +382,11 @@ async def fetch_danawa_offers(url: str) -> DanawaResult:
 
     bridge_url은 저장만 하고 절대 페치하지 않는다 — 판매처가 10개면 그만큼
     있는 bridge_url을 전부 따라가는 순간 후보 1개당 20+ 요청이 되어 버려서
-    (STEP 1에서 확인) 차단 위험이 급격히 커진다. 최종 URL이 필요하면
-    resolve_outlink()를 최종 추천 1건에 대해서만 별도로 호출할 것."""
+    (STEP 1에서 확인) 차단 위험이 급격히 커진다. 게다가(2026-08-12 재확인)
+    prod.danawa.com/robots.txt가 애초에 /bridge/를 Disallow하고 있어서, 이
+    경로를 서버가 페치하는 것 자체를 이제 하지 않는다 - 구매 링크가 필요하면
+    app.price_table.resolve_purchase_url()이 bridge_url 문자열을 그대로
+    돌려준다(네트워크 없음)."""
     cache_key = normalize_danawa_url(url)
 
     cached = await _cache.get(cache_key)
@@ -406,71 +405,3 @@ async def fetch_danawa_offers(url: str) -> DanawaResult:
         async with _inflight_lock:
             if _inflight.get(cache_key) is task:
                 del _inflight[cache_key]
-
-
-# ---------------------------------------------------------------------------
-# 아웃링크 해석 — 파이프라인에서 자동 호출하지 않는다(STEP 3 지시서 대기).
-# ---------------------------------------------------------------------------
-
-
-def extract_product_id(url: str) -> str | None:
-    """알려진 도메인에서만 상품 ID를 뽑는다. 쿠팡 외에는 실제로 브릿지를
-    따라가 본 적이 없어 규칙이 없다 — itemId/vendorItemId 등 부가 식별자는
-    resolved_url 자체에 쿼리 파라미터로 남아있으니 필요하면 거기서 다시
-    읽으면 된다(이 함수는 대표 productId 하나만 뽑는다)."""
-    domain = urlsplit(url).netloc.lower()
-    for host_suffix, pattern in _PRODUCT_ID_PATTERNS.items():
-        if host_suffix in domain:
-            match = pattern.search(urlsplit(url).path)
-            if match:
-                return match.group(1)
-    return None
-
-
-async def resolve_outlink(bridge_url: str) -> tuple[str | None, str | None]:
-    """bridge_url(다나와 중계 페이지) 하나를 해석해 (resolved_url, product_id)를
-    반환한다. 호출자가 명시적으로 불러야 한다 — fetch_danawa_offers()나 다른
-    어디에서도 자동 호출되지 않는다.
-
-    2번의 HTTP 요청이 필요하다:
-      1) bridge_url을 페치해 HTML 안의 goLink("...") 문자열에서 다나와의
-         제휴 리다이렉트 URL을 정규식으로 뽑는다(JS 실행 없이 가능 — STEP 1에서
-         실측 확인).
-      2) 그 제휴 리다이렉트 URL을 follow_redirects로 최종 목적지까지
-         추적한다. 최종 응답 자체가 403이어도 상관없다 — 본문이 아니라
-         `response.url`만 필요하기 때문이다(STEP 1에서 실측: 쿠팡 최종
-         상품 페이지는 GET하면 403이지만, 리다이렉트 추적으로 그 URL을
-         얻는 것 자체는 된다). 그래서 2번째 요청은 _fetch_html의 403-포기
-         로직을 타지 않고, 상태코드와 무관하게 response.url을 그대로 쓴다.
-    """
-    bridge_domain = urlsplit(bridge_url).netloc.lower()
-    async with _semaphore:
-        await _throttle.wait(bridge_domain)
-        async with httpx.AsyncClient(
-            headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT, follow_redirects=True
-        ) as client:
-            resp, error = await _fetch_html(client, bridge_url)
-
-    if resp is None:
-        logger.info("danawa outlink resolve failed at bridge hop: %s (%s)", bridge_url, error)
-        return None, None
-
-    match = BRIDGE_TARGET_PATTERN.search(resp.text)
-    if not match:
-        return None, None
-    affiliate_url = match.group(1)
-
-    affiliate_domain = urlsplit(affiliate_url).netloc.lower()
-    async with _semaphore:
-        await _throttle.wait(affiliate_domain)
-        try:
-            async with httpx.AsyncClient(
-                headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT, follow_redirects=True
-            ) as client:
-                resp2 = await client.get(affiliate_url)
-        except httpx.HTTPError as exc:
-            logger.info("danawa outlink resolve failed at affiliate hop: %s (%s)", affiliate_url, exc)
-            return None, None
-
-    resolved_url = str(resp2.url)
-    return resolved_url, extract_product_id(resolved_url)

@@ -5,6 +5,7 @@ import { ko } from 'date-fns/locale';
 import { PanelLeft, X, Plus, Search, Trash2, LogOut, UserRound, Settings } from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
 import { useAuth } from '../context/AuthContext';
+import { useSidebar } from '../context/SidebarContext';
 import { startGoogleLogin, startKakaoLogin, startNaverLogin } from '../lib/auth';
 
 const GoogleIcon = () => (
@@ -118,7 +119,7 @@ const AuthArea = () => {
 };
 
 export const Sidebar = () => {
-  const [isOpen, setIsOpen] = useState(false);
+  const { isOpen, open: openSidebar, close, toggle } = useSidebar();
   const [historySearch, setHistorySearch] = useState('');
   const { history, loadFromHistory, deleteFromHistory, clearAllHistory, handleReset } = useSearch();
   const { user } = useAuth();
@@ -129,7 +130,7 @@ export const Sidebar = () => {
   };
 
   const closeSidebar = () => {
-    setIsOpen(false);
+    close();
     setHistorySearch('');
   };
 
@@ -137,191 +138,213 @@ export const Sidebar = () => {
     ? history.filter((entry) => entry.query.toLowerCase().includes(historySearch.trim().toLowerCase()))
     : history;
 
+  // 레일(아이콘만)과 펼쳐진 패널(검색+기록)이 예전엔 서로 다른 두 개의 fixed 엘리먼트라
+  // 열렸을 때 둘 다 동시에 화면에 남아있었다 - "사이드바 열면 사이드바가 또 생긴다"던
+  // 사용자 보고(2026-08-12)의 실제 원인. 아이콘 열/기록 목록을 하나의 <aside> 안에
+  // 같이 두고 너비만 68px <-> 368px로 애니메이션하는 식으로 합쳐서, 화면에는 항상
+  // "사이드바 하나"만 존재하게 했다.
+  const panelBody = (
+    <>
+      <div className="flex items-center justify-between px-5 pt-6 pb-4">
+        <span
+          className="text-2xl font-medium tracking-tighter"
+          style={{ fontFamily: "'Times New Roman', Times, serif", color: 'rgb(64,117,38)' }}
+        >
+          αlpha Pick
+        </span>
+        <button
+          type="button"
+          onClick={closeSidebar}
+          aria-label="닫기"
+          className="p-1.5 text-neutral-400 hover:text-neutral-950 transition-colors"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      <div className="px-3">
+        <button
+          type="button"
+          onClick={() => openWithAction(handleReset)}
+          className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-black/10 text-sm font-light text-neutral-700 hover:bg-neutral-100 transition-colors"
+        >
+          <Plus className="w-4 h-4" />
+          새 검색
+        </button>
+      </div>
+
+      <div className="px-3 mt-2">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-100">
+          <Search className="w-4 h-4 text-neutral-400 shrink-0" strokeWidth={2} />
+          <input
+            type="text"
+            value={historySearch}
+            onChange={(e) => setHistorySearch(e.target.value)}
+            placeholder="채팅 검색"
+            className="flex-1 min-w-0 bg-transparent text-sm font-light text-neutral-800 placeholder:text-neutral-400 outline-none"
+          />
+        </div>
+      </div>
+
+      <div className="mt-6 px-5">
+        <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400">기록</span>
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto px-3 mt-2 space-y-1">
+        {filteredHistory.length === 0 ? (
+          <p className="px-2 py-4 text-sm font-light text-neutral-400">
+            {history.length === 0 ? '아직 검색 기록이 없습니다.' : '일치하는 기록이 없습니다.'}
+          </p>
+        ) : (
+          filteredHistory.map((entry) => (
+            <div
+              key={entry.id}
+              className="group flex items-center gap-1 rounded-lg hover:bg-neutral-100 transition-colors"
+            >
+              <button
+                type="button"
+                onClick={() => openWithAction(() => loadFromHistory(entry))}
+                className="flex-1 min-w-0 text-left px-2.5 py-2"
+              >
+                <p className="text-sm font-light text-neutral-800 truncate">{entry.query}</p>
+                <p className="text-[11px] text-neutral-400">
+                  {formatDistanceToNow(entry.timestamp, { addSuffix: true, locale: ko })}
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteFromHistory(entry.id)}
+                aria-label="기록 삭제"
+                className="shrink-0 p-2 mr-1 text-neutral-300 opacity-0 group-hover:opacity-100 hover:text-neutral-950 transition-all"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      {user && (
+        <>
+          <div className="px-5 pt-3 pb-1">
+            <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400">환경설정</span>
+          </div>
+          <div className="px-3 pb-4">
+            <button
+              type="button"
+              onClick={clearAllHistory}
+              disabled={history.length === 0}
+              className="w-full text-left px-2.5 py-2 rounded-lg text-sm font-light text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              전체 기록 삭제
+            </button>
+          </div>
+        </>
+      )}
+
+      <div className="border-t border-black/5 p-3">
+        <AuthArea />
+      </div>
+    </>
+  );
+
+  const iconRail = (
+    <div className="w-[68px] h-full shrink-0 flex flex-col items-center py-5 gap-2">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={isOpen ? '기록 닫기' : '기록 열기'}
+        className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${
+          isOpen ? 'bg-neutral-100 text-neutral-950' : 'text-neutral-700 hover:bg-neutral-100'
+        }`}
+      >
+        <PanelLeft className="w-5 h-5" strokeWidth={2} />
+      </button>
+      <button
+        type="button"
+        onClick={() => openWithAction(handleReset)}
+        aria-label="새 검색"
+        className="w-10 h-10 rounded-xl flex items-center justify-center text-neutral-700 hover:bg-neutral-100 transition-colors"
+      >
+        <Plus className="w-5 h-5" strokeWidth={2} />
+      </button>
+
+      <div className="flex-1" />
+
+      {user && (
+        <button
+          type="button"
+          onClick={openSidebar}
+          aria-label="설정"
+          className="w-10 h-10 rounded-xl flex items-center justify-center text-neutral-700 hover:bg-neutral-100 transition-colors"
+        >
+          <Settings className="w-5 h-5" strokeWidth={2} />
+        </button>
+      )}
+
+      <button
+        type="button"
+        onClick={openSidebar}
+        aria-label={user ? '계정' : '로그인'}
+        className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center hover:opacity-80 transition-opacity"
+      >
+        {user ? (
+          user.picture ? (
+            <img src={user.picture} alt="" className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full rounded-full bg-neutral-950 text-white flex items-center justify-center text-sm font-medium">
+              {(user.name || user.email || '?').charAt(0).toUpperCase()}
+            </div>
+          )
+        ) : (
+          <div className="w-full h-full rounded-full bg-neutral-100 flex items-center justify-center text-neutral-400">
+            <UserRound className="w-5 h-5" />
+          </div>
+        )}
+      </button>
+    </div>
+  );
+
   return (
     <>
-      {/* 모바일 전용 플로팅 토글 — 작은 화면에서는 68px 레일이 화면을 너무 많이 잡아먹으므로
+      {/* 모바일 전용 플로팅 토글 — 작은 화면에서는 레일이 화면을 너무 많이 잡아먹으므로
           md 이상에서만 레일을 보여주고, 그 아래에서는 이 버튼 하나로 대체한다. */}
       <button
         type="button"
-        onClick={() => setIsOpen(true)}
+        onClick={toggle}
         aria-label="기록 열기"
         className={`md:hidden fixed top-4 left-4 z-[60] w-11 h-11 rounded-full border border-black/10 bg-white/80 backdrop-blur-md shadow-[0_4px_20px_rgba(0,0,0,0.06)] flex items-center justify-center text-neutral-700 hover:bg-white transition-all ${isOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
       >
         <PanelLeft className="w-5 h-5" strokeWidth={2} />
       </button>
 
-      {/* 데스크톱/태블릿 레일 — ChatGPT/Gemini/Claude처럼 사이드바가 있다는 것 자체가 티나도록 */}
-      <aside className="hidden md:flex fixed inset-y-0 left-0 z-[60] w-[68px] bg-white/90 backdrop-blur-md border-r border-black/10 flex-col items-center py-5 gap-2">
-        <button
-          type="button"
-          onClick={() => setIsOpen(true)}
-          aria-label="기록 열기"
-          className="w-10 h-10 rounded-xl flex items-center justify-center text-neutral-700 hover:bg-neutral-100 transition-colors"
-        >
-          <PanelLeft className="w-5 h-5" strokeWidth={2} />
-        </button>
-        <button
-          type="button"
-          onClick={() => openWithAction(handleReset)}
-          aria-label="새 검색"
-          className="w-10 h-10 rounded-xl flex items-center justify-center text-neutral-700 hover:bg-neutral-100 transition-colors"
-        >
-          <Plus className="w-5 h-5" strokeWidth={2} />
-        </button>
+      {/* 데스크톱/태블릿 — 아이콘 레일과 펼쳐지는 패널이 하나의 aside다. 닫혀있으면
+          68px 너비에 아이콘 레일만, 열리면 280px 너비에 기록 패널만 보인다 - 아이콘
+          레일과 패널을 동시에 보여주면 그 자체가 "사이드바가 두 개"처럼 보인다는
+          지적(2026-08-12)이 있어서 열렸을 때는 레일을 아예 렌더링하지 않는다. 화면을
+          어둡게 덮는 backdrop도 없다 - 모달이 아니라 옆에 도킹되는 패널이라, 열려
+          있는 동안에도 본문(검색 등)을 그대로 쓸 수 있어야 한다. 대신 App.tsx가
+          isOpen을 보고 본문 padding-left를 넓혀서 자리를 비켜준다. */}
+      <motion.aside
+        initial={false}
+        animate={{ width: isOpen ? 280 : 68 }}
+        transition={{ type: 'tween', duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+        className="hidden md:flex md:flex-col fixed inset-y-0 left-0 z-[60] bg-white/95 backdrop-blur-md border-r border-black/10 overflow-hidden"
+      >
+        {isOpen ? panelBody : iconRail}
+      </motion.aside>
 
-        <div className="flex-1" />
-
-        {user && (
-          <button
-            type="button"
-            onClick={() => setIsOpen(true)}
-            aria-label="설정"
-            className="w-10 h-10 rounded-xl flex items-center justify-center text-neutral-700 hover:bg-neutral-100 transition-colors"
-          >
-            <Settings className="w-5 h-5" strokeWidth={2} />
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setIsOpen(true)}
-          aria-label={user ? '계정' : '로그인'}
-          className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center hover:opacity-80 transition-opacity"
-        >
-          {user ? (
-            user.picture ? (
-              <img src={user.picture} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full rounded-full bg-neutral-950 text-white flex items-center justify-center text-sm font-medium">
-                {(user.name || user.email || '?').charAt(0).toUpperCase()}
-              </div>
-            )
-          ) : (
-            <div className="w-full h-full rounded-full bg-neutral-100 flex items-center justify-center text-neutral-400">
-              <UserRound className="w-5 h-5" />
-            </div>
-          )}
-        </button>
-      </aside>
-
+      {/* 모바일 — 레일이 따로 없으니 열렸을 때 화면 대부분을 덮는 패널 하나만 쓴다. */}
       <AnimatePresence>
         {isOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={closeSidebar}
-              className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[70]"
-            />
-            <motion.div
-              initial={{ x: '-100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '-100%' }}
-              transition={{ type: 'tween', duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-              className="fixed inset-y-0 left-0 z-[71] w-[85vw] max-w-[300px] bg-white border-r border-black/10 flex flex-col"
-            >
-              <div className="flex items-center justify-between px-5 pt-6 pb-4">
-                <span
-                  className="text-2xl font-medium tracking-tighter"
-                  style={{ fontFamily: "'Times New Roman', Times, serif", color: 'rgb(64,117,38)' }}
-                >
-                  αlpha Pick
-                </span>
-                <button
-                  type="button"
-                  onClick={closeSidebar}
-                  aria-label="닫기"
-                  className="p-1.5 text-neutral-400 hover:text-neutral-950 transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="px-3">
-                <button
-                  type="button"
-                  onClick={() => openWithAction(handleReset)}
-                  className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-black/10 text-sm font-light text-neutral-700 hover:bg-neutral-100 transition-colors"
-                >
-                  <Plus className="w-4 h-4" />
-                  새 검색
-                </button>
-              </div>
-
-              <div className="px-3 mt-2">
-                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-100">
-                  <Search className="w-4 h-4 text-neutral-400 shrink-0" strokeWidth={2} />
-                  <input
-                    type="text"
-                    value={historySearch}
-                    onChange={(e) => setHistorySearch(e.target.value)}
-                    placeholder="채팅 검색"
-                    className="flex-1 min-w-0 bg-transparent text-sm font-light text-neutral-800 placeholder:text-neutral-400 outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="mt-6 px-5">
-                <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400">기록</span>
-              </div>
-              <div className="flex-1 min-h-0 overflow-y-auto px-3 mt-2 space-y-1">
-                {filteredHistory.length === 0 ? (
-                  <p className="px-2 py-4 text-sm font-light text-neutral-400">
-                    {history.length === 0 ? '아직 검색 기록이 없습니다.' : '일치하는 기록이 없습니다.'}
-                  </p>
-                ) : (
-                  filteredHistory.map((entry) => (
-                    <div
-                      key={entry.id}
-                      className="group flex items-center gap-1 rounded-lg hover:bg-neutral-100 transition-colors"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => openWithAction(() => loadFromHistory(entry))}
-                        className="flex-1 min-w-0 text-left px-2.5 py-2"
-                      >
-                        <p className="text-sm font-light text-neutral-800 truncate">{entry.query}</p>
-                        <p className="text-[11px] text-neutral-400">
-                          {formatDistanceToNow(entry.timestamp, { addSuffix: true, locale: ko })}
-                        </p>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteFromHistory(entry.id)}
-                        aria-label="기록 삭제"
-                        className="shrink-0 p-2 mr-1 text-neutral-300 opacity-0 group-hover:opacity-100 hover:text-neutral-950 transition-all"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {user && (
-                <>
-                  <div className="px-5 pt-3 pb-1">
-                    <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400">환경설정</span>
-                  </div>
-                  <div className="px-3 pb-4">
-                    <button
-                      type="button"
-                      onClick={clearAllHistory}
-                      disabled={history.length === 0}
-                      className="w-full text-left px-2.5 py-2 rounded-lg text-sm font-light text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
-                    >
-                      전체 기록 삭제
-                    </button>
-                  </div>
-                </>
-              )}
-
-              <div className="border-t border-black/5 p-3">
-                <AuthArea />
-              </div>
-            </motion.div>
-          </>
+          <motion.div
+            initial={{ x: '-100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '-100%' }}
+            transition={{ type: 'tween', duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+            className="md:hidden fixed inset-y-0 left-0 z-[65] w-[85vw] max-w-[300px] bg-white border-r border-black/10 flex flex-col shadow-[8px_0_30px_rgba(0,0,0,0.06)]"
+          >
+            {panelBody}
+          </motion.div>
         )}
       </AnimatePresence>
     </>

@@ -1,6 +1,12 @@
+import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowUpRight, RotateCcw, Truck } from 'lucide-react';
-import type { DecideResult, BrandOption } from '../lib/api';
+import { ArrowUpRight, RotateCcw, Search, Truck } from 'lucide-react';
+import type { DanawaStreamCandidate, DecideResult, BrandOption } from '../lib/api';
+
+// AI 상세검색 facet 라벨 중 "브랜드"/"제조사" - 이 facet에서 뭘 고르면 다른
+// facet(시리즈 등)의 options_by_brand로 보이는 옵션을 즉시 좁힌다(백엔드
+// app/debate.py::_attach_brand_crossfilter가 같은 패턴으로 계산해서 보내준다).
+const BRAND_LABEL_PATTERN = /브랜드|제조사/;
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
@@ -17,20 +23,20 @@ const AGENT_LABEL: Record<string, string> = {
 const Card = ({ children }: { children: React.ReactNode }) => (
   <motion.div
     {...fadeUp}
-    className="w-full max-w-4xl mx-auto rounded-3xl border border-black/10 bg-white/80 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.06)] p-8 md:p-10 text-left"
+    className="w-full rounded-3xl border border-black/10 bg-white/80 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.06)] p-6 md:p-8 text-left"
   >
     {children}
   </motion.div>
 );
 
-const ResetLink = ({ onReset }: { onReset: () => void }) => (
+const ResetLink = ({ onReset, label = '다시 검색' }: { onReset: () => void; label?: string }) => (
   <button
     type="button"
     onClick={onReset}
-    className="mt-8 inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-neutral-400 hover:text-neutral-950 transition-colors"
+    className="mt-6 inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-neutral-400 hover:text-neutral-950 transition-colors"
   >
     <RotateCcw className="w-3.5 h-3.5" />
-    다시 검색
+    {label}
   </button>
 );
 
@@ -62,12 +68,29 @@ const BrandOptionRow = ({ option }: { option: BrandOption }) => (
   </a>
 );
 
+const StreamCandidateRow = ({ candidate }: { candidate: DanawaStreamCandidate }) => (
+  <motion.div
+    {...fadeUp}
+    className="flex items-center justify-between gap-4 py-3 border-b border-black/5 last:border-b-0"
+  >
+    <div className="min-w-0">
+      <p className="text-sm font-light text-neutral-600 truncate">{candidate.product_name || '상품명 미확인'}</p>
+      {candidate.retailer && <p className="text-xs font-light text-neutral-400">{candidate.retailer}</p>}
+    </div>
+    <span className="shrink-0 text-sm font-medium text-neutral-950 whitespace-nowrap">
+      {candidate.price || '가격 확인 중'}
+    </span>
+  </motion.div>
+);
+
 export const LoadingCard = ({
   message,
   caption = '최대 1분 소요',
+  candidates = [],
 }: {
   message: React.ReactNode;
   caption?: string;
+  candidates?: DanawaStreamCandidate[];
 }) => (
   <Card>
     <div className="flex flex-col items-center text-center py-6 gap-4">
@@ -79,14 +102,29 @@ export const LoadingCard = ({
       <p className="text-sm font-light text-neutral-500">{message}</p>
       <p className="text-xs font-mono uppercase tracking-widest text-neutral-400">{caption}</p>
     </div>
+    {candidates.length > 0 && (
+      <div className="mt-2 pt-4 border-t border-black/5 text-left">
+        {candidates.map((c, i) => (
+          <StreamCandidateRow key={`${c.product_name}-${i}`} candidate={c} />
+        ))}
+      </div>
+    )}
   </Card>
 );
 
-export const ErrorCard = ({ message, onReset }: { message: string; onReset: () => void }) => (
+export const ErrorCard = ({
+  message,
+  onReset,
+  resetLabel = '다시 검색',
+}: {
+  message: string;
+  onReset?: () => void;
+  resetLabel?: string;
+}) => (
   <Card>
     <div className="text-center py-4">
       <p className="text-sm font-light text-neutral-600">{message}</p>
-      <ResetLink onReset={onReset} />
+      {onReset && <ResetLink onReset={onReset} label={resetLabel} />}
     </div>
   </Card>
 );
@@ -94,34 +132,130 @@ export const ErrorCard = ({ message, onReset }: { message: string; onReset: () =
 interface Props {
   result: DecideResult;
   onSelectBrand: (brand: string) => void;
-  onReset: () => void;
+  onConfirmFacets: (values: string[]) => void;
+  onReset?: () => void;
 }
 
-export const SearchResults = ({ result, onSelectBrand, onReset }: Props) => {
+export const SearchResults = ({ result, onSelectBrand, onConfirmFacets, onReset }: Props) => {
+  // AI 상세검색: facet마다 하나씩 고르고, 화면에 떠 있는 기준을 전부 고른
+  // 순간에만 검색이 실행된다(사용자 요청, 2026-08-13: "상세검색에서 고를때마다
+  // 검색하는걸로 바꿧어 다시 다 고르면 검색되는걸로 바꿔" - 브랜드 하나만 눌러도
+  // 바로 다음 턴으로 넘어가던 걸 되돌린 것). 선택 상태는 로컬로 들고 있다가,
+  // 모든 facet이 채워지는 순간 useEffect가 자동으로 onConfirmFacets를 부른다
+  // (버튼은 없다 - "검색하기 버튼 없어도 될거같아"). facets는 mode==='clarify'
+  // 일 때만 존재하지만 Hooks는 조건부로 못 부르니 다른 모드에서는 빈 배열로 둔다.
+  const [selectedFacets, setSelectedFacets] = useState<Record<string, string>>({});
+  const [facetQuery, setFacetQuery] = useState<Record<string, string>>({});
+  const facets = result.mode === 'clarify' ? result.options.facets : [];
+
+  useEffect(() => {
+    if (facets.length === 0 || !facets.every((f) => selectedFacets[f.label])) return;
+    const values = facets.map((f) => selectedFacets[f.label]).filter((v): v is string => Boolean(v));
+    onConfirmFacets(values);
+    // facets/onConfirmFacets는 매 렌더 새 참조라 deps에 넣으면 무한 루프가 된다 -
+    // "선택 상태가 바뀔 때"만 완주 여부를 재확인하면 충분하다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFacets]);
+
   if (result.mode === 'clarify') {
     const { brands, volumes, quantities } = result.options;
+    const hasAnyOptions = brands.length > 0 || facets.length > 0;
+
+    // 브랜드 facet에서 지금 뭘 골랐는지 - 있으면 다른 facet들의 보이는 옵션을
+    // options_by_brand로 즉시 좁힌다(추가 요청 없이, 사용자 요청 2026-08-13:
+    // "삼성전자를 누르면은 시리즈에 삼성전자에 관한것만").
+    const brandFacet = facets.find((f) => BRAND_LABEL_PATTERN.test(f.label));
+    const selectedBrand = brandFacet ? selectedFacets[brandFacet.label] : undefined;
+
+    const toggleFacetOption = (label: string, option: string) => {
+      setSelectedFacets((prev) => {
+        const isBrandFacet = BRAND_LABEL_PATTERN.test(label);
+        if (isBrandFacet && prev[label] !== option) {
+          // 브랜드를 (다르게) 고르면 다른 facet의 옵션 목록 자체가 바뀌므로,
+          // 이전에 골라둔 다른 facet 선택은 더 이상 안 맞을 수 있어 초기화한다.
+          return { [label]: option };
+        }
+        const next = { ...prev };
+        if (next[label] === option) {
+          delete next[label];
+        } else {
+          next[label] = option;
+        }
+        return next;
+      });
+    };
+
     return (
       <Card>
         <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
-          브랜드를 선택하면 최저가를 찾아드려요
+          {hasAnyOptions ? 'AI 상세검색 · 조건을 모두 선택하면 검색해요' : '조건을 좁힐 수 없었어요'}
         </span>
-        <div className="flex flex-wrap gap-2">
-          {brands.map((brand) => (
-            <button
-              key={brand}
-              onClick={() => onSelectBrand(brand)}
-              className="px-4 py-2 rounded-full border border-black/10 text-sm font-light hover:bg-neutral-950 hover:text-white hover:border-neutral-950 transition-all"
-            >
-              {brand}
-            </button>
-          ))}
-        </div>
+        {brands.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-4 last:mb-0">
+            {brands.map((brand) => (
+              <button
+                key={brand}
+                onClick={() => onSelectBrand(brand)}
+                className="px-4 py-2 rounded-full border border-black/10 text-sm font-light hover:bg-neutral-950 hover:text-white hover:border-neutral-950 transition-all"
+              >
+                {brand}
+              </button>
+            ))}
+          </div>
+        )}
+        {facets.map((facet) => {
+          const crossFiltered = selectedBrand ? facet.options_by_brand?.[selectedBrand] : undefined;
+          const baseOptions = crossFiltered ?? facet.options;
+          const query = facetQuery[facet.label] ?? '';
+          const visibleOptions = query.trim()
+            ? baseOptions.filter((o) => o.toLowerCase().includes(query.trim().toLowerCase()))
+            : baseOptions;
+          return (
+            <div key={facet.label} className="mb-4 last:mb-0">
+              <span className="text-xs font-light text-neutral-400 block mb-2">{facet.label}</span>
+              {facet.options.length > 4 && (
+                <div className="relative mb-2">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-300" />
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => setFacetQuery((prev) => ({ ...prev, [facet.label]: e.target.value }))}
+                    placeholder={`${facet.label} 찾기`}
+                    className="w-full pl-8 pr-3 py-2 rounded-full border border-black/10 text-sm font-light outline-none focus:border-neutral-950 transition-colors"
+                  />
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {visibleOptions.length > 0 ? (
+                  visibleOptions.map((option) => {
+                    const isSelected = selectedFacets[facet.label] === option;
+                    return (
+                      <button
+                        key={option}
+                        onClick={() => toggleFacetOption(facet.label, option)}
+                        className={`px-4 py-2 rounded-full border text-sm font-light transition-all ${
+                          isSelected
+                            ? 'bg-neutral-950 text-white border-neutral-950'
+                            : 'border-black/10 hover:bg-neutral-950 hover:text-white hover:border-neutral-950'
+                        }`}
+                      >
+                        {option}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <span className="text-xs font-light text-neutral-400">일치하는 항목이 없어요</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
         {(volumes.length > 0 || quantities.length > 0) && (
-          <p className="mt-4 text-xs font-light text-neutral-400">
+          <p className="mt-2 text-xs font-light text-neutral-400">
             {[...volumes, ...quantities].join(' · ')}
           </p>
         )}
-        <ResetLink onReset={onReset} />
+        {onReset && <ResetLink onReset={onReset} />}
       </Card>
     );
   }
@@ -136,7 +270,7 @@ export const SearchResults = ({ result, onSelectBrand, onReset }: Props) => {
           {result.brand} 최저가
         </span>
         <BrandOptionRow option={result.option} />
-        <ResetLink onReset={onReset} />
+        {onReset && <ResetLink onReset={onReset} />}
       </Card>
     );
   }
@@ -161,7 +295,7 @@ export const SearchResults = ({ result, onSelectBrand, onReset }: Props) => {
             <BrandOptionRow key={option.brand} option={option} />
           ))}
         </div>
-        <ResetLink onReset={onReset} />
+        {onReset && <ResetLink onReset={onReset} />}
       </Card>
     );
   }
@@ -204,7 +338,7 @@ export const SearchResults = ({ result, onSelectBrand, onReset }: Props) => {
           </div>
         ))}
       </div>
-      <ResetLink onReset={onReset} />
+      {onReset && <ResetLink onReset={onReset} />}
     </Card>
   );
 };

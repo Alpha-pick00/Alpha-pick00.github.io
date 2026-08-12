@@ -15,5 +15,21 @@ def is_bulk_query(query: str) -> bool:
     return bool(BULK_SPEC_PATTERN.search(query))
 
 
+# "음료수", "과자"처럼 짧고 숫자가 없는 검색어는 브랜드/스펙을 전혀 안 정한 넓은
+# 카테고리 검색일 가능성이 높다(2026-08-12, AI 상세검색 요청) - 근사치 휴리스틱이며,
+# "노트북"처럼 원래도 애매했던 검색어를 더 적극적으로 걸러내는 효과가 있다.
+# 오탐(구체적인데 짧은 검색어)이 있어도 위험하지 않다 - 이 함수를 쓰는 호출자들은
+# 전부 "아무 facet도 못 찾으면 원래 경로로 그대로 진행"하도록 설계돼 있다.
+SHORT_QUERY_TOKEN_LIMIT = 2
+_HAS_DIGIT_PATTERN = re.compile(r"\d")
+
+
+def _is_short_bare_query(query: str) -> bool:
+    tokens = query.strip().split()
+    return 0 < len(tokens) <= SHORT_QUERY_TOKEN_LIMIT and not _HAS_DIGIT_PATTERN.search(query)
+
+
 def needs_clarification(query: str) -> bool:
-    return bool(BUY_INTENT_PATTERN.search(query)) and not is_bulk_query(query)
+    if is_bulk_query(query):
+        return False
+    return bool(BUY_INTENT_PATTERN.search(query)) or _is_short_bare_query(query)

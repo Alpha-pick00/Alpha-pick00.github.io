@@ -160,6 +160,30 @@ def test_search_danawa_returns_items_on_200(monkeypatch):
     assert items[0]["pcode"] == "59537216"
 
 
+def test_search_danawa_cache_is_not_capped_by_first_callers_limit(monkeypatch):
+    """회귀 테스트(2026-08-13: "APLLE 을 선택했을때 시리즈 후보가 너무 적어") -
+    같은 query를 먼저 작은 limit(예: 가격표 실측 경로의 3)으로 검색해 캐시해둔
+    뒤, 나중에 더 큰 limit(AI 상세검색의 60)으로 같은 query를 검색하면 캐시에
+    막혀 3개만 오면 안 된다 - 새 네트워크 요청 없이도 더 많이 돌려줘야 한다."""
+    items_html = "".join(_item_html(str(i), f"상품{i}") for i in range(10))
+    fixture_html = _search_html(items_html)
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(200, text=fixture_html)
+
+    _patch_client(monkeypatch, handler)
+
+    first = asyncio.run(danawa_search.search_danawa("캐시 재사용 테스트 쿼리", limit=3))
+    second = asyncio.run(danawa_search.search_danawa("캐시 재사용 테스트 쿼리", limit=8))
+
+    assert len(first) == 3
+    assert len(second) == 8
+    assert call_count == 1  # 두 번째 호출은 캐시만 썼다 - 네트워크 요청이 다시 나가면 안 된다
+
+
 def test_search_danawa_raises_on_403(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, text="blocked")

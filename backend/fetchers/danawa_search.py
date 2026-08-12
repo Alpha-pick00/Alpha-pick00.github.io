@@ -248,18 +248,28 @@ async def _fetch_html(client: httpx.AsyncClient, url: str) -> tuple[httpx.Respon
     return None, last_error
 
 
+# search_danawa()의 캐시는 query만 키로 쓰고 limit은 안 쓴다 - 호출자마다 필요한
+# 개수가 다르다(가격표 실측 경로는 3~5개, AI 상세검색은 30개 이상). limit도 캐시
+# 키에 넣으면, 먼저 작은 limit으로 호출한 쪽이 캐시해둔 뒤 나중에 큰 limit으로
+# 같은 query를 부른 호출자가 그 적은 개수에 그대로 발이 묶인다(2026-08-13 실측 -
+# "APPLE을 선택했을때 시리즈 후보가 너무 적어"의 원인 중 하나였다: clarify가 이미
+# 캐시해둔 걸 재사용할 때 원래 요청보다 표본이 부족했다). 그래서 항상 이 상한까지
+# 파싱해서 캐시하고, 호출자별 limit은 캐시에서 슬라이스만 한다 - 페이지에 이보다
+# 적게 있으면 파싱이 자연히 그만큼만 끝나므로(HTML에 없는 걸 만들어내지 않는다) 손해가 없다.
+SEARCH_PAGE_PARSE_LIMIT = 90
+
+
 async def search_danawa(query: str, limit: int = 5) -> list[DanawaSearchItem]:
     """다나와 통합검색에서 쿼리 하나로 pcode 최대 limit개를 찾는다.
 
     403/429(DanawaSearchBlocked)를 빼면 예외를 던지지 않는다 - 그 외 실패는
     빈 리스트로 반환한다(fetchers.danawa의 "본 파이프라인을 절대 막지
-    않는다" 원칙과 동일). 단, 지금은 어디서도 자동 호출되지 않는 독립
-    모듈이다(B-3c) - B-4 오프라인 측정에서만 쓴다.
+    않는다" 원칙과 동일).
     """
     cache_key = _normalize_query(query)
     cached = await _cache.get(cache_key)
     if cached is not None:
-        return cached
+        return cached[:limit]
 
     url = SEARCH_URL_TEMPLATE.format(query=quote(query))
     domain = urlsplit(url).netloc.lower()
@@ -285,6 +295,6 @@ async def search_danawa(query: str, limit: int = 5) -> list[DanawaSearchItem]:
         logger.info("danawa search fetch failed: %s (%s)", query, error)
         return []
 
-    items = parse_search_html(resp.text, limit=limit)
+    items = parse_search_html(resp.text, limit=SEARCH_PAGE_PARSE_LIMIT)
     await _cache.set(cache_key, items)
-    return items
+    return items[:limit]
