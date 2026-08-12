@@ -21,6 +21,7 @@ from google.adk.agents import BaseAgent, LlmAgent, ParallelAgent, SequentialAgen
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.events import Event, EventActions
+from google.adk.models import LlmResponse
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import InMemoryRunner
 from google.genai import types
@@ -260,7 +261,42 @@ def _apply_challenge(candidates: list[dict], challenge: ChallengeResult) -> list
 
 # ---------------------------------------------------------------------------
 # LlmAgent 노드 — 실제 모델 호출은 ADK + LiteLlm이 담당(수동 SDK 호출 없음).
+#
+# ADK의 SequentialAgent/ParallelAgent는 서브 에이전트 하나가 예외를 던지면
+# 파이프라인 전체를 그대로 죽인다(예: propose 3개 중 Gemini 하나만 API 오류가
+# 나도 GPT·DeepSeek가 이미 만들어둔 결과까지 전부 버려지고 "후보를 찾지 못했다"로
+# 끝남 — 실제로 겪은 장애: Gemini 프로젝트가 일시적으로 403을 뱉었을 때 검색
+# 전체가 죽었다). on_model_error_callback으로 모델 호출 실패를 가로채, 그 모델만
+# 빈 결과로 대체하고 나머지 파이프라인은 계속 진행하게 한다.
 # ---------------------------------------------------------------------------
+
+
+def _model_error_fallback_response(text: str) -> LlmResponse:
+    """모델 호출이 실패했을 때 성공한 것처럼 대신 흘려보낼 최소 응답 — ADK는 이
+    텍스트를 실제 모델 응답과 동일하게 output_key/output_schema 처리 경로로
+    흘려보낸다(base_llm_flow._finalize_model_response_event가 이 content를 그대로
+    이벤트에 병합)."""
+    return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
+
+
+def _on_refine_model_error(callback_context, llm_request, error) -> LlmResponse:
+    """refine의 Gemini 호출이 실패하면 정제를 포기하고 원본 질의를 그대로 쓴다 —
+    다듬지 않은 질의로라도 검색을 계속하는 게 파이프라인 전체를 죽이는 것보다
+    낫다."""
+    logger.warning("refine 단계 모델 호출 실패, 원본 질의로 폴백", exc_info=error)
+    original_query = callback_context.state.get("original_query", "")
+    fallback = RefinedQuery(query=original_query)
+    return _model_error_fallback_response(fallback.model_dump_json())
+
+
+def _on_propose_model_error(callback_context, llm_request, error) -> LlmResponse:
+    """propose 3개 중 하나가 실패하면 그 모델의 후보를 빈 배열로 대체한다 —
+    _merge_proposals가 파싱 실패/누락을 이미 각 에이전트 단위로 건너뛰도록 돼
+    있으므로, 나머지 2개 모델의 후보만으로 정상 진행된다."""
+    logger.warning(
+        "%s propose 단계 모델 호출 실패, 이 모델 없이 진행", callback_context.agent_name, exc_info=error
+    )
+    return _model_error_fallback_response("[]")
 
 
 def _build_refine_agent() -> LlmAgent:
@@ -273,6 +309,7 @@ def _build_refine_agent() -> LlmAgent:
         instruction=instruction,
         output_schema=RefinedQuery,
         output_key="refined_query",
+        on_model_error_callback=_on_refine_model_error,
     )
 
 
@@ -282,7 +319,13 @@ def _build_propose_agent(name: str, model) -> LlmAgent:
         results = _search_results_from_state(ctx.state)
         return build_prompt(query, results)
 
-    return LlmAgent(name=name, model=model, instruction=instruction, output_key=f"{name}_raw")
+    return LlmAgent(
+        name=name,
+        model=model,
+        instruction=instruction,
+        output_key=f"{name}_raw",
+        on_model_error_callback=_on_propose_model_error,
+    )
 
 
 def _build_challenge_agent() -> LlmAgent:

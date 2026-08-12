@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator
 from . import adk_pipeline
 from . import search as search_module
 from .agents import deepseek, gemini, gpt, judge
+from .agents.base import is_generic_listing_url
 from .category import (
     QUANTITY_RELEVANT_CATEGORIES,
     VOLUME_RELEVANT_CATEGORIES,
@@ -150,15 +151,27 @@ def _strip_category_irrelevant_options(
     )
 
 
+def _filter_listing_pages(results: list[SearchResult]) -> list[SearchResult]:
+    """검색결과 목록/사이트내검색 페이지(예: search.11st.co.kr/...?kwd=)를 clarify
+    추출 대상에서 뺀다. 이런 페이지는 사이드바에 "함께 본 상품"류의 전혀 무관한
+    상품이 잔뜩 섞여 있어서, GPT가 그 안 상품명을 죄다 브랜드/제품 옵션으로
+    뽑아버리는 문제가 있었다(propose 단계는 filter_candidates에서 이미
+    is_generic_listing_url로 걸러왔는데, clarify 추출은 이 필터를 거치지 않고
+    있었다). 전부 걸러져도 빈 리스트를 그대로 반환 — 호출부가 "옵션 없음"으로
+    안전하게 처리한다."""
+    return [r for r in results if not is_generic_listing_url(r.url)]
+
+
 async def _extract_clarify_options(query: str, results: list[SearchResult]) -> ClarifyResponse | None:
     """검색 결과에서 브랜드/제품/용량/수량을 뽑아본다. 아무것도 못 찾으면 None.
     이미 가져온 검색 결과를 그대로 받아 재검색하지 않는다 — run_single_debate가
     전체 실패했을 때 같은 결과로 이 함수를 다시 시도하는 용도로도 쓰인다.
     카테고리 분류(Gemini)는 옵션 추출(GPT)과 동시에 실행해 지연 시간을 늘리지
     않는다."""
+    filtered_results = _filter_listing_pages(results)
     raw, classification = await asyncio.gather(
-        gpt.extract_options(query, results),
-        classify_category(query, results),
+        gpt.extract_options(query, filtered_results),
+        classify_category(query, filtered_results),
     )
     options = ClarifyOptions(
         brands=_dedupe_case_insensitive(raw.brands),

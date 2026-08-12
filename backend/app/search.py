@@ -12,22 +12,12 @@ logger = logging.getLogger(__name__)
 TAVILY_URL = "https://api.tavily.com/search"
 TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
 
-# frontend/src/app/components/About.tsx의 "We Compare across" 목록과 동일 (15개 플랫폼)
+# frontend/src/app/components/About.tsx의 "We Compare across" 목록과 동일.
+# 15개 쇼핑몰 각각의 서로 다른 페이지 구조를 스니펫만 보고 파싱하다 보니 엉뚱한
+# 상품/가격이 섞이는 문제가 있었다 — 다나와는 그 자체로 여러 판매처의 가격을
+# 한 페이지에서 비교해주는 가격비교 사이트라, 도메인을 다나와 하나로 좁혀서
+# 결과의 일관성과 정확도를 우선한다.
 RETAILER_DOMAINS = [
-    "coupang.com",
-    "shopping.naver.com",
-    "kurly.com",
-    "ssg.com",
-    "gmarket.co.kr",
-    "cjonstyle.com",
-    "11st.co.kr",
-    "gsshop.com",
-    "hyundaihmall.com",
-    "auction.co.kr",
-    "aliexpress.com",
-    "daisomall.co.kr",
-    "lotteimall.com",
-    "interpark.com",
     "danawa.com",
 ]
 
@@ -37,7 +27,6 @@ RETAILER_DOMAINS = [
 EXCLUDE_DOMAINS = [
     "dpg.danawa.com",  # 다나와 매거진/리뷰 블로그, 가격 정보 없음
     "search.danawa.com",  # 검색결과 목록 페이지 (is_generic_listing_url로도 걸리지만 애초에 제외)
-    "adcr.shopping.naver.com",  # 네이버쇼핑 광고 클릭 리다이렉트, 상품 정보 없음
 ]
 
 
