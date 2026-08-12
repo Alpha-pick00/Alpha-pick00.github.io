@@ -1,10 +1,11 @@
 from app.category import CategoryClassification
 from app.debate import (
+    _filter_listing_pages,
     _resolved_dimension_count,
     _strip_category_irrelevant_options,
     _strip_resolved_options,
 )
-from app.schemas import ClarifyOptions
+from app.schemas import ClarifyOptions, SearchResult
 
 
 def test_strip_resolved_options_removes_brand_already_in_query():
@@ -43,6 +44,34 @@ def test_strip_resolved_options_keeps_unresolved_dimensions():
     stripped = _strip_resolved_options("메로나", options)
 
     assert stripped.brands == ["빙그레", "롯데삼강"]
+
+
+def test_filter_listing_pages_removes_site_search_results():
+    """search.11st.co.kr/...?kwd=, m.gmarket.co.kr/n/search?keyword= 같은 사이트내
+    검색결과 페이지는 clarify 추출 대상에서 뺀다 — 이런 페이지는 사이드바에
+    무관한 상품이 잔뜩 섞여 있어 GPT가 그걸 브랜드/제품 옵션으로 잘못 뽑는
+    원인이었다."""
+    results = [
+        SearchResult(
+            title="검색결과", url="https://search.11st.co.kr/pc/total-search?kwd=버즈3", snippet="..."
+        ),
+        SearchResult(
+            title="갤럭시 버즈3", url="https://prod.danawa.com/info?pcode=59541506", snippet="..."
+        ),
+    ]
+
+    filtered = _filter_listing_pages(results)
+
+    assert [r.url for r in filtered] == ["https://prod.danawa.com/info?pcode=59541506"]
+
+
+def test_filter_listing_pages_keeps_all_when_none_are_listings():
+    results = [
+        SearchResult(title="a", url="https://www.coupang.com/vp/products/1", snippet="..."),
+        SearchResult(title="b", url="https://prod.danawa.com/info?pcode=2", snippet="..."),
+    ]
+
+    assert _filter_listing_pages(results) == results
 
 
 def test_resolved_dimension_count_counts_brand_and_quantity():
