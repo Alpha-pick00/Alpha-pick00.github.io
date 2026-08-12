@@ -171,43 +171,69 @@ const OptionButton = ({ value, onClick }: { value: string; onClick: () => void }
   </button>
 );
 
+export type ClarifyStep = 'brand' | 'product' | 'volume' | 'quantity';
+
+const CLARIFY_STEP_ORDER: ClarifyStep[] = ['brand', 'product', 'volume', 'quantity'];
+
+const CLARIFY_STEP_LABEL: Record<ClarifyStep, string> = {
+  brand: '브랜드를 선택하면 좁혀드려요',
+  product: '제품을 선택하면 좁혀드려요',
+  volume: '용량을 선택하면 좁혀드려요',
+  quantity: '개수를 선택하면 좁혀드려요',
+};
+
 interface Props {
   result: DecideResult;
-  onSelectOption: (value: string) => void;
+  onSelectOption: (step: ClarifyStep, value: string) => void;
   onReset: () => void;
+  resolvedSteps: Set<ClarifyStep>;
 }
 
-export const SearchResults = ({ result, onSelectOption, onReset }: Props) => {
+export const SearchResults = ({ result, onSelectOption, onReset, resolvedSteps }: Props) => {
   if (result.mode === 'clarify') {
-    const { brands, volumes, quantities } = result.options;
-    // 브랜드 → 용량 → 개수 순으로, 아직 애매한 것만 물어본다 — 하나 고르면 그 값이
-    // 검색어에 누적되고(SearchContext.runSearch가 query state를 갱신) 다시 검색해서
-    // 이번엔 남은 기준(예: 용량)만 애매하면 그것만 다시 보여준다. 한 번에 다 보여주지
+    const optionsByStep: Record<ClarifyStep, string[]> = {
+      brand: result.options.brands,
+      product: result.options.products,
+      volume: result.options.volumes,
+      quantity: result.options.quantities,
+    };
+    // 브랜드 → 제품 → 용량 → 개수 순으로, 아직 애매한 것만 물어본다 — 하나 고르면
+    // 그 값이 검색어에 누적되고(SearchContext.runSearch가 query state를 갱신) 다시
+    // 검색해서 이번엔 남은 기준만 애매하면 그것만 다시 보여준다. 한 번에 다 보여주지
     // 않는 이유: 브랜드를 안 정한 채 용량부터 고르면 다른 브랜드의 용량과 섞여
     // 의미가 없어진다.
+    // resolvedSteps(사용자가 이 드릴다운에서 이미 답한 단계, Hero.tsx가 추적)에
+    // 있는 단계는 백엔드가 이번 라운드에 뭘 내려주든 절대 다시 후보로 넣지
+    // 않는다 — 백엔드의 "이미 답했는지" 판정은 질의 텍스트 매칭에 의존하는
+        // 근사치라(LLM이 라운드마다 조금씩 다르게 추출할 수 있음) 같은 단계가
+    // 반복 노출될 수 있는데, 이 목록은 프론트가 사용자의 실제 클릭으로 직접
+    // 관리하므로 100% 확실하다.
+    const candidateSteps = CLARIFY_STEP_ORDER.filter((s) => !resolvedSteps.has(s));
     // 실제로 2개 이상이라 "애매한" 기준만 먼저 물어본다(백엔드의 _is_ambiguous와
     // 같은 ">1" 기준) — 1개짜리 기준까지 매번 단계로 넣으면, 브랜드가 이미 하나로
     // 좁혀졌는데도 계속 "브랜드를 선택하세요"만 반복 노출돼 앞으로 못 나간다.
     // 그래도 애매한 게 하나도 없는데 이 화면까지 왔다면(기존 폴백 경로 — 브랜드
     // 하나만 겨우 찾은 경우 등) 그 값이라도 눌러서 진행할 수 있게 ">0"으로 대체한다.
-    const step: 'brand' | 'volume' | 'quantity' | null =
-      (brands.length > 1 ? 'brand' : volumes.length > 1 ? 'volume' : quantities.length > 1 ? 'quantity' : null) ??
-      (brands.length > 0 ? 'brand' : volumes.length > 0 ? 'volume' : quantities.length > 0 ? 'quantity' : null);
-    const options = step === 'brand' ? brands : step === 'volume' ? volumes : step === 'quantity' ? quantities : [];
-    const stepLabel = {
-      brand: '브랜드를 선택하면 좁혀드려요',
-      volume: '용량을 선택하면 좁혀드려요',
-      quantity: '개수를 선택하면 좁혀드려요',
-    }[step ?? 'brand'];
+    const step =
+      candidateSteps.find((s) => optionsByStep[s].length > 1) ??
+      candidateSteps.find((s) => optionsByStep[s].length > 0) ??
+      null;
+    const options = step ? optionsByStep[step] : [];
+
+    if (!step || options.length === 0) {
+      // 남은 단계가 없거나(전부 resolvedSteps에 있음) 옵션이 비었으면 더 물어볼 게
+      // 없다는 뜻 — 이 화면에 왔다는 건 후보를 못 찾았다는 뜻이므로 에러로 안내한다.
+      return <ErrorCard message="적절한 상품 후보를 찾지 못했습니다." onReset={onReset} />;
+    }
 
     return (
       <Card>
         <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
-          {stepLabel}
+          {CLARIFY_STEP_LABEL[step]}
         </span>
         <div className="flex flex-wrap gap-2">
           {options.map((value) => (
-            <OptionButton key={value} value={value} onClick={() => onSelectOption(value)} />
+            <OptionButton key={value} value={value} onClick={() => onSelectOption(step, value)} />
           ))}
         </div>
         <ResetLink onReset={onReset} />

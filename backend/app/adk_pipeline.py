@@ -28,6 +28,7 @@ from pydantic import TypeAdapter
 
 from . import search as search_module
 from .agents import judge as judge_module
+from .category import CategoryClassification, classify_category
 from .intent import has_count_spec, has_volume_spec
 from .agents.base import (
     NO_CANDIDATE_ERROR,
@@ -70,6 +71,19 @@ def _search_results_from_state(state: dict) -> list[SearchResult]:
     return [SearchResult(**r) for r in state.get("search_results") or []]
 
 
+def _augment_search_query(query: str, classification: CategoryClassification) -> str:
+    """Tavily에 보낼 검색어에 분류된 카테고리를 살짝 얹어, 검색엔진 자체의
+    랭킹을 그 카테고리 쪽으로 미세 조정한다. 도메인/결과를 강제로 거르는 게
+    아니라 키워드를 하나 더 얹는 완만한 가중치라 — 분류가 틀려도 원래 질의
+    키워드는 그대로 남아 있어 결과가 아예 사라지지는 않는다. 반대로 이 보정된
+    문자열은 Tavily 호출에만 쓰고, 프롬프트에 넘기는 refined_query 자체는
+    건드리지 않는다(propose/judge가 보는 질의는 항상 깨끗한 원문). 분류가
+    실패했으면(category=None) 원래 질의를 그대로 둔다."""
+    if classification.category is None:
+        return query
+    return f"{query} {classification.category}"
+
+
 def _refined_query_text(state: dict) -> str:
     refined = state.get("refined_query")
     if isinstance(refined, dict) and refined.get("query"):
@@ -78,20 +92,30 @@ def _refined_query_text(state: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 커스텀(순수 Python) 노드 — LLM 호출 없이 상태만 읽고 쓴다.
+# 커스텀(순수 Python) 노드 — ADK LlmAgent가 아니라 직접 상태를 읽고 쓴다.
+# (_SearchNode는 예외적으로 내부에서 Gemini 분류를 한 번 호출한다 — 그 노드
+# docstring 참고.)
 # ---------------------------------------------------------------------------
 
 
 class _SearchNode(BaseAgent):
     """정제된 질의로 search_module.search()를 호출해 원본 결과 + 프롬프트용
-    포맷 텍스트를 상태에 저장한다."""
+    포맷 텍스트를 상태에 저장한다. 이 섹션의 다른 노드와 달리 Tavily 호출 전에
+    카테고리 분류(Gemini) 호출이 하나 더 낀다 — 분류 결과를 검색어에 얹어
+    검색엔진 랭킹을 카테고리 쪽으로 미세 조정하기 위함(_augment_search_query
+    참고). 이 호출은 이 노드 안에서만 쓰고 상태에 저장하지 않는다 — clarify
+    단계의 카테고리 분류(debate.py::_extract_clarify_options)는 실제 검색
+    결과를 근거로 다시 판별하는 별도 호출이라 더 정확하고, 그 결과와 여기서
+    쓰는 값을 굳이 공유할 필요가 없다."""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         query = _refined_query_text(ctx.session.state)
+        classification = await classify_category(query, [])
+        search_query = _augment_search_query(query, classification)
         try:
-            results = await search_module.search(query, max_results=_MAX_SEARCH_RESULTS)
+            results = await search_module.search(search_query, max_results=_MAX_SEARCH_RESULTS)
         except Exception:
-            logger.exception("검색 실패: %r", query)
+            logger.exception("검색 실패: %r", search_query)
             results = []
 
         yield Event(
@@ -376,20 +400,22 @@ def _build_decision(state: dict, proposals: list[Proposal]) -> Decision | None:
 
 
 def _is_ambiguous(query: str, options: ClarifyOptions) -> bool:
-    """브랜드/용량/개수 중 하나라도 2개 이상이면 사용자에게 물어볼 만큼 애매하다고
-    본다 — 0~1개뿐이면 고를 게 없으니 그대로 진행.
+    """브랜드/제품/용량/개수 중 하나라도 2개 이상이면 사용자에게 물어볼 만큼
+    애매하다고 본다 — 0~1개뿐이면 고를 게 없으니 그대로 진행.
 
     단, 검색 결과가 완전히 못 걸러내더라도(예: "70mL 10개"로 좁혔는데도 검색
     결과에 30개입 페이지가 섞여 나옴) 사용자가 Human-in-the-loop으로 이미 답한
     기준은 다시 안 묻는다 — 질의 텍스트에 이미 용량/개수 스펙이 있으면 그
-    차원은 애매함 판정에서 제외한다. 브랜드도 후보 중 하나가 이미 질의에
+    차원은 애매함 판정에서 제외한다. 브랜드·제품도 후보 중 하나가 이미 질의에
     문자 그대로 들어있으면 같은 이유로 제외한다."""
     brand_resolved = any(b.casefold() in query.casefold() for b in options.brands)
+    product_resolved = any(p.casefold() in query.casefold() for p in options.products)
     volume_resolved = has_volume_spec(query)
     quantity_resolved = has_count_spec(query)
 
     return (
         (len(options.brands) > 1 and not brand_resolved)
+        or (len(options.products) > 1 and not product_resolved)
         or (len(options.volumes) > 1 and not volume_resolved)
         or (len(options.quantities) > 1 and not quantity_resolved)
     )
