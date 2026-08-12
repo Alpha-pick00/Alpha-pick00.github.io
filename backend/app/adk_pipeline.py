@@ -1,6 +1,6 @@
 """ADK(Google Agent Development Kit) 기반 역할 분리형 검색 파이프라인.
 
-정제(Gemini) → 검색 → 제안(GPT·Gemini·DeepSeek 병렬, 각자 최대 10개) →
+정제(Gemini) → 검색 → 제안(GPT·Gemini·DeepSeek 병렬, 각자 최대 5개) →
 필터링+병합(fusion.dedup 재사용) → 검증(DeepSeek) → 매칭/합성 → 심사(Claude)
 순서로 실행된다 — `debate.py`의 run_single_debate/run_single_debate_stream이
 이 모듈의 run()/run_stream()을 호출한다.
@@ -60,7 +60,7 @@ _APP_NAME = "alpha_pick_debate"
 
 # 매 요청 검색 히트 수 — search.py::search()의 max_results 기본값(12)과 동일하게.
 _MAX_SEARCH_RESULTS = 12
-_MAX_CANDIDATES_PER_AGENT = 10
+_MAX_CANDIDATES_PER_AGENT = 5
 
 
 def _format_price_krw(price_krw: int | None) -> str:
