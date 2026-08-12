@@ -12,7 +12,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import TypeAdapter
 
-from . import autocomplete, history, popularity_scheduler
+from . import autocomplete, danawa, history, popularity_scheduler
+from .agents import gpt as gpt_agent
 from .auth import google as google_auth
 from .auth import kakao as kakao_auth
 from .auth import naver as naver_auth
@@ -24,6 +25,8 @@ from .schemas import (
     AuthResponse,
     BrandPriceResponse,
     BulkDecideResponse,
+    ClarifyMatchRequest,
+    ClarifyMatchResponse,
     ClarifyResponse,
     DecideRequest,
     DecideResponse,
@@ -113,6 +116,29 @@ def _autocomplete_terms(request: DecideRequest, result: DecideResult) -> list[st
     return terms
 
 
+async def _resolve_danawa_urls(result: DecideResult) -> DecideResult:
+    """최종 추천 URL이 다나와 가격비교 페이지면, 사용자가 실제로 구매할 수
+    있는 최저가 판매처 링크로 바꿔치기한다 — 다나와 페이지 자체는 여러 판매처를
+    나열만 할 뿐 바로 살 수 있는 곳이 아니다(danawa.py 참고). 다나와가 아니거나
+    해석에 실패하면 원래 값 그대로 둔다. 최종 결과에만 적용하고 proposals의
+    나머지 후보 URL은 그대로 둔다 — 사용자가 실제로 클릭할 하나만 바꾸면 된다."""
+    if isinstance(result, DecideResponse):
+        result.decision.url, result.decision.retailer = await danawa.resolve_lowest_price(
+            result.decision.url, result.decision.retailer
+        )
+    elif isinstance(result, BulkDecideResponse):
+        resolved = await asyncio.gather(
+            *(danawa.resolve_lowest_price(o.url, o.retailer) for o in result.decision.options)
+        )
+        for option, (url, retailer) in zip(result.decision.options, resolved):
+            option.url, option.retailer = url, retailer
+    elif isinstance(result, BrandPriceResponse) and result.option:
+        result.option.url, result.option.retailer = await danawa.resolve_lowest_price(
+            result.option.url, result.option.retailer
+        )
+    return result
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -121,6 +147,17 @@ def health() -> dict[str, str]:
 @app.get("/autocomplete", response_model=list[str])
 def get_autocomplete(q: str, limit: int = 8) -> list[str]:
     return autocomplete.suggest(q, limit)
+
+
+@app.post("/clarify/match", response_model=ClarifyMatchResponse)
+async def clarify_match(request: ClarifyMatchRequest) -> ClarifyMatchResponse:
+    """대화형 HITL — 사용자가 clarify 선택지를 버튼 대신 채팅으로 타이핑했을 때,
+    그 문장이 현재 옵션 중 뭘 가리키는지 해석하고 자연스러운 답장(reply)도 함께
+    받는다 — 봇의 응답이 고정 문구가 아니라 실제 LLM이 생성한 문장이 되도록.
+    matched가 실패/불확실하면 None — 프론트는 버튼이 항상 그대로 남아있으므로
+    이 경우 다시 물어보면 된다."""
+    matched, reply = await gpt_agent.match_clarify_reply(request.message, request.options)
+    return ClarifyMatchResponse(matched=matched, reply=reply)
 
 
 @app.get("/auth/me", response_model=User)
@@ -208,6 +245,7 @@ async def decide(request: DecideRequest, background_tasks: BackgroundTasks) -> D
             status_code=502, detail="구매 결정을 처리하는 중 오류가 발생했습니다."
         ) from exc
 
+    result = await _resolve_danawa_urls(result)
     background_tasks.add_task(autocomplete.record_terms, _autocomplete_terms(request, result))
     return result
 
@@ -224,6 +262,7 @@ async def decide_stream(request: DecideRequest) -> StreamingResponse:
         try:
             if request.brand:
                 result: DecideResult = await run_brand_price(request.query, request.brand)
+                result = await _resolve_danawa_urls(result)
                 yield json.dumps({"type": "final", "result": result.model_dump()}) + "\n"
             else:
                 result = None
@@ -234,7 +273,10 @@ async def decide_stream(request: DecideRequest) -> StreamingResponse:
                 )
                 async for event in stream:
                     if event["type"] == "final":
-                        result = _decide_result_adapter.validate_python(event["result"])
+                        result = await _resolve_danawa_urls(
+                            _decide_result_adapter.validate_python(event["result"])
+                        )
+                        event["result"] = result.model_dump()
                     yield json.dumps(event) + "\n"
         except (RuntimeError, ValueError) as exc:
             # RuntimeError: 제안 전부 실패, ValueError: judge 응답에서 JSON을 못 찾음
