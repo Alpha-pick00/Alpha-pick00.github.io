@@ -140,6 +140,28 @@ def build_clarify_prompt(query: str, search_results: list[SearchResult]) -> str:
     return f"{CLARIFY_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
 
 
+CLARIFY_MATCH_INSTRUCTIONS = (
+    "당신은 쇼핑 검색을 도와주는 챗봇입니다. 사용자가 채팅창에 자유롭게 입력한 "
+    "문장이 아래 선택지 중 어떤 것을 가리키는지 판단하고, 그 결과를 사용자에게 "
+    "짧고 자연스러운 한국어로 답장하세요. "
+    "matched는 선택지 목록에 있는 문자열과 정확히 동일한 값이거나 null입니다. "
+    "\"제일 싼 걸로\", \"그거 말고 다른 거\" 같은 간접적인 표현이어도 의미상 가장 "
+    "맞는 선택지를 고르세요. 여러 개와 애매하게 겹치거나 선택지와 전혀 무관한 "
+    "말이면 matched를 null로 두세요. 목록에 없는 새 값을 만들어내지 마세요. "
+    "reply는 실제 챗봇과 대화하듯 한두 문장으로 쓰세요 — matched를 찾았으면 "
+    "그 선택을 자연스럽게 확인하는 말을, null이면 다시 골라달라고 선택지를 "
+    "참고해 부드럽게 안내하는 말을 쓰세요. 매번 같은 문구를 기계적으로 반복하지 "
+    "말고 사용자가 입력한 표현에 맞춰 조금씩 다르게 표현하세요. "
+    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
+    '{"matched": "..." 또는 null, "reply": "..."}'
+)
+
+
+def build_clarify_match_prompt(message: str, options: list[str]) -> str:
+    options_block = "\n".join(f"- {o}" for o in options)
+    return f"{CLARIFY_MATCH_INSTRUCTIONS}\n\n사용자 입력: {message}\n\n선택지:\n{options_block}"
+
+
 BRAND_PRICE_INSTRUCTIONS = (
     "당신은 검색 결과에서 특정 브랜드 상품의 최저가를 찾는 에이전트입니다. "
     '아래 검색 결과에서 "{brand}" 브랜드의 상품 중 가장 저렴한 것 하나만 찾아 '

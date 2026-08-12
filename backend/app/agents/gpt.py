@@ -10,6 +10,7 @@ from ..schemas import (
 from .base import (
     build_brand_price_prompt,
     build_bulk_prompt,
+    build_clarify_match_prompt,
     build_clarify_prompt,
     filter_bulk_options,
     is_generic_listing_url,
@@ -44,6 +45,34 @@ async def extract_options(query: str, search_results: list[SearchResult]) -> Cla
         return ClarifyOptions(**data)
     except Exception:
         return ClarifyOptions()
+
+
+_CLARIFY_MATCH_FALLBACK_REPLY = "지금은 답장을 만들지 못했어요 — 아래 선택지 중에서 골라주시겠어요?"
+
+
+async def match_clarify_reply(message: str, options: list[str]) -> tuple[str | None, str]:
+    """채팅창에 타이핑한 자유 텍스트가 현재 clarify 선택지 중 뭘 가리키는지
+    해석하고, 그 결과를 자연스러운 한국어 답장(reply)으로도 함께 받는다 — 봇의
+    응답이 고정 문구가 아니라 실제 LLM이 그때그때 생성한 문장이 되도록.
+    확신 없으면(또는 호출 자체가 실패하면) matched=None — 호출부는 이걸
+    "선택 실패"로 보고 프론트에서 다시 물어봐야 한다(버튼은 항상 그대로 남아있어
+    안전한 대체 경로가 있다). 실패 시 reply는 고정 안내 문구로 대체한다."""
+    if not options:
+        return None, _CLARIFY_MATCH_FALLBACK_REPLY
+    try:
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=settings.gpt_model,
+            messages=[{"role": "user", "content": build_clarify_match_prompt(message, options)}],
+            response_format={"type": "json_object"},
+        )
+        data = parse_json_object(response.choices[0].message.content or "")
+        matched = data.get("matched")
+        matched = matched if matched in options else None
+        reply = data.get("reply") or _CLARIFY_MATCH_FALLBACK_REPLY
+        return matched, reply
+    except Exception:
+        return None, _CLARIFY_MATCH_FALLBACK_REPLY
 
 
 async def find_lowest_price(

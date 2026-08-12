@@ -4,6 +4,7 @@ import { ArrowUp, Loader2, Plus } from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
 import { fetchAutocomplete } from '../lib/api';
 import { LoadingCard, StreamingCard, ErrorCard, SearchResults, type ClarifyStep } from './SearchResults';
+import { ChatBubbleTrail, type ChatMessage } from './ui/gradient-chat-input';
 
 export const Hero = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -38,13 +39,27 @@ export const Hero = () => {
   // 시작하거나 리셋하면 새 드릴다운이므로 비운다.
   const [resolvedSteps, setResolvedSteps] = useState<Set<ClarifyStep>>(new Set());
 
+  // 대화 스레드 — 처음 검색어를 입력하는 순간부터 말풍선으로 쌓인다. 이후
+  // clarify 단계(SearchResults.tsx)의 채팅 입력도 이 같은 목록에 이어붙여서,
+  // 버튼을 클릭하든 채팅으로 타이핑하든 하나로 이어지는 대화처럼 보이게 한다.
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const messageIdRef = useRef(0);
+  const pushMessage = (text: string, sender: ChatMessage['sender']) =>
+    setMessages((prev) => [...prev, { id: messageIdRef.current++, text, sender }]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setShowSuggestions(false);
     setResolvedSteps(new Set());
+    pushMessage(query, 'user');
     runSearch(query);
   };
 
+  // step/value가 어떻게 정해졌는지(버튼 클릭 vs 채팅 매칭)와 무관한 핵심 로직만
+  // 담당한다 — 말풍선을 여기서 찍으면 채팅 경로(SearchResults.tsx의
+  // handleChatSend)에서도 호출되면서 "내가 타이핑한 말"과 "매칭된 값"이 중복
+  // 말풍선으로 뜬다. 버튼 클릭의 말풍선은 SearchResults.tsx의 OptionButton
+  // onClick이 pushMessage로 직접 찍는다.
   const handleSelectOption = (step: ClarifyStep, value: string) => {
     setResolvedSteps((prev) => new Set(prev).add(step));
     runSearch(`${query} ${value}`.trim(), undefined, true);
@@ -52,6 +67,7 @@ export const Hero = () => {
 
   const handleResetAll = () => {
     setResolvedSteps(new Set());
+    setMessages([]);
     handleReset();
   };
 
@@ -189,6 +205,7 @@ export const Hero = () => {
           transition={{ duration: 1, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
           className="w-full max-w-4xl mx-auto mb-12"
         >
+          {messages.length > 0 && <ChatBubbleTrail messages={messages} className="mb-4" />}
           <form
             ref={searchBarRef}
             onSubmit={handleSubmit}
@@ -316,6 +333,9 @@ export const Hero = () => {
                   onSelectOption={handleSelectOption}
                   onReset={handleResetAll}
                   resolvedSteps={resolvedSteps}
+                  messages={messages}
+                  onMessagesChange={setMessages}
+                  pushMessage={pushMessage}
                 />
               )}
             </motion.div>

@@ -13,3 +13,4 @@ rapidfuzz==3.14.1
 apscheduler==3.11.0
 google-adk==2.6.3
 litellm==1.96.0
+beautifulsoup4==4.15.0

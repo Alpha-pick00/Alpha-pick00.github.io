@@ -198,6 +198,34 @@ export async function extractOcr(file: File): Promise<OcrExtractResponse> {
   return response.json();
 }
 
+export interface ClarifyMatchResult {
+  matched: string | null;
+  /** LLM이 그때그때 생성한 자연어 답장 — 고정 문구가 아니라 실제 대화처럼
+   * 매번 다르게 표현된다. 호출 자체가 실패해도 안내용 기본 문구가 채워져 있어
+   * 항상 채팅에 뭔가 보여줄 수 있다. */
+  reply: string;
+}
+
+const FALLBACK_CLARIFY_REPLY = '지금은 답장을 만들지 못했어요 — 아래 선택지 중에서 골라주시겠어요?';
+
+/** clarify 화면에서 사용자가 버튼을 클릭하거나 채팅으로 타이핑했을 때, 그
+ * 입력이 현재 옵션 중 뭘 가리키는지와 자연스러운 답장을 함께 서버(GPT)에
+ * 물어본다. 실패/불확실하면 matched가 null — 호출부는 버튼이 항상 그대로
+ * 남아있으므로 이 경우 채팅에 안내만 띄우면 된다. */
+export async function matchClarifyOption(message: string, options: string[]): Promise<ClarifyMatchResult> {
+  try {
+    const response = await fetch(`${API_URL}/clarify/match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, options }),
+    });
+    if (!response.ok) return { matched: null, reply: FALLBACK_CLARIFY_REPLY };
+    return await response.json();
+  } catch {
+    return { matched: null, reply: FALLBACK_CLARIFY_REPLY };
+  }
+}
+
 export async function fetchAutocomplete(query: string, signal?: AbortSignal): Promise<string[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];

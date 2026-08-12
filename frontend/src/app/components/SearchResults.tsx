@@ -1,6 +1,8 @@
 import { motion } from 'motion/react';
 import { AlertTriangle, ArrowUpRight, Check, RotateCcw, Truck } from 'lucide-react';
 import type { DecideResult, DecideStage, BrandOption, Proposal } from '../lib/api';
+import { matchClarifyOption } from '../lib/api';
+import GradientChatInput, { type ChatMessage } from './ui/gradient-chat-input';
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
@@ -187,9 +189,20 @@ interface Props {
   onSelectOption: (step: ClarifyStep, value: string) => void;
   onReset: () => void;
   resolvedSteps: Set<ClarifyStep>;
+  messages: ChatMessage[];
+  onMessagesChange: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
+  pushMessage: (text: string, sender: ChatMessage['sender']) => void;
 }
 
-export const SearchResults = ({ result, onSelectOption, onReset, resolvedSteps }: Props) => {
+export const SearchResults = ({
+  result,
+  onSelectOption,
+  onReset,
+  resolvedSteps,
+  messages,
+  onMessagesChange,
+  pushMessage,
+}: Props) => {
   if (result.mode === 'clarify') {
     const optionsByStep: Record<ClarifyStep, string[]> = {
       brand: result.options.brands,
@@ -226,16 +239,50 @@ export const SearchResults = ({ result, onSelectOption, onReset, resolvedSteps }
       return <ErrorCard message="적절한 상품 후보를 찾지 못했습니다." onReset={onReset} />;
     }
 
+    // 채팅으로 타이핑한 자유 텍스트도 받는다 — 버튼과 병행이라, 매칭에 실패해도
+    // (LLM이 확신 못 하거나 API 호출 자체가 실패해도) 버튼이 항상 그대로 남아있어
+    // 사용자가 막히지 않는다. messages는 Hero.tsx에서 내려주는 공유 스레드라
+    // 최초 검색어부터 지금까지의 대화가 하나로 이어진다(말풍선 자체는 Hero의
+    // ChatBubbleTrail이 그리므로 여기서는 showBubbles={false}로 입력창만 렌더).
+    // key를 step에 묶는 건 입력창의 남은 텍스트만 다음 라운드에 안 넘어가게 하기 위함.
+    // 답장 문구는 고정 템플릿이 아니라 매번 matchClarifyOption이 GPT로 새로
+    // 생성한 문장이다 — 버튼을 클릭했을 때도 같은 API로 자연스러운 확인 답장을
+    // 받는다(아래 onClick 참고).
+    const handleChatSend = async (message: string): Promise<string> => {
+      const { matched, reply } = await matchClarifyOption(message, options);
+      if (matched) {
+        onSelectOption(step, matched);
+      }
+      return reply;
+    };
+
     return (
       <Card>
         <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
           {CLARIFY_STEP_LABEL[step]}
         </span>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 mb-6">
           {options.map((value) => (
-            <OptionButton key={value} value={value} onClick={() => onSelectOption(step, value)} />
+            <OptionButton
+              key={value}
+              value={value}
+              onClick={() => {
+                pushMessage(value, 'user');
+                onSelectOption(step, value);
+                matchClarifyOption(value, options).then(({ reply }) => pushMessage(reply, 'bot'));
+              }}
+            />
           ))}
         </div>
+        <GradientChatInput
+          key={step}
+          placeholder="채팅으로 말씀하셔도 돼요"
+          autoReply={null}
+          onSend={handleChatSend}
+          messages={messages}
+          onMessagesChange={onMessagesChange}
+          showBubbles={false}
+        />
         <ResetLink onReset={onReset} />
       </Card>
     );
