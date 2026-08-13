@@ -7,7 +7,21 @@ load_dotenv()
 
 
 class Settings:
+    # openai_api_key는 이제 embeddings.py(검색 캐시 의미 기반 매칭)에서만 쓴다 -
+    # "gpt" 에이전트 슬롯 자체는 2026-08-15부터 OpenAI 토큰 소진으로 Qwen(DashScope)
+    # 으로 옮겼다(agents/gpt.py 참고 - 파일/함수/agent="gpt" 식별자는 스키마·
+    # 프론트엔드·테스트 전반에 걸쳐 있어 그대로 두고, 내부에서 호출하는 모델만
+    # 바꿨다). 아래 qwen_api_key가 그 슬롯의 실제 자격증명이다.
     openai_api_key: str | None = os.environ.get("OPENAI_API_KEY")
+    qwen_api_key: str | None = os.environ.get("QWEN_API_KEY")
+    # DashScope는 리전마다 별도 엔드포인트/계정이다 - 이전에 이 프로젝트가 Qwen을
+    # 붙였다가 "Model Studio 계정의 과금 플랜 활성화 문제"로 포기한 적이 있는데
+    # (agents/deepseek.py 주석 참고), Model Studio는 국제(비중국 본토) DashScope의
+    # 제품명이라 기본값을 국제 엔드포인트로 둔다. 중국 본토 계정이면 .env의
+    # QWEN_API_BASE를 https://dashscope.aliyuncs.com/compatible-mode/v1 로 바꿀 것.
+    qwen_api_base: str = os.environ.get(
+        "QWEN_API_BASE", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    )
     gemini_api_key: str | None = os.environ.get("GEMINI_API_KEY")
     anthropic_api_key: str | None = os.environ.get("ANTHROPIC_API_KEY")
     deepseek_api_key: str | None = os.environ.get("DEEPSEEK_API_KEY")
@@ -15,16 +29,18 @@ class Settings:
     google_merchant_id: str | None = os.environ.get("GOOGLE_MERCHANT_ID")
     google_service_account_file: str | None = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
 
-    gpt_model: str = os.environ.get("GPT_MODEL", "gpt-4.1")
+    # DashScope(Alibaba Cloud) 기준 범용 성능이 가장 높은 모델 - 필요하면 .env의
+    # QWEN_MODEL로 다른 버전(예: qwen-max-latest)으로 바꿀 수 있다.
+    qwen_model: str = os.environ.get("QWEN_MODEL", "qwen-max")
     gemini_model: str = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
     judge_model: str = os.environ.get("JUDGE_MODEL", "claude-sonnet-5")
     deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
     google_vision_api_key: str | None = os.environ.get("GOOGLE_VISION_API_KEY")
 
-    # 검색 캐시의 의미 기반(임베딩) 매칭 on/off. openai_api_key는 GPT 에이전트가
-    # 이미 실사용 중이라 그 자체를 끄는 것으로는 이 기능만 독립적으로 끌 수 없어
-    # 별도 스위치를 둔다.
+    # 검색 캐시의 의미 기반(임베딩) 매칭 on/off. openai_api_key는 이제 이 임베딩
+    # 조회에서만 쓰이지만, 그것과 별개로 이 기능 자체만 끄고 싶을 때를 위한
+    # 스위치를 그대로 둔다.
     semantic_cache_enabled: bool = os.environ.get("SEMANTIC_CACHE_ENABLED", "true").lower() != "false"
 
     # 소셜 로그인 (Google Client ID는 프론트엔드 VITE_GOOGLE_CLIENT_ID로만 쓰임 —
