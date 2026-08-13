@@ -18,7 +18,7 @@ from .category import (
     classify_category,
 )
 from .config import settings
-from .intent import has_count_spec, has_volume_spec, is_bulk_query, needs_clarification
+from .intent import has_count_spec, has_volume_spec, is_bulk_query, is_non_product_chitchat, needs_clarification
 from .schemas import (
     AgentCandidates,
     BrandOption,
@@ -61,6 +61,9 @@ def _any_llm_key_configured() -> bool:
 
 
 async def run_debate(query: str) -> DecideResponse | BulkDecideResponse | ClarifyResponse:
+    if is_non_product_chitchat(query):
+        # 검색/LLM 호출을 아예 안 하고 즉시 실패한다 - is_non_product_chitchat 참고.
+        raise RuntimeError(NO_CANDIDATE_ERROR)
     if is_bulk_query(query):
         return await run_bulk_debate(query)
     if not _any_llm_key_configured():
@@ -82,6 +85,9 @@ async def run_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
     다르고(브랜드 목록 선택, 가격대별 정리) 단계를 쪼갤 만한 지점이 마땅치 않아,
     최종 결과 하나만 "final" 이벤트로 보낸다 — 프론트는 이벤트 타입 하나만 보고
     두 경우 다 처리하면 된다."""
+    if is_non_product_chitchat(query):
+        yield {"type": "error", "message": NO_CANDIDATE_ERROR}
+        return
     if is_bulk_query(query):
         yield {"type": "final", "result": (await run_bulk_debate(query)).model_dump()}
         return
@@ -655,6 +661,13 @@ async def check_clarify_facets(
     대부분의(구체적인) 검색어는 이 함수를 호출해도 search.danawa.com 요청도,
     DeepSeek 호출도 전혀 없이 즉시 끝난다.
 
+    "하이"처럼 상품과 무관한 인사말/잡담도 같은 이유로 즉시 빈 결과를 반환한다
+    (사용자 요청, 2026-08-15: "상품으로 인식못하는 말을 들으면 처리해야하는
+    속도를 높여줘") - 이런 입력은 needs_clarification()이 짧은 검색어 휴리스틱에
+    걸려 True가 되므로, 이 가드가 없으면 search.danawa.com의 10초 Crawl-delay와
+    DeepSeek facet 추출까지 그대로 타 버린다(프론트가 /decide/stream보다 먼저
+    이 엔드포인트를 호출하므로 실제 체감 지연의 대부분이 여기서 생겼다).
+
     base_query(2026-08-13, 속도 개선) - 여러 라운드에 걸쳐 좁혀나갈 때(예: "핸드폰"
     -> "핸드폰 삼성전자" -> ...) 프론트가 그 드릴다운의 맨 처음 검색어를 실어 보낸다.
     query 대신 base_query로 검색하면 search.danawa.com의 1시간 캐시(fetchers.
@@ -662,7 +675,7 @@ async def check_clarify_facets(
     query에서 base_query에 없는 단어들로 로컬 필터링해 재사용한다 - 실제 최종
     가격 조회(run_danawa_only_debate*)는 이 캐시/필터링을 안 쓰고 항상 정확한
     검색을 새로 한다."""
-    if not needs_clarification(query):
+    if not needs_clarification(query) or is_non_product_chitchat(query):
         return ClarifyResponse(query=query, options=ClarifyOptions())
 
     search_query = base_query if base_query and base_query.strip() else query

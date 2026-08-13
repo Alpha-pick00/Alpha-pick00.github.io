@@ -9,8 +9,8 @@ import asyncio
 
 from fastapi.testclient import TestClient
 
-from app.debate import check_clarify_facets, run_danawa_only_debate_stream, run_debate
-from app.intent import needs_clarification
+from app.debate import check_clarify_facets, run_danawa_only_debate_stream, run_debate, run_debate_stream
+from app.intent import is_non_product_chitchat, needs_clarification
 from app.main import app
 from app.schemas import ClarifyFacet
 
@@ -45,6 +45,77 @@ def test_needs_clarification_false_for_bulk_spec_query():
 def test_needs_clarification_still_true_for_buy_intent_phrase():
     # 기존(2026-08-10 이전) 동작 - "사고싶다"류 문구는 길이/숫자와 무관하게 그대로 유지.
     assert needs_clarification("이거 진짜 사고 싶은데 뭐가 좋을까") is True
+
+
+# -- intent.is_non_product_chitchat: 인사말/잡담 즉시 감지(속도 개선) -------------
+
+
+def test_is_non_product_chitchat_true_for_bare_greeting():
+    assert is_non_product_chitchat("하이") is True
+    assert is_non_product_chitchat("안녕하세요") is True
+    assert is_non_product_chitchat("Hi") is True
+    assert is_non_product_chitchat("ㅋㅋㅋ") is True
+
+
+def test_is_non_product_chitchat_false_for_real_short_product_query():
+    # "테스트 상품"은 기존 테스트 스위트에서 "못 찾은 상품 검색어"로 쓰이는
+    # 문구다 - 잡담으로 오탐하면 안 된다(needs_clarification은 여전히 True).
+    assert is_non_product_chitchat("테스트 상품") is False
+    assert is_non_product_chitchat("음료수") is False
+    assert is_non_product_chitchat("아이폰 15") is False
+
+
+def test_is_non_product_chitchat_false_when_greeting_word_is_substring():
+    # 전체 문자열이 인사말과 정확히 일치할 때만 True - 부분 문자열은 오탐하지 않는다.
+    assert is_non_product_chitchat("하이마트 에어컨") is False
+
+
+# -- 회귀: 잡담 입력은 검색/LLM 호출 없이 즉시 실패한다(속도 개선) -----------------
+
+
+def test_check_clarify_facets_returns_empty_immediately_for_greeting(monkeypatch):
+    async def _boom_search(query, limit=3):
+        raise AssertionError("잡담 입력인데 search_danawa가 호출됐다")
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _boom_search)
+
+    async def _boom_facets(query, names):
+        raise AssertionError("잡담 입력인데 extract_facets_from_names가 호출됐다")
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _boom_facets)
+
+    result = asyncio.run(check_clarify_facets("하이"))
+
+    assert result.options.facets == []
+
+
+def test_run_debate_stream_fails_fast_for_greeting_without_any_search_or_llm_call(monkeypatch):
+    async def _boom_search(query, max_results=12):
+        raise AssertionError("잡담 입력인데 search가 호출됐다")
+
+    monkeypatch.setattr("app.search.search", _boom_search)
+    monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: True)
+
+    async def _collect():
+        return [event async for event in run_debate_stream("안녕하세요")]
+
+    events = asyncio.run(_collect())
+
+    assert events == [{"type": "error", "message": "적절한 상품 후보를 찾지 못했습니다."}]
+
+
+def test_run_debate_raises_immediately_for_greeting(monkeypatch):
+    async def _boom_search(query, max_results=12):
+        raise AssertionError("잡담 입력인데 search가 호출됐다")
+
+    monkeypatch.setattr("app.search.search", _boom_search)
+    monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: True)
+
+    try:
+        asyncio.run(run_debate("하이"))
+        raise AssertionError("RuntimeError가 발생해야 한다")
+    except RuntimeError as exc:
+        assert str(exc) == "적절한 상품 후보를 찾지 못했습니다."
 
 
 # -- app.agents.deepseek.extract_facets_from_names ---------------------------

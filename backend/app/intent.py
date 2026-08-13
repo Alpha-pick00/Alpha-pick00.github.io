@@ -50,6 +50,29 @@ def needs_clarification(query: str) -> bool:
     return bool(BUY_INTENT_PATTERN.search(query)) or _is_short_bare_query(query)
 
 
+# 상품과 무관한 인사말/잡담의 닫힌 집합 - 전체 질의가 이 중 하나와 정확히
+# 일치할 때만 매치되도록 앵커(^...$)를 건다("테스트 상품"처럼 이 단어들을
+# 포함하되 실제 상품명인 질의까지 오탐하지 않기 위함 - "테스트"는 기존 테스트
+# 스위트에서 이미 "못 찾은 상품 검색어"로 쓰이고 있어 일부러 뺐다).
+_GREETING_PATTERN = re.compile(
+    r"^(안녕(하세요|하십니까)?|안뇽|하이|hi|hello|헬로+우?|반가워(요)?|반갑습니다|"
+    r"고마워(요)?|감사합니다|고맙습니다|땡큐|thanks?|thank\s*you|"
+    r"ㅎㅇ|잘\s*가|bye|goodbye|뭐\s*해(요)?|뭐하고\s*있어|ㅋ+|ㅎ+|ㅇㅇ)[\s!.?~♡]*$",
+    re.IGNORECASE,
+)
+
+
+def is_non_product_chitchat(query: str) -> bool:
+    """상품 검색이 아닌 인사말/잡담을 순수 로컬 정규식으로 감지한다 - 네트워크나
+    LLM 호출이 전혀 없다(사용자 요청, 2026-08-15: "자기가 상품으로 인식못하는
+    말을 들으면 처리해야하는 속도를 높여줘" - "하이" 같은 입력이 전에는 검색 ->
+    clarify 추출(GPT+Gemini) -> 그마저 실패하면 전체 debate 파이프라인(정제+검색+
+    제안 3개+검증+심사)까지 끝까지 흘러가며 완전히 헛수고인 호출을 여러 번 거친
+    뒤에야 실패했다). 닫힌 인사말 집합에 전체 문자열이 정확히 일치할 때만 True라
+    실제 상품명을 오탐할 위험이 낮다."""
+    return bool(_GREETING_PATTERN.match(query.strip()))
+
+
 def has_count_spec(query: str) -> bool:
     """질의에 이미 개수(1개/6병/2박스 등)가 명시돼 있는지 — Human-in-the-loop에서
     사용자가 이미 답한 기준을 검색 결과가 완전히 못 걸러내도 다시 안 물어보기 위함."""
