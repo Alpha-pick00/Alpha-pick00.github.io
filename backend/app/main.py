@@ -253,7 +253,7 @@ async def decide(request: DecideRequest, background_tasks: BackgroundTasks) -> D
         if request.brand:
             result = await run_brand_price(request.query, request.brand)
         elif request.skip_intent_check:
-            result = await run_single_debate(request.query)
+            result = await run_single_debate(request.query, skip_clarify=True)
         else:
             result = await run_debate(request.query)
     except (RuntimeError, ValueError) as exc:
@@ -287,7 +287,7 @@ async def decide_stream(request: DecideRequest) -> StreamingResponse:
             else:
                 result = None
                 stream = (
-                    run_single_debate_stream(request.query)
+                    run_single_debate_stream(request.query, skip_clarify=True)
                     if request.skip_intent_check
                     else run_debate_stream(request.query)
                 )

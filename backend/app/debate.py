@@ -692,19 +692,26 @@ async def _extract_clarify_options(query: str, results: list[SearchResult]) -> C
     return ClarifyResponse(query=query, options=options)
 
 
-async def run_single_debate(query: str) -> DecideResponse | ClarifyResponse:
+async def run_single_debate(
+    query: str, skip_clarify: bool = False
+) -> DecideResponse | ClarifyResponse:
     """정제→검색→제안(GPT·Gemini·DeepSeek 병렬)→필터링+병합→검증→매칭→심사
     역할 분리 파이프라인 — 실제 오케스트레이션은 adk_pipeline(ADK SequentialAgent)이
     담당한다. 이 함수는 main.py/run_debate가 기대하는 기존 시그니처를 유지하는
-    얇은 래퍼."""
-    return await adk_pipeline.run(query)
+    얇은 래퍼.
+
+    skip_clarify(2026-08 통합 병합) - adk_pipeline.run() 참고. 이미 한 라운드
+    이상 답한 후속 턴에서 내부 애매함 판정이 다시 clarify를 띄우는 걸 막는다."""
+    return await adk_pipeline.run(query, skip_clarify=skip_clarify)
 
 
-async def run_single_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
+async def run_single_debate_stream(
+    query: str, skip_clarify: bool = False
+) -> AsyncIterator[dict[str, Any]]:
     """run_single_debate와 같은 결과를 만들지만, 파이프라인 단계마다(정제/검색/
     제안/검증/심사) NDJSON 이벤트를 흘려보낸다 — adk_pipeline.run_stream이 실제
     오케스트레이션과 이벤트 번역을 담당."""
-    async for event in adk_pipeline.run_stream(query):
+    async for event in adk_pipeline.run_stream(query, skip_clarify=skip_clarify):
         yield event
 
 

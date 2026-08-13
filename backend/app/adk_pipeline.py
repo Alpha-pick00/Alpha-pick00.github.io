@@ -464,9 +464,18 @@ def _is_ambiguous(query: str, options: ClarifyOptions) -> bool:
     )
 
 
-async def run_stream(query: str) -> AsyncIterator[dict[str, Any]]:
+async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[dict[str, Any]]:
     """run()과 같은 결과를 만들지만, 단계마다 NDJSON 이벤트를 흘려보낸다 —
-    debate.py::run_single_debate_stream이 그대로 재노출."""
+    debate.py::run_single_debate_stream이 그대로 재노출.
+
+    skip_clarify(2026-08 통합 병합) - 프론트의 SearchContext.runTurn이 이미
+    브랜드/facet/고정축 선택으로 한 라운드를 좁혀온 후속 턴이면 True로 넘어온다
+    (main.py의 DecideRequest.skip_intent_check). 이게 없으면 검색 직후
+    _is_ambiguous()가 이번 라운드에도 남아있는 다른 축(예: 브랜드는 답했는데
+    용량이 여러 개)을 또 clarify로 멈춰세워, 사용자가 이미 몇 라운드나 답했는데도
+    계속 새 선택 화면이 뜨는 재질문 버그가 생긴다 - True면 이 조기 종료를 건너뛰고
+    바로 propose/challenge/judge까지 진행한다(완전히 후보가 0개면 아래의
+    안전망 clarify는 skip_clarify와 무관하게 그대로 동작한다)."""
     from .debate import _extract_clarify_options  # 지연 임포트 — 순환 참조 방지
 
     runner = _get_runner()
@@ -494,7 +503,7 @@ async def run_stream(query: str) -> AsyncIterator[dict[str, Any]]:
                     SearchResult(**r) for r in event.actions.state_delta.get("search_results") or []
                 ]
                 clarify = await _extract_clarify_options(query, search_results)
-                if clarify is not None and _is_ambiguous(query, clarify.options):
+                if clarify is not None and not skip_clarify and _is_ambiguous(query, clarify.options):
                     await gen.aclose()
                     yield {"type": "final", "result": clarify.model_dump()}
                     return
@@ -540,9 +549,9 @@ async def run_stream(query: str) -> AsyncIterator[dict[str, Any]]:
     yield {"type": "final", "result": result.model_dump()}
 
 
-async def run(query: str) -> DecideResponse | ClarifyResponse:
+async def run(query: str, skip_clarify: bool = False) -> DecideResponse | ClarifyResponse:
     result_dict = None
-    async for event in run_stream(query):
+    async for event in run_stream(query, skip_clarify=skip_clarify):
         if event["type"] == "final":
             result_dict = event["result"]
     if result_dict is None:
