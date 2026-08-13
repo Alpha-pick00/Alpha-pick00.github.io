@@ -56,6 +56,9 @@ export interface ChatTurn {
   // decideStream이 이 턴을 처리하는 동안 status/proposal 이벤트로 채워진다.
   streamingStage: DecideStage | null;
   streamingProposals: Proposal[];
+  // 메시지 시간 표시(사용자 요청, "클로드 너처럼 날짜기능") - epoch ms.
+  // loadFromHistory는 실제 기록 시각을 쓰고, 그 외엔 턴 생성 시각.
+  createdAt: number;
 }
 
 interface SearchContextValue {
@@ -73,6 +76,7 @@ interface SearchContextValue {
   selectFacets: (turnId: string, selected: Record<string, string>) => Promise<void>;
   selectClarifyOption: (turnId: string, step: Exclude<ClarifyStep, 'brand'>, value: string) => Promise<void>;
   retryTurn: (turnId: string) => Promise<void>;
+  editTurn: (turnId: string, newQuery: string) => Promise<void>;
   handleImageUpload: (file: File) => Promise<void>;
   handleReset: () => void;
   loadFromHistory: (entry: HistoryEntry) => void;
@@ -122,6 +126,7 @@ const newTurn = (
   errorMessage: '',
   streamingStage: null,
   streamingProposals: [],
+  createdAt: Date.now(),
 });
 
 export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
@@ -340,6 +345,20 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
     await runTurn(turnId, turn.requestQuery, turn.brand, turn.baseQuery);
   };
 
+  // 내 메시지 편집(사용자 요청, "클로드 너처럼 ... 편집기능") - 클로드처럼 편집한
+  // 턴 이후에 이어지던 턴들은 그 편집 전 맥락으로 답한 것이라 더 이상 유효하지
+  // 않으므로 버리고, 편집한 턴을 새 루트 질문 취급해 처음부터 다시 실행한다.
+  // id는 그대로 유지해 리스트에서 자리가 안 바뀌게 한다.
+  const editTurn = async (turnId: string, newQuery: string) => {
+    const trimmed = newQuery.trim();
+    if (!trimmed) return;
+    const index = turns.findIndex((t) => t.id === turnId);
+    if (index === -1) return;
+    const edited: ChatTurn = { ...newTurn(trimmed, trimmed), id: turnId };
+    setTurns((prev) => [...prev.slice(0, index), edited]);
+    await runTurn(edited.id, edited.requestQuery, undefined, edited.baseQuery);
+  };
+
   const handleImageUpload = async (file: File) => {
     setOcrBusy(true);
     try {
@@ -382,6 +401,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
         ...newTurn(entry.query, entry.query),
         status: 'result',
         result: entry.result,
+        createdAt: entry.timestamp,
       },
     ]);
   };
@@ -421,6 +441,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
         selectFacets,
         selectClarifyOption,
         retryTurn,
+        editTurn,
         handleImageUpload,
         handleReset,
         loadFromHistory,
