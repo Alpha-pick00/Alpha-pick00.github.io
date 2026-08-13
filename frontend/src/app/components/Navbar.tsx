@@ -39,15 +39,15 @@ export const Navbar = () => {
     <motion.nav
       initial={{ y: -100 }}
       animate={{ y: 0 }}
-      className={`fixed w-full z-50 transition-all duration-300 ${
+      className={`fixed w-full z-50 transition-all duration-300 bg-transparent border-none shadow-none ${
         hasConversation
-          ? 'bg-transparent py-8 pointer-events-none'
+          ? 'py-4 sm:py-6 lg:py-8 pointer-events-none'
           : scrolled
-          ? 'bg-transparent py-4 border-b border-black/5'
-          : 'py-8 bg-transparent'
+          ? 'py-3 sm:py-3.5 lg:py-4'
+          : 'py-4 sm:py-6 lg:py-8'
       }`}
     >
-      <div className="container mx-auto px-6 flex justify-end items-center">
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 flex justify-end items-center">
         {!hasConversation && (
           <>
             {/* Desktop Menu */}

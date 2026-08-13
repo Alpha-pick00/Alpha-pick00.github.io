@@ -197,27 +197,52 @@ export async function decideDanawaOnlyStream(
 //
 // looksAmbiguous()는 그 백엔드 검사(backend/app/intent.py::_is_short_bare_query)를
 // 그대로 흉내낸 순수 클라이언트 프리필터다 - 명백히 구체적인 검색어(숫자가 있거나
-// 단어가 3개 이상)에 대해서는 이 API를 아예 호출하지 않아서, 거의 모든 검색에서
+// 단어가 5개 이상)에 대해서는 이 API를 아예 호출하지 않아서, 거의 모든 검색에서
 // 왕복 하나조차 안 생기게 한다. 오탐(애매한데 여기서 걸러짐)이 있어도 위험하지
 // 않다 - 그런 경우 사용자는 그냥 원래 검색 경로로 바로 넘어갈 뿐이다.
+//
+// 2 -> 4(2026-08-15, 카테고리별 메타데이터 차이 - "냉장고 살 때랑 콜라 살 때
+// 쓰는 메타데이터가 다르다") - intent.py::SHORT_QUERY_TOKEN_LIMIT과 함께 넓혀서
+// "삼성 냉장고 스탠드형"처럼 짧지만 구체성이 붙기 시작한 질의도 AI 상세검색
+// (카테고리별 동적 facet)을 먼저 시도하도록 한다.
 const HAS_DIGIT_PATTERN = /\d/;
 
 export function looksAmbiguous(query: string): boolean {
   const trimmed = query.trim();
   if (!trimmed) return false;
   const tokens = trimmed.split(/\s+/);
-  return tokens.length <= 2 && !HAS_DIGIT_PATTERN.test(trimmed);
+  return tokens.length <= 4 && !HAS_DIGIT_PATTERN.test(trimmed);
 }
 
 // baseQuery(2026-08-13, "조금 더 빠르게" 요청) - 드릴다운 중(예: "핸드폰" ->
 // "핸드폰 삼성전자")이면 그 체인의 맨 처음 검색어를 실어 보낸다. 백엔드가 매
 // 라운드 새로 search.danawa.com을 때리는(10초 Crawl-delay) 대신 이미 캐시된
 // base_query 결과를 재사용해 로컬 필터링만 하게 해준다(app/debate.py::check_clarify_facets).
-export async function checkClarifyFacets(query: string, baseQuery?: string): Promise<ClarifyResponse> {
+//
+// sessionPreferences/token(2026-08-15, 사용자 페르소나 기반 상품 매핑) - 이번
+// 세션에서 지금까지 고른 facet 값({라벨: 값})을 실어 보내면, 로그인 계정의
+// 영구 선호도(app.preferences)와 백엔드가 병합해 facet 옵션 순서에 소프트하게
+// 반영한다(옵션을 줄이거나 지어내지 않고, 이미 있는 값을 맨 앞으로 당기기만
+// 한다). token이 없으면 세션 값만 반영되고 계정 조회는 건너뛴다.
+export async function checkClarifyFacets(
+  query: string,
+  baseQuery?: string,
+  sessionPreferences?: Record<string, string>,
+  token?: string | null
+): Promise<ClarifyResponse> {
   const response = await fetch(`${API_URL}/decide/clarify`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(baseQuery ? { query, base_query: baseQuery } : { query }),
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({
+      query,
+      ...(baseQuery ? { base_query: baseQuery } : {}),
+      ...(sessionPreferences && Object.keys(sessionPreferences).length > 0
+        ? { session_preferences: sessionPreferences }
+        : {}),
+    }),
   });
 
   if (!response.ok) {
@@ -226,6 +251,22 @@ export async function checkClarifyFacets(query: string, baseQuery?: string): Pro
   }
 
   return response.json();
+}
+
+// 사용자 페르소나 기록(2026-08-15) - 로그인한 사용자가 clarify에서 facet/브랜드
+// 값을 하나 고를 때마다 fire-and-forget으로 호출해 계정에 누적한다. 실패해도
+// 검색 흐름을 막지 않는다(다음 checkClarifyFacets 호출이 그냥 이번 선택을
+// 반영 못 할 뿐).
+export async function recordPreference(token: string, label: string, value: string): Promise<void> {
+  try {
+    await fetch(`${API_URL}/preferences`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ label, value }),
+    });
+  } catch {
+    // 조용히 무시 - 페르소나는 있으면 좋은 부가 기능이지 필수 경로가 아니다.
+  }
 }
 
 export async function decide(query: string, brand?: string): Promise<DecideResult> {

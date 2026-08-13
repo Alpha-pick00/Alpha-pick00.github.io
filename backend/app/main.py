@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import TypeAdapter
 
-from . import autocomplete, danawa, history, popularity_scheduler
+from . import autocomplete, danawa, history, popularity_scheduler, preferences
 from .agents import gpt as gpt_agent
 from .auth import google as google_auth
 from .auth import kakao as kakao_auth
@@ -46,6 +46,7 @@ from .schemas import (
     HistoryEntry,
     OAuthCodeRequest,
     OcrExtractResponse,
+    PreferenceRecordRequest,
     SaveHistoryRequest,
     User,
 )
@@ -90,6 +91,20 @@ def get_current_user(
         return verify_session_token(credentials.credentials)
     except jwt.PyJWTError as exc:
         raise HTTPException(status_code=401, detail="세션이 만료되었거나 유효하지 않습니다.") from exc
+
+
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> User | None:
+    """get_current_user와 달리 비로그인/유효하지 않은 토큰이어도 401을 던지지
+    않고 None을 반환한다 - 사용자 페르소나(2026-08-15) 조회처럼 "로그인했으면
+    반영하고, 아니면 그냥 세션 값만 쓴다"는 선택적 개인화에 쓴다."""
+    if credentials is None:
+        return None
+    try:
+        return verify_session_token(credentials.credentials)
+    except jwt.PyJWTError:
+        return None
 
 
 def _autocomplete_terms(request: DecideRequest, result: DecideResult) -> list[str]:
@@ -209,6 +224,18 @@ def delete_all_history(user: User = Depends(get_current_user)) -> dict[str, str]
     return {"status": "ok"}
 
 
+@app.post("/preferences")
+def record_preference(
+    request: PreferenceRecordRequest, user: User = Depends(get_current_user)
+) -> dict[str, str]:
+    """사용자 페르소나(2026-08-15) - 로그인한 사용자가 clarify에서 facet/브랜드
+    값을 하나 고를 때마다 프론트가 fire-and-forget으로 호출한다. 계정에 누적된
+    선호도는 이후 검색의 /decide/clarify가 facet 옵션 순서에 소프트하게
+    반영한다(app.preferences.get_top_preferences, app.debate._apply_persona_ordering)."""
+    preferences.record(user, request.label, request.value)
+    return {"status": "ok"}
+
+
 @app.post("/auth/google", response_model=AuthResponse)
 async def auth_google(request: GoogleAuthRequest) -> AuthResponse:
     try:
@@ -318,15 +345,26 @@ async def decide_stream(request: DecideRequest) -> StreamingResponse:
 
 
 @app.post("/decide/clarify", response_model=ClarifyResponse)
-async def decide_clarify(request: DecideRequest) -> ClarifyResponse:
+async def decide_clarify(
+    request: DecideRequest, user: User | None = Depends(get_optional_user)
+) -> ClarifyResponse:
     """AI 상세검색(2026-08-12) - "음료수"처럼 짧고 애매한 검색어를 다나와 실제
     검색 상품명에 근거해 DeepSeek이 몇 가지 기준(카테고리/브랜드/용량 등)으로 좁혀나가게
     제안한다. 프론트는 짧은 검색어에 한해 danawa-only 빠른 경로를 타기 전에 이걸
     먼저 불러보고, options.facets가 비어 있으면(=명확한 검색어) 그대로 원래
     빠른 경로로 넘어간다 - 이 엔드포인트 자체가 대부분의 검색어에 대해 검색/LLM
     호출 없이 즉시 빈 결과로 끝나므로(check_clarify_facets 참고) 매 검색마다
-    호출해도 비용이 거의 없다."""
-    return await check_clarify_facets(request.query, base_query=request.base_query)
+    호출해도 비용이 거의 없다.
+
+    사용자 페르소나(2026-08-15) - 로그인했으면 계정에 영구 누적된 선호도
+    (app.preferences)를 먼저 깔고, 이번 세션에서 프론트가 들고 있다가 보낸
+    session_preferences로 덮어써 최신 선택을 우선한다."""
+    persona: dict[str, str] = {}
+    if user is not None:
+        persona.update(preferences.get_top_preferences(user))
+    if request.session_preferences:
+        persona.update(request.session_preferences)
+    return await check_clarify_facets(request.query, base_query=request.base_query, persona=persona)
 
 
 @app.post("/decide/danawa-only", response_model=DecideResponse | BulkDecideResponse)
