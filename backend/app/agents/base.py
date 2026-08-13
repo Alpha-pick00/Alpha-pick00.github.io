@@ -20,14 +20,19 @@ NO_CANDIDATE_ERROR = "적절한 상품 후보를 찾지 못했습니다."
 
 
 def filter_candidates(items: list, max_items: int = 3) -> list[dict]:
-    """product_name이 비어 있거나 url이 일반 목록 페이지인 후보는 제외한다.
+    """product_name이나 url이 비어 있거나, url이 일반 목록 페이지인 후보는
+    제외한다. url이 빈 후보를 그대로 통과시키면, 실제로 살 수 있는 페이지가
+    없는 후보가 병합/심사까지 흘러가 judge가 존재하지 않는 URL을 스스로
+    지어내 채우는 문제가 생긴다 — 근거가 확실하지 않으면 애초에 후보를
+    반환하지 말라고 프롬프트에도 적혀 있지만, 코드에서 한 번 더 걸러낸다.
     개수를 억지로 채우지 않고, 유효한 후보만 에이전트가 제시한 선호 순서 그대로
     최대 max_items개까지 남긴다."""
     filtered = []
     for item in items:
         if not isinstance(item, dict):
             continue
-        if is_generic_listing_url(item.get("url") or ""):
+        url = (item.get("url") or "").strip()
+        if not url or is_generic_listing_url(url):
             continue
         if not (item.get("product_name") or "").strip():
             continue
@@ -52,10 +57,14 @@ PRICE_KRW_GUIDANCE = (
 
 PROPOSAL_INSTRUCTIONS = (
     "당신은 쇼핑 후보를 조사해 상품을 추천하는 에이전트입니다. "
-    "아래 검색 결과를 참고해 사용자의 질의에 적합한 상품 후보를 최대 3개까지, "
+    "아래 검색 결과를 참고해 사용자의 질의에 적합한 상품 후보를 최대 5개까지, "
     "당신이 가장 적합하다고 판단하는 순서대로 배열에 담아 반환하세요. "
     "근거가 확실한 후보가 1개뿐이면 1개만 반환하세요 — 개수를 채우려고 "
     "억지 후보를 만들어내지 마세요. 같은 상품을 중복해서 넣지 마세요. "
+    "질의에 브랜드·용량·개수가 구체적으로 명시돼 있다면(예: '메로나 빙그레 70mL 10개') "
+    "그 값과 명확히 일치하는 후보만 남기세요 — 브랜드만 맞고 용량이나 개수가 "
+    "다른 상품(예: 70mL를 찾는데 80mL만 있는 상품)은 후보에서 제외하세요. "
+    "질의에 명시되지 않은 항목은 자유롭게 골라도 됩니다. "
     "반드시 아래 JSON 배열 형식으로만 답하세요. 다른 텍스트나 코드펜스를 덧붙이지 마세요.\n\n"
     '[{"product_name": "...", "price_krw": 12900, "retailer": "...", '
     '"url": "...", "reasoning": "..."}, ...]\n\n'
@@ -89,7 +98,7 @@ BULK_PROPOSAL_INSTRUCTIONS = (
 )
 
 
-def _format_results_block(search_results: list[SearchResult]) -> str:
+def format_results_block(search_results: list[SearchResult]) -> str:
     return (
         "\n".join(f"- {r.title} ({r.url}): {r.snippet}" for r in search_results)
         or "(검색 결과 없음)"
@@ -97,29 +106,76 @@ def _format_results_block(search_results: list[SearchResult]) -> str:
 
 
 def build_prompt(query: str, search_results: list[SearchResult]) -> str:
-    results_block = _format_results_block(search_results)
+    results_block = format_results_block(search_results)
     return f"{PROPOSAL_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
 
 
 def build_bulk_prompt(query: str, search_results: list[SearchResult], max_options: int = 5) -> str:
-    results_block = _format_results_block(search_results)
+    results_block = format_results_block(search_results)
     instructions = BULK_PROPOSAL_INSTRUCTIONS.format(max_options=max_options)
     return f"{instructions}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
 
 
 CLARIFY_INSTRUCTIONS = (
     "당신은 검색 결과에서 실제 판매 중인 상품의 옵션을 추출하는 에이전트입니다. "
-    "아래 검색 결과에 등장하는 서로 다른 브랜드, 용량(ml/L 등), 판매 단위(묶음 개수)를 "
-    "각각 목록으로 뽑아주세요. 실제로 검색 결과에 나온 값만 사용하고 지어내지 마세요. "
+    "아래 검색 결과에 등장하는 서로 다른 브랜드, 제품/모델명, 용량(ml/L 등), "
+    "판매 단위(묶음 개수)를 각각 목록으로 뽑아주세요. "
+    "products는 브랜드가 아니라 그 브랜드 안에서, 사용자가 질의한 상품과 같은 "
+    "종류의 서로 다른 제품 라인/모델명입니다 (예: 질의가 '빙그레 아이스크림'이면 "
+    "브랜드 '빙그레' 안에 '메로나', '비비빅', '투게더'처럼 서로 다른 아이스크림이 "
+    "섞여 있는 경우). 검색 결과 페이지에 사이드바 추천/함께 본 상품처럼 질의와 "
+    "다른 종류의 상품(예: 이어폰을 찾는데 냉장고·모니터·시계가 섞여 있는 경우)이 "
+    "함께 나오더라도, 그런 무관한 카테고리 상품은 products에 절대 넣지 마세요 — "
+    "질의와 같은 종류의 상품만 뽑으세요. 한 브랜드에 제품이 하나뿐이면 products는 "
+    "빈 배열로 두세요 — 브랜드명과 똑같은 값을 억지로 넣지 마세요. "
+    "실제로 검색 결과에 나온 값만 사용하고 지어내지 마세요. "
     "찾을 수 없으면 해당 목록을 빈 배열로 두세요. "
     "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
-    '{"brands": ["..."], "volumes": ["..."], "quantities": ["..."]}'
+    '{"brands": ["..."], "products": ["..."], "volumes": ["..."], "quantities": ["..."]}'
 )
 
 
 def build_clarify_prompt(query: str, search_results: list[SearchResult]) -> str:
-    results_block = _format_results_block(search_results)
+    results_block = format_results_block(search_results)
     return f"{CLARIFY_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
+
+
+CLARIFY_MATCH_INSTRUCTIONS = (
+    "당신은 쇼핑 검색을 도와주는 챗봇입니다. 사용자가 채팅창에 자유롭게 입력한 "
+    "문장이 아래 선택지 중 어떤 것을 가리키는지 판단하고, 그 결과를 사용자에게 "
+    "짧고 자연스러운 한국어로 답장하세요. "
+    "matched는 선택지 목록에 있는 문자열과 정확히 동일한 값이거나 null입니다. "
+    "\"제일 싼 걸로\", \"그거 말고 다른 거\" 같은 간접적인 표현이어도 의미상 가장 "
+    "맞는 선택지를 고르세요. 여러 개와 애매하게 겹치거나 선택지와 전혀 무관한 "
+    "말이면 matched를 null로 두세요. 목록에 없는 새 값을 만들어내지 마세요. "
+    "reply는 실제 챗봇과 대화하듯 한두 문장으로 쓰세요 — matched를 찾았으면 "
+    "그 선택을 자연스럽게 확인하는 말을, null이면 다시 골라달라고 선택지를 "
+    "참고해 부드럽게 안내하는 말을 쓰세요. 매번 같은 문구를 기계적으로 반복하지 "
+    "말고 사용자가 입력한 표현에 맞춰 조금씩 다르게 표현하세요. "
+    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
+    '{"matched": "..." 또는 null, "reply": "..."}'
+)
+
+
+def build_clarify_match_prompt(message: str, options: list[str]) -> str:
+    options_block = "\n".join(f"- {o}" for o in options)
+    return f"{CLARIFY_MATCH_INSTRUCTIONS}\n\n사용자 입력: {message}\n\n선택지:\n{options_block}"
+
+
+CLARIFY_ASK_INSTRUCTIONS = (
+    "당신은 쇼핑을 도와주는 챗봇입니다. 사용자가 검색한 상품 중 아래 후보들 중 "
+    "어떤 걸 찾는지 확인이 필요합니다. 후보 목록을 그대로 나열하거나 \"~를 "
+    "선택하세요\" 같은 딱딱한 안내문 대신, 실제 상담원이 대화하듯 자연스러운 "
+    "한두 문장으로 물어보세요 — 후보 중 몇 가지를 예시로 자연스럽게 언급해도 "
+    "좋습니다. 매번 표현을 다르게 해서 기계적으로 반복하지 마세요. "
+    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
+    '{"message": "..."}'
+)
+
+
+def build_clarify_ask_prompt(query: str, options: list[str]) -> str:
+    options_block = "\n".join(f"- {o}" for o in options)
+    return f"{CLARIFY_ASK_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n후보:\n{options_block}"
 
 
 FACET_CLARIFY_INSTRUCTIONS = (
@@ -188,27 +244,76 @@ BRAND_PRICE_INSTRUCTIONS = (
 
 
 def build_brand_price_prompt(query: str, brand: str, search_results: list[SearchResult]) -> str:
-    results_block = _format_results_block(search_results)
+    results_block = format_results_block(search_results)
     instructions = BRAND_PRICE_INSTRUCTIONS.format(brand=brand)
     return f"{instructions}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
 
 
-PRICE_CONFIRM_INSTRUCTIONS = (
-    "당신은 상품 상세 페이지의 전체 본문에서 실제 판매 가격을 확인하는 에이전트입니다. "
-    "아래는 특정 상품 페이지 하나의 전체 텍스트입니다. 이 페이지에 실제로 표시된 "
-    "최종 판매 가격(할인이 적용된 결제 가격)을 찾아 반드시 아래 JSON 형식으로만 답하세요. "
-    "다른 텍스트를 덧붙이지 마세요.\n\n"
-    '{"price": "...", "product_name": "..."}\n\n'
-    "product_name은 페이지에 나온 정확한 상품명으로 다시 채우세요. "
-    "페이지 본문에서 가격을 명확히 찾을 수 없으면 price를 빈 문자열로 두세요."
+REFINE_QUERY_INSTRUCTIONS = (
+    "당신은 사용자의 쇼핑 검색어를 실제 쇼핑몰 검색에 더 유리하게 다듬는 에이전트입니다. "
+    "질의가 이미 구체적이면(브랜드·모델명·용량 등이 명확하면) 그대로 반환하세요. "
+    "모호한 표현(예: '그거', '요즘 유행하는')이 있으면 검색어에서 제거하고, "
+    "질의에 이미 암시된 브랜드·스펙·용량이 있다면 명시적인 키워드로 풀어 쓰세요. "
+    "검색어에 없는 브랜드나 상품 정보를 새로 지어내지 마세요 — 원래 의미를 벗어나면 안 됩니다. "
+    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
+    '{"query": "..."}'
 )
 
 
-def build_price_confirm_prompt(product_name: str, page_content: str) -> str:
+def build_refine_query_prompt(query: str) -> str:
+    return f"{REFINE_QUERY_INSTRUCTIONS}\n\n사용자 질의: {query}"
+
+
+CHALLENGE_INSTRUCTIONS = (
+    "당신은 다른 에이전트들이 제안한 쇼핑 후보를 비판적으로 검증하는 에이전트입니다. "
+    "아래 후보 목록과 검색 결과를 비교해 각 후보를 두 기준으로 판단하세요: "
+    "(1) 그라운딩 — 검색 결과 텍스트에 실제로 나오지 않는 가격/상품 정보를 지어내지 않았는지, "
+    "(2) 정체성 일치 — 그 후보가 사용자 질의가 찾는 상품(브랜드·용량·개수를 포함한 스펙)과 "
+    "실제로 일치하는지. 특히 질의에 용량이나 개수가 숫자로 구체적으로 적혀 있다면(예: "
+    "'70mL 10개') 후보의 용량·개수가 그 숫자와 정확히 같은지 반드시 확인하세요 — "
+    "브랜드와 상품명은 맞아도 용량이나 개수가 다르면(예: 70mL를 찾는데 후보가 80mL) "
+    "verified를 false로 표시하고 note에 어떤 값이 다른지 적으세요. "
+    "애매하거나 확신이 서지 않으면 verified를 false로 남발하지 말고, "
+    "명백히 근거가 없거나 질의와 무관한 경우에만 false로 표시하세요. "
+    "일부 후보에는 '실제 페이지 재조회 원문'이 함께 제공됩니다 — 이는 검색 당시 "
+    "잘린 스니펫보다 더 최신이고 완전한 정보이므로, 스니펫과 내용이 다르면 "
+    "재조회 원문을 우선 신뢰해 판단하세요. "
+    "반드시 입력된 후보와 같은 개수, 같은 순서로 아래 JSON 배열 형식으로만 답하세요. "
+    "다른 텍스트나 코드펜스를 덧붙이지 마세요.\n\n"
+    '[{"url": "...", "verified": true, "note": "..."}, ...]\n\n'
+    "note는 검증 근거를 한 문장으로 설명하세요(통과든 우려든)."
+)
+
+
+def _format_candidates_block(candidates: list, candidate_pages: dict[str, str] | None = None) -> str:
+    candidate_pages = candidate_pages or {}
+    lines = []
+    for i, c in enumerate(candidates, start=1):
+        product_name = getattr(c, "product_name", None) or (c.get("product_name") if isinstance(c, dict) else None)
+        price_krw = getattr(c, "price_krw", None) if not isinstance(c, dict) else c.get("price_krw")
+        retailer = getattr(c, "retailer", None) if not isinstance(c, dict) else c.get("retailer")
+        url = getattr(c, "url", None) if not isinstance(c, dict) else c.get("url")
+        reasoning = getattr(c, "reasoning", None) if not isinstance(c, dict) else c.get("reasoning")
+        page_text = candidate_pages.get(url) if url else None
+        page_block = f"\n    실제 페이지 재조회 원문: {page_text[:2000]}" if page_text else ""
+        lines.append(
+            f"[{i}] 상품: {product_name} / 가격: {price_krw} / 판매처: {retailer} / "
+            f"URL: {url} / 제안 근거: {reasoning}{page_block}"
+        )
+    return "\n".join(lines) or "(후보 없음)"
+
+
+def build_challenge_prompt(
+    query: str,
+    candidates: list,
+    search_results: list[SearchResult],
+    candidate_pages: dict[str, str] | None = None,
+) -> str:
+    candidates_block = _format_candidates_block(candidates, candidate_pages)
+    results_block = format_results_block(search_results)
     return (
-        f"{PRICE_CONFIRM_INSTRUCTIONS}\n\n"
-        f"기존에 파악한 상품명: {product_name}\n\n"
-        f"페이지 전체 텍스트:\n{page_content[:6000]}"
+        f"{CHALLENGE_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n"
+        f"검증할 후보:\n{candidates_block}\n\n검색 결과:\n{results_block}"
     )
 
 

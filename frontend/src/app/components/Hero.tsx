@@ -4,7 +4,7 @@ import { ArrowUp, Loader2, Plus, Search } from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
 import { useSidebar } from '../context/SidebarContext';
 import { fetchAutocomplete } from '../lib/api';
-import { LoadingCard, ErrorCard, SearchResults } from './SearchResults';
+import { StreamingCard, ErrorCard, SearchResults } from './SearchResults';
 
 export const Hero = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -14,8 +14,18 @@ export const Hero = () => {
   const yText = useTransform(scrollY, [0, 500], [0, 200]);
   const opacityText = useTransform(scrollY, [0, 300], [1, 0]);
 
-  const { turns, isBusy, ocrBusy, sendMessage, selectBrand, selectFacets, retryTurn, handleImageUpload, handleReset } =
-    useSearch();
+  const {
+    turns,
+    isBusy,
+    ocrBusy,
+    sendMessage,
+    selectBrand,
+    selectFacets,
+    selectClarifyOption,
+    retryTurn,
+    handleImageUpload,
+    handleReset,
+  } = useSearch();
   const { isOpen: sidebarOpen } = useSidebar();
 
   const [draft, setDraft] = useState('');
@@ -282,7 +292,8 @@ export const Hero = () => {
         </motion.div>
       ) : (
         // 대화 시작 후: ChatGPT/Claude처럼 위로 스레드가 쌓이고 입력창은 하단에 고정.
-        // 답변은 LLM이 지어내는 게 아니라 다나와 실측 가격 파이프라인(useSearch)이 그대로 채운다.
+        // 답변은 LLM이 지어내는 게 아니라 AI 오케스트레이션(adk_pipeline: 정제→검색→
+        // 제안→검증→심사, SearchContext.runTurn이 decideStream으로 호출)이 채운다.
         // 로고는 더 이상 스레드 중앙 칼럼 안에 있지 않고, 사이드바 레일(왼쪽 68px) 바로
         // 옆에 고정된 헤더로 옮겨서 ChatGPT류 앱들처럼 왼쪽 상단에 붙게 한다. 사이드바
         // 패널이 펼쳐지면(레일 68px + 패널 300px) 그만큼 더 오른쪽으로 따라간다 -
@@ -310,48 +321,41 @@ export const Hero = () => {
             <div className="flex-1 min-h-0 overflow-y-auto px-6 flex flex-col">
               <div className="max-w-3xl mx-auto w-full py-4 mt-auto">
                 <div className="space-y-6">
-                {turns.map((turn) => (
-                  <div key={turn.id} className="space-y-3">
-                    <div className="flex justify-end">
-                      <div className="max-w-[80%] rounded-[18px_18px_4px_18px] bg-neutral-950 text-white px-4 py-2.5 text-sm md:text-base font-light text-left break-words">
-                        {turn.displayQuery}
+                  {turns.map((turn) => (
+                    <div key={turn.id} className="space-y-3">
+                      <div className="flex justify-end">
+                        <div className="max-w-[80%] rounded-[18px_18px_4px_18px] bg-neutral-950 text-white px-4 py-2.5 text-sm md:text-base font-light text-left break-words">
+                          {turn.displayQuery}
+                        </div>
+                      </div>
+                      <div className="flex justify-start">
+                        <div className="w-full">
+                          {turn.status === 'loading' && (
+                            <StreamingCard stage={turn.streamingStage || 'refining'} proposals={turn.streamingProposals} />
+                          )}
+                          {turn.status === 'error' && (
+                            <ErrorCard
+                              message={turn.errorMessage}
+                              onReset={() => retryTurn(turn.id)}
+                              resetLabel="다시 시도"
+                            />
+                          )}
+                          {turn.status === 'result' && turn.result && (
+                            <SearchResults
+                              result={turn.result}
+                              onSelectBrand={(brand) => selectBrand(turn.id, brand)}
+                              onConfirmFacets={(values) => selectFacets(turn.id, values)}
+                              onSelectClarifyOption={(value) => selectClarifyOption(turn.id, value)}
+                            />
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <div className="flex justify-start">
-                      <div className="w-full">
-                        {turn.status === 'loading' && (
-                          <LoadingCard
-                            message={
-                              <>
-                                <span className="font-medium text-neutral-950">"{turn.displayQuery}"</span> 의 다나와
-                                실측 가격을 찾고 있습니다
-                              </>
-                            }
-                            candidates={turn.partialCandidates}
-                          />
-                        )}
-                        {turn.status === 'error' && (
-                          <ErrorCard
-                            message={turn.errorMessage}
-                            onReset={() => retryTurn(turn.id)}
-                            resetLabel="다시 시도"
-                          />
-                        )}
-                        {turn.status === 'result' && turn.result && (
-                          <SearchResults
-                            result={turn.result}
-                            onSelectBrand={(brand) => selectBrand(turn.id, brand)}
-                            onConfirmFacets={(values) => selectFacets(turn.id, values)}
-                          />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <div ref={threadEndRef} />
               </div>
-              <div ref={threadEndRef} />
             </div>
-          </div>
 
             <div className="shrink-0 px-6 pt-3 pb-6 bg-gradient-to-t from-white via-white/95 to-transparent">
               <div className="max-w-3xl mx-auto w-full">{composer}</div>

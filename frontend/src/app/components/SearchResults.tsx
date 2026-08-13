@@ -1,7 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowUpRight, RotateCcw, Search, Truck } from 'lucide-react';
-import type { ClarifyFacet as ClarifyFacetType, DanawaStreamCandidate, DecideResult, BrandOption } from '../lib/api';
+import { AlertTriangle, ArrowUpRight, Check, RotateCcw, Search, Truck } from 'lucide-react';
+import type {
+  ClarifyFacet as ClarifyFacetType,
+  DanawaStreamCandidate,
+  DecideResult,
+  DecideStage,
+  BrandOption,
+  Proposal,
+} from '../lib/api';
+import { askClarifyQuestion, matchClarifyOption } from '../lib/api';
+import GradientChatInput from './ui/gradient-chat-input';
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
@@ -107,6 +116,80 @@ export const LoadingCard = ({
   </Card>
 );
 
+const STAGE_LABEL: Record<DecideStage, string> = {
+  refining: '질의를 다듬고 있습니다',
+  searching: '다나와에서 검색하고 있습니다',
+  proposing: 'ChatGPT · Gemini · DeepSeek가 후보를 찾고 있습니다',
+  challenging: 'DeepSeek가 근거를 검증하고 있습니다',
+  judging: 'Claude가 근거를 비교해 최종 추천을 고르고 있습니다',
+};
+
+const ProposedByChips = ({ proposedBy }: { proposedBy: string[] | null | undefined }) =>
+  proposedBy && proposedBy.length > 0 ? (
+    <span className="text-[10px] font-mono uppercase tracking-widest text-neutral-400">
+      {proposedBy.map((a) => AGENT_LABEL[a] || a).join(' · ')}
+    </span>
+  ) : null;
+
+const VerifiedBadge = ({ verified }: { verified: boolean | null | undefined }) => {
+  if (verified === true) {
+    return (
+      <div className="shrink-0 w-5 h-5 rounded-full bg-[#4ADE80]/15 flex items-center justify-center">
+        <Check className="w-3 h-3 text-[#166534]" strokeWidth={3} />
+      </div>
+    );
+  }
+  if (verified === false) {
+    return (
+      <div className="shrink-0 w-5 h-5 rounded-full bg-amber-500/15 flex items-center justify-center">
+        <AlertTriangle className="w-3 h-3 text-amber-700" strokeWidth={2.5} />
+      </div>
+    );
+  }
+  return <div className="shrink-0 w-5 h-5 rounded-full bg-black/5" />;
+};
+
+const CandidateProgressRow = ({ proposal }: { proposal: Proposal }) => (
+  <div className="flex items-start gap-3 py-2.5 border-b border-black/5 last:border-b-0">
+    <VerifiedBadge verified={proposal.verified} />
+    <div className="min-w-0 flex-1">
+      <div className="flex items-center gap-2">
+        <p className="min-w-0 flex-1 text-sm font-light text-neutral-600 truncate">
+          {proposal.error ? proposal.error : `${proposal.product_name} · ${proposal.price || '가격 미확인'}`}
+        </p>
+        <ProposedByChips proposedBy={proposal.proposed_by} />
+      </div>
+      {proposal.challenge_note && (
+        <p className="mt-0.5 text-xs font-light text-neutral-400 truncate">{proposal.challenge_note}</p>
+      )}
+    </div>
+  </div>
+);
+
+// AI 오케스트레이션(adk_pipeline: 정제→검색→제안→검증→심사) 진행 상태를 턴 안에서
+// 보여준다 - Hero.tsx가 turn.streamingStage/streamingProposals(SearchContext.runTurn이
+// decideStream 이벤트로 채운다)를 이 컴포넌트에 그대로 넘긴다.
+export const StreamingCard = ({ stage, proposals }: { stage: DecideStage; proposals: Proposal[] }) => (
+  <Card>
+    <div className="flex flex-col items-center text-center py-2 gap-6">
+      <motion.div
+        animate={{ rotate: 360 }}
+        transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
+        className="w-8 h-8 rounded-full border-2 border-black/10 border-t-[#4ADE80]"
+      />
+      <p className="text-sm font-light text-neutral-500">{STAGE_LABEL[stage]}</p>
+
+      {proposals.length > 0 && (
+        <div className="w-full text-left">
+          {proposals.map((p, i) => (
+            <CandidateProgressRow key={p.url ?? i} proposal={p} />
+          ))}
+        </div>
+      )}
+    </div>
+  </Card>
+);
+
 export const ErrorCard = ({
   message,
   onReset,
@@ -124,14 +207,90 @@ export const ErrorCard = ({
   </Card>
 );
 
+const OptionButton = ({ value, onClick }: { value: string; onClick: () => void }) => (
+  <button
+    onClick={onClick}
+    className="px-4 py-2 rounded-full border border-black/10 text-sm font-light hover:bg-neutral-950 hover:text-white hover:border-neutral-950 transition-all"
+  >
+    {value}
+  </button>
+);
+
+export type ClarifyStep = 'brand' | 'product' | 'volume' | 'quantity';
+
+const CLARIFY_STEP_ORDER: ClarifyStep[] = ['brand', 'product', 'volume', 'quantity'];
+
+// 고정 축(제품/용량/개수 - 브랜드는 아래에서 다나와 브랜드 최저가 단축 경로로
+// 따로 렌더된다) 하나를 실제 상담원처럼 자연스러운 질문 한 문장으로 물어보고,
+// 버튼과 채팅 입력(GradientChatInput, 실사용 승격) 둘 다로 답을 받는다. 이
+// 카드는 턴 하나에 로컬로 붙는 독립 인스턴스라(uncontrolled GradientChatInput) -
+// 사용자가 고른 값 자체는 onSelectOption을 통해 다음 ChatTurn의 말풍선
+// (turn.displayQuery)으로 자연스럽게 이어지므로, 여기서는 봇의 질문/답장
+// 말풍선만 로컬로 보여주면 충분하다(전체 대화 스레드와 중복되지 않는다).
+const FixedAxisClarifyCard = ({
+  query,
+  options,
+  onSelectOption,
+}: {
+  query: string;
+  options: string[];
+  onSelectOption: (value: string) => void;
+}) => {
+  const [question, setQuestion] = useState<string | null>(null);
+  const askedKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const key = options.join('|');
+    if (askedKeyRef.current === key) return;
+    askedKeyRef.current = key;
+    setQuestion(null);
+    askClarifyQuestion(query, options).then(setQuestion);
+  }, [query, options.join('|')]);
+
+  const handleChatSend = async (message: string): Promise<string> => {
+    const { matched, reply } = await matchClarifyOption(message, options);
+    if (matched) onSelectOption(matched);
+    return reply;
+  };
+
+  return (
+    <div>
+      {question && (
+        <div className="mb-3 inline-block max-w-[85%] rounded-[14px_14px_14px_4px] bg-black/[0.04] px-4 py-2.5 text-sm font-light text-neutral-700">
+          {question}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 mb-3">
+        {options.map((value) => (
+          <OptionButton key={value} value={value} onClick={() => onSelectOption(value)} />
+        ))}
+      </div>
+      <GradientChatInput
+        key={options.join('|')}
+        placeholder="채팅으로 말씀하셔도 돼요"
+        autoReply={null}
+        sound={false}
+        onSend={handleChatSend}
+      />
+    </div>
+  );
+};
+
 interface Props {
   result: DecideResult;
   onSelectBrand: (brand: string) => void;
   onConfirmFacets: (values: string[]) => void;
+  onSelectClarifyOption: (value: string) => void;
   onReset?: () => void;
 }
 
-export const SearchResults = ({ result, onSelectBrand, onConfirmFacets, onReset }: Props) => {
+export const SearchResults = ({
+  result,
+  onSelectBrand,
+  onConfirmFacets,
+  onSelectClarifyOption,
+  onReset,
+}: Props) => {
   // AI 상세검색: facet마다 하나씩 고르고, 화면에 떠 있는 기준을 전부 고른
   // 순간에만 검색이 실행된다(사용자 요청, 2026-08-13: "상세검색에서 고를때마다
   // 검색하는걸로 바꿧어 다시 다 고르면 검색되는걸로 바꿔" - 브랜드 하나만 눌러도
@@ -153,8 +312,9 @@ export const SearchResults = ({ result, onSelectBrand, onConfirmFacets, onReset 
   }, [selectedFacets]);
 
   if (result.mode === 'clarify') {
-    const { brands, volumes, quantities } = result.options;
-    const hasAnyOptions = brands.length > 0 || facets.length > 0;
+    const { brands, products, volumes, quantities } = result.options;
+    const hasAnyOptions =
+      brands.length > 0 || facets.length > 0 || products.length > 0 || volumes.length > 0 || quantities.length > 0;
 
     // 지금까지 고른 값들(어느 facet이든 - 브랜드로 한정 안 됨)로 아직 안 고른
     // facet들의 보이는 옵션을 즉시 좁힌다(추가 요청 없이, 사용자 요청 2026-08-13:
@@ -197,10 +357,29 @@ export const SearchResults = ({ result, onSelectBrand, onConfirmFacets, onReset 
       });
     };
 
+    // 고정 축(제품/용량/개수) 중 이번 라운드에 물어볼 하나만 고른다 - 한 번에
+    // 다 보여주면 서로 다른 축이 뒤섞여 어떤 조합을 고르는 건지 애매해진다.
+    // 옵션이 2개 이상인("진짜 애매한") 축을 우선하고, 전부 1개뿐이면(폴백) 그중
+    // 아무거나로 진행할 수 있게 열어준다. 브랜드는 다나와 브랜드 최저가 단축
+    // 경로(onSelectBrand)로 이미 별도 렌더되므로 이 로테이션에서 제외한다.
+    // facets(AI 상세검색)와는 서로 다른 clarify 소스(check_clarify_facets/
+    // run_clarify)라 겹치지 않고 그대로 병행 노출된다.
+    const fixedOptionsByStep: Partial<Record<ClarifyStep, string[]>> = {
+      product: products,
+      volume: volumes,
+      quantity: quantities,
+    };
+    const fixedSteps = CLARIFY_STEP_ORDER.filter((s): s is Exclude<ClarifyStep, 'brand'> => s !== 'brand');
+    const step =
+      fixedSteps.find((s) => (fixedOptionsByStep[s]?.length ?? 0) > 1) ??
+      fixedSteps.find((s) => (fixedOptionsByStep[s]?.length ?? 0) > 0) ??
+      null;
+    const stepOptions = step ? fixedOptionsByStep[step] ?? [] : [];
+
     return (
       <Card>
         <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
-          {hasAnyOptions ? 'AI 상세검색 · 조건을 모두 선택하면 검색해요' : '조건을 좁힐 수 없었어요'}
+          {hasAnyOptions ? 'AI 상세검색 · 조건을 선택하거나 채팅으로 답해주세요' : '조건을 좁힐 수 없었어요'}
         </span>
         {brands.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-4 last:mb-0">
@@ -261,10 +440,10 @@ export const SearchResults = ({ result, onSelectBrand, onConfirmFacets, onReset 
             </div>
           );
         })}
-        {(volumes.length > 0 || quantities.length > 0) && (
-          <p className="mt-2 text-xs font-light text-neutral-400">
-            {[...volumes, ...quantities].join(' · ')}
-          </p>
+        {step && (
+          <div className="mb-4 last:mb-0">
+            <FixedAxisClarifyCard query={result.query} options={stepOptions} onSelectOption={onSelectClarifyOption} />
+          </div>
         )}
         {onReset && <ResetLink onReset={onReset} />}
       </Card>
@@ -313,10 +492,19 @@ export const SearchResults = ({ result, onSelectBrand, onConfirmFacets, onReset 
 
   // mode === 'single'
   const { decision, proposals } = result;
+  const winningProposal = proposals.find((p) => p.url === decision.url);
+  const winningProposers = winningProposal?.proposed_by?.length
+    ? winningProposal.proposed_by
+    : [decision.chosen_agent];
+  const headerLabel =
+    winningProposers.length > 1
+      ? `${winningProposers.map((a) => AGENT_LABEL[a] || a).join(' · ')} 공동 제안 채택`
+      : `${AGENT_LABEL[winningProposers[0]] || winningProposers[0]} 제안 채택`;
+
   return (
     <Card>
       <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
-        최종 추천 · {AGENT_LABEL[decision.chosen_agent] || decision.chosen_agent} 제안 채택
+        최종 추천 · {headerLabel}
       </span>
       <a
         href={decision.url}
@@ -337,15 +525,16 @@ export const SearchResults = ({ result, onSelectBrand, onConfirmFacets, onReset 
       </a>
       <p className="text-sm font-light text-neutral-600 leading-relaxed mb-6">{decision.reasoning}</p>
 
-      <div className="pt-4 border-t border-black/5 grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {proposals.map((p) => (
-          <div key={p.agent} className="text-xs">
-            <span className="font-mono uppercase tracking-widest text-neutral-400">
-              {AGENT_LABEL[p.agent] || p.agent}
-            </span>
-            <p className="mt-1 font-light text-neutral-600 truncate">
-              {p.error ? p.error : `${p.product_name} · ${p.price || '가격 미확인'}`}
-            </p>
+      <div className="pt-4 border-t border-black/5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {proposals.map((p, i) => (
+          <div key={p.url ?? i} className="flex items-start gap-2 text-xs">
+            <VerifiedBadge verified={p.verified} />
+            <div className="min-w-0">
+              <ProposedByChips proposedBy={p.proposed_by} />
+              <p className="mt-1 font-light text-neutral-600 truncate">
+                {p.error ? p.error : `${p.product_name} · ${p.price || '가격 미확인'}`}
+              </p>
+            </div>
           </div>
         ))}
       </div>

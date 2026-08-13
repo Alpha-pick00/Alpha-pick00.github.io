@@ -24,6 +24,9 @@ def _client() -> AsyncOpenAI:
 
 
 async def propose(query: str, search_results: list[SearchResult]) -> AgentCandidates:
+    """PRESERVED FROM seungmin/lsm - run_single_debate_price_table_variant
+    (app.debate)에서만 쓰인다. run_debate()의 실제 LLM 경로는 adk_pipeline이
+    담당하며 거기서는 propose 단계가 LlmAgent로 이미 구현돼 있다."""
     try:
         client = _client()
         response = await client.chat.completions.create(

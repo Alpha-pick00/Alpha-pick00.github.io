@@ -105,3 +105,22 @@ def test_tracking_params_only_difference_merges():
 
 def test_empty_entries_returns_empty_list():
     assert merge_candidates([]) == []
+
+
+def test_same_product_different_retailers_picks_cheapest_price_and_matching_url():
+    """이름 유사도로 묶인(= URL도 판매처도 다른) 동일 상품 후보들 중, 최종적으로
+    보여줄 가격은 최저가여야 하고 그 URL/판매처는 실제로 그 최저가를 파는
+    판매처의 것이어야 한다 — 가격 다수결과 URL 다수결을 따로 하면 서로 다른
+    판매처의 값이 섞일 수 있다."""
+    entries = [
+        ("gpt", _candidate("에어팟 프로 2세대", price_krw=259000, retailer="쿠팡", url="https://coupang.com/vp/products/1")),
+        ("gemini", _candidate("에어팟 프로 2세대", price_krw=239000, retailer="11번가", url="https://11st.co.kr/products/2")),
+        ("deepseek", _candidate("에어팟 프로 2세대", price_krw=259000, retailer="G마켓", url="https://gmarket.co.kr/products/3")),
+    ]
+
+    merged = merge_candidates(entries)
+
+    assert len(merged) == 1
+    assert merged[0]["price_krw"] == 239000
+    assert merged[0]["retailer"] == "11번가"
+    assert merged[0]["url"] == "https://11st.co.kr/products/2"

@@ -19,7 +19,8 @@ export interface ChatMessage {
 export interface GradientChatInputProps {
   /** Placeholder shown inside the text field. */
   placeholder?: string;
-  /** Auto-reply pushed back after a user message. Pass `null` to disable. */
+  /** Static auto-reply pushed back after a user message. Used when `onSend`
+   * doesn't resolve its own reply text. Pass `null` to disable. */
   autoReply?: string | null;
   /** Delay (ms) before the auto-reply lands. */
   autoReplyDelay?: number;
@@ -29,9 +30,62 @@ export interface GradientChatInputProps {
   sound?: boolean;
   /** The spectrum used for the reveal glow (top → bottom). */
   gradientColors?: string[];
-  /** Fired whenever the user submits a message. */
-  onSend?: (message: string) => void;
+  /** Fired whenever the user submits a message. Return (or resolve to) a
+   * string to use as the bot's reply instead of the static `autoReply` —
+   * lets callers answer with something computed from the actual message
+   * (e.g. a server response) rather than a fixed canned line. */
+  onSend?: (message: string) => void | string | null | Promise<string | null | void>;
   className?: string;
+  /** Controlled message list — when provided (together with
+   * `onMessagesChange`), the component appends to this list instead of an
+   * internal one. Lets several GradientChatInput instances across a flow
+   * (e.g. the first search box and later follow-up steps) share one
+   * continuous conversation thread instead of each starting over. */
+  messages?: ChatMessage[];
+  onMessagesChange?: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
+  /** Set to false when a bubble trail for this same conversation is already
+   * rendered elsewhere on screen (e.g. via a standalone `ChatBubbleTrail`) —
+   * keeps this instance as just the input/send chrome, no duplicate stack. */
+  showBubbles?: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/*  bubble trail — reusable on its own (e.g. rendered above a custom     */
+/*  input that isn't GradientChatInput itself)                          */
+/* ------------------------------------------------------------------ */
+export interface ChatBubbleTrailProps {
+  messages: ChatMessage[];
+  maxVisible?: number;
+  className?: string;
+}
+
+export function ChatBubbleTrail({ messages, maxVisible = 4, className }: ChatBubbleTrailProps) {
+  const visible = messages.slice(-maxVisible);
+
+  return (
+    <div className={cn("flex w-full flex-col items-end gap-2", className)}>
+      <AnimatePresence initial={false}>
+        {visible.map((m) => (
+          <motion.div
+            key={m.id}
+            layout
+            initial={{ opacity: 0, y: 24, scale: 0.85 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.85 }}
+            transition={{ type: "spring", stiffness: 420, damping: 32 }}
+            className={cn(
+              "max-w-[260px] break-words px-3.5 py-2.5 text-sm shadow-[0_10px_20px_-6px_rgba(0,0,0,0.15)]",
+              m.sender === "user"
+                ? "self-end rounded-[14px_14px_6px_14px] border border-border bg-background text-foreground"
+                : "self-start rounded-[14px_14px_14px_6px] bg-primary text-primary-foreground",
+            )}
+          >
+            {m.text}
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -57,9 +111,14 @@ export default function GradientChatInput({
   gradientColors = DEFAULT_GRADIENT,
   onSend,
   className,
+  messages: controlledMessages,
+  onMessagesChange,
+  showBubbles = true,
 }: GradientChatInputProps) {
   const [value, setValue] = React.useState("");
-  const [messages, setMessages] = React.useState<ChatMessage[]>([]);
+  const [internalMessages, setInternalMessages] = React.useState<ChatMessage[]>([]);
+  const isControlled = controlledMessages !== undefined && onMessagesChange !== undefined;
+  const messages = isControlled ? controlledMessages : internalMessages;
   const idRef = React.useRef(0);
   const timersRef = React.useRef<ReturnType<typeof setTimeout>[]>([]);
   const audioRef = React.useRef<AudioContext | null>(null);
@@ -135,30 +194,53 @@ export default function GradientChatInput({
     };
   }, []);
 
-  const pushMessage = (text: string, sender: ChatMessage["sender"]) =>
-    setMessages((prev) => [...prev, { id: idRef.current++, text, sender }]);
+  const pushMessage = (text: string, sender: ChatMessage["sender"]) => {
+    const entry: ChatMessage = { id: idRef.current++, text, sender };
+    if (isControlled) {
+      onMessagesChange!((prev) => [...prev, entry]);
+    } else {
+      setInternalMessages((prev) => [...prev, entry]);
+    }
+  };
 
-  const handleSend = () => {
+  const scheduleReply = (text: string) => {
+    const t = setTimeout(() => {
+      pushMessage(text, "bot");
+      playReceive();
+      timersRef.current = timersRef.current.filter((timer) => timer !== t);
+    }, autoReplyDelay);
+    timersRef.current.push(t);
+  };
+
+  const handleSend = async () => {
     const text = value.trim();
     if (!text) return;
 
-    onSend?.(text);
     pushMessage(text, "user");
     playSend();
     setValue("");
 
-    if (autoReply) {
-      const t = setTimeout(() => {
-        pushMessage(autoReply, "bot");
+    const result = onSend?.(text);
+    const resolved = result instanceof Promise ? await result : result;
+    const replyText = typeof resolved === "string" ? resolved : autoReply;
+
+    if (replyText) {
+      // controlled(공유 스레드) 모드에서는 지연 없이 바로 찍는다 — onSend가
+      // 매칭에 성공하면 그 자리에서 검색을 트리거하는 경우가 있는데, 그러면
+      // 이 컴포넌트가 곧장 언마운트되면서(예: clarify 카드가 로딩 화면으로
+      // 교체) 예약된 setTimeout이 언마운트 클린업에 취소돼 답장이 영영 안
+      // 뜨는 문제가 있었다. 독립 실행(데모) 모드에서는 기존처럼 살짝 지연을
+      // 줘서 타이핑하는 듯한 느낌을 유지한다.
+      if (isControlled) {
+        pushMessage(replyText, "bot");
         playReceive();
-        timersRef.current = timersRef.current.filter((timer) => timer !== t);
-      }, autoReplyDelay);
-      timersRef.current.push(t);
+      } else {
+        scheduleReply(replyText);
+      }
     }
   };
 
   const hasText = value.trim().length > 0;
-  const visible = messages.slice(-maxVisible);
 
   return (
     <div className={cn("relative mx-auto w-full max-w-lg", className)}>
@@ -203,28 +285,13 @@ export default function GradientChatInput({
         </div>
 
         {/* bubble stack — floats above the card */}
-        <div className="pointer-events-none absolute bottom-[70px] right-0 z-[1] flex w-full flex-col items-end gap-2">
-          <AnimatePresence initial={false}>
-            {visible.map((m) => (
-              <motion.div
-                key={m.id}
-                layout
-                initial={{ opacity: 0, y: 24, scale: 0.85 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.85 }}
-                transition={{ type: "spring", stiffness: 420, damping: 32 }}
-                className={cn(
-                  "max-w-[260px] break-words px-3.5 py-2.5 text-sm shadow-[0_10px_20px_-6px_rgba(0,0,0,0.15)]",
-                  m.sender === "user"
-                    ? "self-end rounded-[14px_14px_6px_14px] border border-border bg-background text-foreground"
-                    : "self-start rounded-[14px_14px_14px_6px] bg-primary text-primary-foreground",
-                )}
-              >
-                {m.text}
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
+        {showBubbles && (
+          <ChatBubbleTrail
+            messages={messages}
+            maxVisible={maxVisible}
+            className="pointer-events-none absolute bottom-[70px] right-0 z-[1]"
+          />
+        )}
       </div>
     </div>
   );

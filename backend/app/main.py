@@ -1,12 +1,19 @@
+import asyncio
 import json
+import logging
+from contextlib import asynccontextmanager
 
 import jwt
+
+logging.basicConfig(level=logging.INFO)
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import TypeAdapter
 
-from . import autocomplete, history
+from . import autocomplete, danawa, history, popularity_scheduler
+from .agents import gpt as gpt_agent
 from .auth import google as google_auth
 from .auth import kakao as kakao_auth
 from .auth import naver as naver_auth
@@ -17,6 +24,9 @@ from .debate import (
     run_danawa_only_debate,
     run_danawa_only_debate_stream,
     run_debate,
+    run_debate_stream,
+    run_single_debate,
+    run_single_debate_stream,
 )
 from .ocr import cleanup as ocr_cleanup
 from .ocr import google_vision as google_vision_ocr
@@ -24,6 +34,10 @@ from .schemas import (
     AuthResponse,
     BrandPriceResponse,
     BulkDecideResponse,
+    ClarifyAskRequest,
+    ClarifyAskResponse,
+    ClarifyMatchRequest,
+    ClarifyMatchResponse,
     ClarifyResponse,
     DecideRequest,
     DecideResponse,
@@ -36,7 +50,16 @@ from .schemas import (
     User,
 )
 
-app = FastAPI(title="αlpha Pick Purchase Decision API")
+_decide_result_adapter = TypeAdapter(DecideResult)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    popularity_scheduler.start()
+    yield
+    popularity_scheduler.stop()
+
+
+app = FastAPI(title="αlpha Pick Purchase Decision API", lifespan=lifespan)
 
 # GitHub Pages(정적 프론트엔드)에서 이 API를 브라우저로 직접 호출하므로 CORS 허용이 필요하다.
 # 인증이 없는 API라 origin을 넓게 열어도 데이터 유출 위험은 없지만, "*"로 두면 아무 사이트나
@@ -104,6 +127,29 @@ def _autocomplete_terms(request: DecideRequest, result: DecideResult) -> list[st
     return terms
 
 
+async def _resolve_danawa_urls(result: DecideResult) -> DecideResult:
+    """최종 추천 URL이 다나와 가격비교 페이지면, 사용자가 실제로 구매할 수
+    있는 최저가 판매처 링크로 바꿔치기한다 — 다나와 페이지 자체는 여러 판매처를
+    나열만 할 뿐 바로 살 수 있는 곳이 아니다(danawa.py 참고). 다나와가 아니거나
+    해석에 실패하면 원래 값 그대로 둔다. 최종 결과에만 적용하고 proposals의
+    나머지 후보 URL은 그대로 둔다 — 사용자가 실제로 클릭할 하나만 바꾸면 된다."""
+    if isinstance(result, DecideResponse):
+        result.decision.url, result.decision.retailer = await danawa.resolve_lowest_price(
+            result.decision.url, result.decision.retailer
+        )
+    elif isinstance(result, BulkDecideResponse):
+        resolved = await asyncio.gather(
+            *(danawa.resolve_lowest_price(o.url, o.retailer) for o in result.decision.options)
+        )
+        for option, (url, retailer) in zip(result.decision.options, resolved):
+            option.url, option.retailer = url, retailer
+    elif isinstance(result, BrandPriceResponse) and result.option:
+        result.option.url, result.option.retailer = await danawa.resolve_lowest_price(
+            result.option.url, result.option.retailer
+        )
+    return result
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -112,6 +158,26 @@ def health() -> dict[str, str]:
 @app.get("/autocomplete", response_model=list[str])
 async def get_autocomplete(q: str, limit: int = 8) -> list[str]:
     return await autocomplete.suggest_merged(q, limit)
+
+
+@app.post("/clarify/match", response_model=ClarifyMatchResponse)
+async def clarify_match(request: ClarifyMatchRequest) -> ClarifyMatchResponse:
+    """대화형 HITL — 사용자가 clarify 선택지를 버튼 대신 채팅으로 타이핑했을 때,
+    그 문장이 현재 옵션 중 뭘 가리키는지 해석하고 자연스러운 답장(reply)도 함께
+    받는다 — 봇의 응답이 고정 문구가 아니라 실제 LLM이 생성한 문장이 되도록.
+    matched가 실패/불확실하면 None — 프론트는 버튼이 항상 그대로 남아있으므로
+    이 경우 다시 물어보면 된다."""
+    matched, reply = await gpt_agent.match_clarify_reply(request.message, request.options)
+    return ClarifyMatchResponse(matched=matched, reply=reply)
+
+
+@app.post("/clarify/ask", response_model=ClarifyAskResponse)
+async def clarify_ask(request: ClarifyAskRequest) -> ClarifyAskResponse:
+    """이번 라운드에 물어볼 축(브랜드/제품/용량/개수)의 후보들을 실제 상담원처럼
+    자연스러운 질문 문장으로 바꾼다 — 프론트가 "브랜드를 선택하면 좁혀드려요"
+    같은 고정 라벨 대신 이 문장을 채팅 말풍선으로 먼저 보여준다."""
+    message = await gpt_agent.generate_clarify_question(request.query, request.options)
+    return ClarifyAskResponse(message=message)
 
 
 @app.get("/auth/me", response_model=User)
@@ -186,6 +252,8 @@ async def decide(request: DecideRequest, background_tasks: BackgroundTasks) -> D
     try:
         if request.brand:
             result = await run_brand_price(request.query, request.brand)
+        elif request.skip_intent_check:
+            result = await run_single_debate(request.query, skip_clarify=True)
         else:
             result = await run_debate(request.query)
     except (RuntimeError, ValueError) as exc:
@@ -197,8 +265,56 @@ async def decide(request: DecideRequest, background_tasks: BackgroundTasks) -> D
             status_code=502, detail="구매 결정을 처리하는 중 오류가 발생했습니다."
         ) from exc
 
+    result = await _resolve_danawa_urls(result)
     background_tasks.add_task(autocomplete.record_terms, _autocomplete_terms(request, result))
     return result
+
+
+@app.post("/decide/stream")
+async def decide_stream(request: DecideRequest) -> StreamingResponse:
+    """/decide와 같은 일을 하지만, 검색 완료·에이전트별 제안 완료·심사 단계마다
+    한 줄씩(NDJSON) 흘려보낸다. 그래야 프론트가 세 에이전트를 다 기다리지 않고
+    먼저 끝난 제안부터 화면에 보여줄 수 있다. 응답 헤더가 이미 200으로 나간
+    뒤라 실패해도 HTTP 상태 코드를 바꿀 수 없으므로, 에러도 "error" 이벤트로
+    흘려보낸다 — 프론트는 이 타입을 보고 에러 처리한다."""
+
+    async def event_generator():
+        try:
+            if request.brand:
+                result: DecideResult = await run_brand_price(request.query, request.brand)
+                result = await _resolve_danawa_urls(result)
+                yield json.dumps({"type": "final", "result": result.model_dump()}) + "\n"
+            else:
+                result = None
+                stream = (
+                    run_single_debate_stream(request.query, skip_clarify=True)
+                    if request.skip_intent_check
+                    else run_debate_stream(request.query)
+                )
+                async for event in stream:
+                    if event["type"] == "final":
+                        result = await _resolve_danawa_urls(
+                            _decide_result_adapter.validate_python(event["result"])
+                        )
+                        event["result"] = result.model_dump()
+                    yield json.dumps(event) + "\n"
+        except (RuntimeError, ValueError) as exc:
+            # RuntimeError: 제안 전부 실패, ValueError: judge 응답에서 JSON을 못 찾음
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+            return
+        except Exception:
+            # 외부 LLM API 오류 등 예상 못한 실패는 내부 정보를 노출하지 않고 감싼다.
+            yield json.dumps(
+                {"type": "error", "message": "구매 결정을 처리하는 중 오류가 발생했습니다."}
+            ) + "\n"
+            return
+
+        if result is not None:
+            asyncio.create_task(
+                asyncio.to_thread(autocomplete.record_terms, _autocomplete_terms(request, result))
+            )
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
 @app.post("/decide/clarify", response_model=ClarifyResponse)

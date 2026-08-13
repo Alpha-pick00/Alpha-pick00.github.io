@@ -22,6 +22,11 @@ class Settings:
 
     google_vision_api_key: str | None = os.environ.get("GOOGLE_VISION_API_KEY")
 
+    # 검색 캐시의 의미 기반(임베딩) 매칭 on/off. openai_api_key는 GPT 에이전트가
+    # 이미 실사용 중이라 그 자체를 끄는 것으로는 이 기능만 독립적으로 끌 수 없어
+    # 별도 스위치를 둔다.
+    semantic_cache_enabled: bool = os.environ.get("SEMANTIC_CACHE_ENABLED", "true").lower() != "false"
+
     # 소셜 로그인 (Google Client ID는 프론트엔드 VITE_GOOGLE_CLIENT_ID로만 쓰임 —
     # access_token으로 유저 정보를 조회하는 방식이라 백엔드는 client id가 필요 없다)
     kakao_client_id: str | None = os.environ.get("KAKAO_CLIENT_ID")

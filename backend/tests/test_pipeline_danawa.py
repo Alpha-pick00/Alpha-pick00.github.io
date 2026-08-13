@@ -8,7 +8,11 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.debate import run_danawa_only_debate, run_danawa_only_debate_stream, run_single_debate
+from app.debate import (
+    run_danawa_only_debate,
+    run_danawa_only_debate_stream,
+    run_single_debate_price_table_variant,
+)
 from app.main import app
 from app.price_table import (
     MAX_DANAWA_URLS,
@@ -80,10 +84,12 @@ def _patch_llm_layer(monkeypatch):
     monkeypatch.setattr("app.agents.gemini.propose", _fake_agent("gemini"))
     monkeypatch.setattr("app.agents.deepseek.propose", _fake_agent("deepseek"))
     monkeypatch.setattr("app.agents.judge.decide", _fake_decide)
-    # run_debate()가 LLM 키 유무로 run_single_debate/run_danawa_only_debate를
-    # 자동 분기하는데(로컬 실험용, .env에 키가 없으면 다나와 전용 경로로 빠짐),
-    # 이 테스트들은 LLM 경로 자체를 검증하는 게 목적이라 개발자 로컬 .env
-    # 상태와 무관하게 항상 LLM 경로를 타도록 강제한다.
+    # 2026-08 통합 병합 이후 /decide(run_debate -> run_single_debate)는 ADK
+    # 파이프라인(adk_pipeline.run)을 타므로 이 4개 mock을 거치지 않는다 - 다나와
+    # price_table 후보를 judge 풀에 직접 넣는 통합은 아직 adk_pipeline으로
+    # 이식되지 않았다(app.debate.run_single_debate_price_table_variant의 TODO
+    # 참고). 그래서 이 mock들을 실제로 쓰는 테스트는 run_single_debate_price_table_variant를
+    # 직접 호출한다 - HTTP 엔드포인트(/decide)를 거치지 않는다.
     monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: True)
     # 실제 sqlite 자동완성 인덱스에 테스트 검색어가 쌓이지 않도록 무력화한다 -
     # /decide의 BackgroundTasks가 record_terms를 실제로 실행하기 때문.
@@ -110,7 +116,7 @@ def _patch_search(monkeypatch, danawa_url: str | None):
     monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
 
 
-# -- 1. 다나와 페치 실패해도 /decide 200 --------------------------------------
+# -- 1. 다나와 페치 실패해도 200 -----------------------------------------------
 
 
 def test_decide_returns_200_when_danawa_fetch_fails(monkeypatch):
@@ -122,9 +128,8 @@ def test_decide_returns_200_when_danawa_fetch_fails(monkeypatch):
 
     monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _boom)
 
-    resp = client.post("/decide", json={"query": "테스트 상품"})
-    assert resp.status_code == 200
-    data = resp.json()
+    result = asyncio.run(run_single_debate_price_table_variant("테스트 상품"))
+    data = result.model_dump()
     assert data["price_table"] is None
     assert data["decision"]["price_source"] == "llm_guess"
 
@@ -141,9 +146,8 @@ def test_decide_returns_llm_only_when_danawa_times_out(monkeypatch):
 
     monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _timeout)
 
-    resp = client.post("/decide", json={"query": "테스트 상품"})
-    assert resp.status_code == 200
-    data = resp.json()
+    result = asyncio.run(run_single_debate_price_table_variant("테스트 상품"))
+    data = result.model_dump()
     assert data["price_table"] is None
     assert data["decision"]["product_name"] == "테스트 상품"
 
@@ -289,9 +293,8 @@ def test_decide_response_url_is_the_danawa_bridge_url_itself(monkeypatch):
 
     monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fake_fetch)
 
-    resp = client.post("/decide", json={"query": "테스트 상품"})
-    assert resp.status_code == 200
-    data = resp.json()
+    result = asyncio.run(run_single_debate_price_table_variant("테스트 상품"))
+    data = result.model_dump()
 
     assert data["decision"]["price_source"] == "danawa_offer"
     assert data["decision"]["url"] == (
@@ -306,9 +309,8 @@ def test_existing_response_fields_are_preserved(monkeypatch):
     _patch_llm_layer(monkeypatch)
     _patch_search(monkeypatch, None)
 
-    resp = client.post("/decide", json={"query": "테스트 상품"})
-    assert resp.status_code == 200
-    data = resp.json()
+    result = asyncio.run(run_single_debate_price_table_variant("테스트 상품"))
+    data = result.model_dump()
 
     assert data["mode"] == "single"
     assert data["query"] == "테스트 상품"
@@ -760,9 +762,8 @@ def test_judge_choosing_danawa_sets_price_source_and_real_url(monkeypatch):
     monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fake_fetch)
     monkeypatch.setattr("app.agents.judge.decide", _judge_picks_danawa)
 
-    resp = client.post("/decide", json={"query": "테스트 상품"})
-    assert resp.status_code == 200
-    data = resp.json()
+    result = asyncio.run(run_single_debate_price_table_variant("테스트 상품"))
+    data = result.model_dump()
 
     assert data["decision"]["chosen_agent"] == "danawa"
     assert data["decision"]["price_source"] == "danawa_offer"

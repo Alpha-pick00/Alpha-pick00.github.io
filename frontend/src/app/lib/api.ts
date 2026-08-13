@@ -10,6 +10,9 @@ export interface Proposal {
   url: string | null;
   reasoning: string | null;
   error: string | null;
+  verified?: boolean | null;
+  challenge_note?: string | null;
+  proposed_by?: AgentName[] | null;
 }
 
 export interface Decision {
@@ -75,6 +78,7 @@ export interface ClarifyFacet {
 
 export interface ClarifyOptions {
   brands: string[];
+  products: string[];
   volumes: string[];
   quantities: string[];
   facets: ClarifyFacet[];
@@ -239,6 +243,58 @@ export async function decide(query: string, brand?: string): Promise<DecideResul
   return response.json();
 }
 
+export type DecideStage = 'refining' | 'searching' | 'proposing' | 'challenging' | 'judging';
+
+export type DecideStreamEvent =
+  | { type: 'status'; stage: DecideStage }
+  | { type: 'proposal'; proposal: Proposal }
+  | { type: 'final'; result: DecideResult }
+  | { type: 'error'; message: string };
+
+/** /decide와 같은 일을 하지만, 서버가 단계별로 흘려보내는 NDJSON(줄바꿈으로 구분된 JSON)을
+ * 그때그때 onEvent로 넘겨준다 — 세 에이전트를 다 기다리지 않고 먼저 끝난 제안부터 보여줄 수 있다. */
+export async function decideStream(
+  query: string,
+  onEvent: (event: DecideStreamEvent) => void,
+  brand?: string,
+  signal?: AbortSignal,
+  skipIntentCheck?: boolean
+): Promise<void> {
+  const response = await fetch(`${API_URL}/decide/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query,
+      ...(brand ? { brand } : {}),
+      ...(skipIntentCheck ? { skip_intent_check: true } : {}),
+    }),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(body?.detail || `요청이 실패했습니다 (${response.status})`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let newlineIndex = buffer.indexOf('\n');
+    while (newlineIndex !== -1) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (line) onEvent(JSON.parse(line) as DecideStreamEvent);
+      newlineIndex = buffer.indexOf('\n');
+    }
+  }
+}
+
 export async function extractOcr(file: File): Promise<OcrExtractResponse> {
   const formData = new FormData();
   formData.append('image', file);
@@ -254,6 +310,54 @@ export async function extractOcr(file: File): Promise<OcrExtractResponse> {
   }
 
   return response.json();
+}
+
+export interface ClarifyMatchResult {
+  matched: string | null;
+  /** LLM이 그때그때 생성한 자연어 답장 — 고정 문구가 아니라 실제 대화처럼
+   * 매번 다르게 표현된다. 호출 자체가 실패해도 안내용 기본 문구가 채워져 있어
+   * 항상 채팅에 뭔가 보여줄 수 있다. */
+  reply: string;
+}
+
+const FALLBACK_CLARIFY_REPLY = '지금은 답장을 만들지 못했어요 — 아래 선택지 중에서 골라주시겠어요?';
+
+/** clarify 화면에서 사용자가 버튼을 클릭하거나 채팅으로 타이핑했을 때, 그
+ * 입력이 현재 옵션 중 뭘 가리키는지와 자연스러운 답장을 함께 서버(GPT)에
+ * 물어본다. 실패/불확실하면 matched가 null — 호출부는 버튼이 항상 그대로
+ * 남아있으므로 이 경우 채팅에 안내만 띄우면 된다. */
+export async function matchClarifyOption(message: string, options: string[]): Promise<ClarifyMatchResult> {
+  try {
+    const response = await fetch(`${API_URL}/clarify/match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, options }),
+    });
+    if (!response.ok) return { matched: null, reply: FALLBACK_CLARIFY_REPLY };
+    return await response.json();
+  } catch {
+    return { matched: null, reply: FALLBACK_CLARIFY_REPLY };
+  }
+}
+
+const FALLBACK_CLARIFY_QUESTION = '몇 가지 후보를 찾았어요 — 아래에서 골라주시겠어요?';
+
+/** 이번 라운드에 물어볼 축(브랜드/제품/용량/개수)의 후보들을 실제 상담원처럼
+ * 자연스러운 질문 문장으로 바꿔달라고 서버(GPT)에 요청한다 — "브랜드를
+ * 선택하면 좁혀드려요" 같은 고정 라벨 대신 채팅 말풍선으로 먼저 보여줄 문장. */
+export async function askClarifyQuestion(query: string, options: string[]): Promise<string> {
+  try {
+    const response = await fetch(`${API_URL}/clarify/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, options }),
+    });
+    if (!response.ok) return FALLBACK_CLARIFY_QUESTION;
+    const data: { message: string } = await response.json();
+    return data.message || FALLBACK_CLARIFY_QUESTION;
+  } catch {
+    return FALLBACK_CLARIFY_QUESTION;
+  }
 }
 
 export async function fetchAutocomplete(query: string, signal?: AbortSignal): Promise<string[]> {

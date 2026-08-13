@@ -2,20 +2,6 @@ import React, { useRef } from 'react';
 import { motion, useScroll, useTransform, useInView } from 'motion/react';
 import weCraftImage from '../../assets/about/we-craft.jpg';
 
-import coupangLogo from '../../assets/about/logos/coupang.webp';
-import naverLogo from '../../assets/about/logos/naver.svg';
-import kurlyLogo from '../../assets/about/logos/kurly.jpg';
-import ssgLogo from '../../assets/about/logos/ssg.webp';
-import gmarketLogo from '../../assets/about/logos/gmarket.webp';
-import cjonstyleLogo from '../../assets/about/logos/cjonstyle.webp';
-import elevenstLogo from '../../assets/about/logos/11st.webp';
-import gsshopLogo from '../../assets/about/logos/gsshop.png';
-import hyundaihmallLogo from '../../assets/about/logos/hyundaihmall.webp';
-import auctionLogo from '../../assets/about/logos/auction.webp';
-import aliexpressLogo from '../../assets/about/logos/aliexpress.webp';
-import daisoLogo from '../../assets/about/logos/daiso.webp';
-import lotteimallLogo from '../../assets/about/logos/lotteimall.webp';
-import interparkLogo from '../../assets/about/logos/interpark.jpg';
 import danawaLogo from '../../assets/about/logos/danawa.webp';
 
 import chatgptLogo from '../../assets/about/logos/chatgpt.svg';
@@ -34,23 +20,7 @@ const poweredByClients = [
   { name: 'Tavily', url: 'https://tavily.com', logo: tavilyLogo },
 ];
 
-const compareClients = [
-  { name: '쿠팡', url: 'https://www.coupang.com', logo: coupangLogo },
-  { name: '네이버쇼핑', url: 'https://shopping.naver.com', logo: naverLogo },
-  { name: '컬리', url: 'https://www.kurly.com', logo: kurlyLogo },
-  { name: 'SSG', url: 'https://www.ssg.com', logo: ssgLogo },
-  { name: 'G마켓', url: 'https://www.gmarket.co.kr', logo: gmarketLogo },
-  { name: 'CJ온스타일', url: 'https://www.cjonstyle.com', logo: cjonstyleLogo },
-  { name: '11번가', url: 'https://www.11st.co.kr', logo: elevenstLogo },
-  { name: 'GS SHOP', url: 'https://www.gsshop.com', logo: gsshopLogo },
-  { name: '현대홈쇼핑', url: 'https://www.hyundaihmall.com', logo: hyundaihmallLogo },
-  { name: '옥션', url: 'https://www.auction.co.kr', logo: auctionLogo },
-  { name: '알리익스프레스', url: 'https://www.aliexpress.com', logo: aliexpressLogo },
-  { name: '다이소', url: 'https://www.daisomall.co.kr', logo: daisoLogo },
-  { name: '롯데홈쇼핑', url: 'https://www.lotteimall.com', logo: lotteimallLogo },
-  { name: '인터파크', url: 'https://www.interpark.com', logo: interparkLogo },
-  { name: '다나와', url: 'https://www.danawa.com', logo: danawaLogo },
-];
+const compareClients = [{ name: '다나와', url: 'https://www.danawa.com', logo: danawaLogo }];
 
 export const About = () => {
   const containerRef = useRef(null);
@@ -187,34 +157,20 @@ export const About = () => {
         {/* Client List - Trust Factor (full section width) */}
         <div className="mt-20 pt-16 border-t border-black/5">
           <span className="text-base font-mono uppercase tracking-widest text-neutral-400 block mb-6">We Compare across</span>
-          <style dangerouslySetInnerHTML={{__html: `
-            @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-            .marquee-track:hover { animation-play-state: paused; }
-          `}} />
-          {[compareClients.slice(0, 8), compareClients.slice(8)].map((row, rowIndex) => (
-            <div
-              key={rowIndex}
-              className="relative w-full overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)] mb-6 last:mb-0"
-            >
-              <div
-                className="marquee-track flex w-max items-center gap-10 whitespace-nowrap"
-                style={{ animation: `marquee ${rowIndex === 0 ? 50 : 60}s linear infinite` }}
+          <div className="flex items-center">
+            {compareClients.map((client) => (
+              <a
+                key={client.name}
+                href={client.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={client.name}
+                className="shrink-0 flex items-center justify-center h-16 px-6 rounded-xl bg-neutral-100 grayscale opacity-70 hover:grayscale-0 hover:opacity-100 transition-all cursor-pointer"
               >
-                {[...row, ...row].map((client, i) => (
-                  <a
-                    key={`${client.name}-${i}`}
-                    href={client.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={client.name}
-                    className="shrink-0 flex items-center justify-center h-16 px-6 rounded-xl bg-neutral-100 grayscale opacity-70 hover:grayscale-0 hover:opacity-100 transition-all cursor-pointer"
-                  >
-                    <img src={client.logo} alt={client.name} className="h-6 md:h-7 w-auto max-w-[120px] object-contain" />
-                  </a>
-                ))}
-              </div>
-            </div>
-          ))}
+                <img src={client.logo} alt={client.name} className="h-6 md:h-7 w-auto max-w-[120px] object-contain" />
+              </a>
+            ))}
+          </div>
         </div>
 
         {/* Powered By - AI Models */}

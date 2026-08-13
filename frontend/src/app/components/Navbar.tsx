@@ -43,7 +43,7 @@ export const Navbar = () => {
         hasConversation
           ? 'bg-transparent py-8 pointer-events-none'
           : scrolled
-          ? 'bg-white/80 backdrop-blur-md py-4 border-b border-black/5'
+          ? 'bg-transparent py-4 border-b border-black/5'
           : 'py-8 bg-transparent'
       }`}
     >

@@ -1,34 +1,27 @@
 import asyncio
+import logging
 
 import httpx
 
-from . import google_merchant, search_cache
+from . import embeddings, google_merchant, search_cache
 from .config import settings
 from .schemas import SearchResult
+
+logger = logging.getLogger(__name__)
 
 TAVILY_URL = "https://api.tavily.com/search"
 TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
 
-# frontend/src/app/components/About.tsx의 "We Compare across" 목록과 동일 (15개 플랫폼)
+# frontend/src/app/components/About.tsx의 "We Compare across" 목록과 동일.
+# 15개 쇼핑몰 각각의 서로 다른 페이지 구조를 스니펫만 보고 파싱하다 보니 엉뚱한
+# 상품/가격이 섞이는 문제가 있었다 — 다나와는 그 자체로 여러 판매처의 가격을
+# 한 페이지에서 비교해주는 가격비교 사이트라, 도메인을 다나와 하나로 좁혀서
+# 결과의 일관성과 정확도를 우선한다.
 # + enuri.com (PART 4-3, 2026-08-11 지시서) - 다나와처럼 판매처가 아니라
 # 가격비교 사이트지만, 다나와 하나에만 의존하면 차단됐을 때 서비스가 통째로
 # 멈춘다. 가격 데이터 소스 이중화·교차검증용으로 검색 범위에 추가한다(아직
 # 페치/파싱 어댑터는 없음 - 이건 검색 결과에 나오게만 하는 것).
 RETAILER_DOMAINS = [
-    "coupang.com",
-    "shopping.naver.com",
-    "kurly.com",
-    "ssg.com",
-    "gmarket.co.kr",
-    "cjonstyle.com",
-    "11st.co.kr",
-    "gsshop.com",
-    "hyundaihmall.com",
-    "auction.co.kr",
-    "aliexpress.com",
-    "daisomall.co.kr",
-    "lotteimall.com",
-    "interpark.com",
     "danawa.com",
     "enuri.com",
 ]
@@ -39,7 +32,6 @@ RETAILER_DOMAINS = [
 EXCLUDE_DOMAINS = [
     "dpg.danawa.com",  # 다나와 매거진/리뷰 블로그, 가격 정보 없음
     "search.danawa.com",  # 검색결과 목록 페이지 (is_generic_listing_url로도 걸리지만 애초에 제외)
-    "adcr.shopping.naver.com",  # 네이버쇼핑 광고 클릭 리다이렉트, 상품 정보 없음
 ]
 
 
@@ -70,18 +62,12 @@ async def _tavily_search(query: str, max_results: int) -> list[SearchResult]:
     return results
 
 
-async def search(query: str, max_results: int = 12) -> list[SearchResult]:
-    """Tavily 스크래핑 + Google Merchant(내 상품 피드) 결과를 합쳐서 반환한다.
+async def _fetch(query: str) -> list[SearchResult]:
+    """Tavily 스크래핑 + Google Merchant(내 상품 피드) 결과를 실제로 호출해 병합한다.
     google_merchant.search()는 설정이 없거나 계정에 매칭되는 상품이 없으면
     빈 리스트를 반환하므로, 지금은 사실상 Tavily 결과만 나온다(google_merchant
-    모듈의 docstring 참고).
-
-    같은 질의가 반복되면 search_cache에서 재사용한다 — 항상 FETCH_SIZE만큼
-    받아서 캐시해두고, 더 적은 max_results를 요청한 호출은 앞에서 잘라 쓴다."""
-    cached = search_cache.get(query)
-    if cached is not None:
-        return cached[:max_results]
-
+    모듈의 docstring 참고). 캐시를 거치지 않는 순수 조회 — search()의 캐시 미스
+    경로와 refresh()의 강제 갱신 경로가 이 함수를 공유한다."""
     merchant_task = google_merchant.search(query)
     tavily_task = _tavily_search(query, search_cache.FETCH_SIZE)
     merchant_results, tavily_results = await asyncio.gather(
@@ -96,9 +82,39 @@ async def search(query: str, max_results: int = 12) -> list[SearchResult]:
     seen_urls = {r.url for r in merchant_results}
     merged = list(merchant_results)
     merged += [r for r in tavily_results if r.url not in seen_urls]
+    return merged
 
-    search_cache.set(query, merged)
+
+async def search(query: str, max_results: int = 12) -> list[SearchResult]:
+    """같은 질의가 반복되면 search_cache에서 재사용한다 — 항상 FETCH_SIZE만큼
+    받아서 캐시해두고, 더 적은 max_results를 요청한 호출은 앞에서 잘라 쓴다.
+    완전 일치가 없으면 의미(임베딩) 기반으로 비슷한 질의의 캐시를 재사용한다 —
+    실패해도 Tavily 조회로 그대로 폴백한다."""
+    cached = search_cache.get(query)
+    if cached is not None:
+        return cached[:max_results]
+
+    query_embedding: list[float] | None = None
+    if settings.semantic_cache_enabled and settings.openai_api_key:
+        try:
+            query_embedding = await embeddings.embed_query(query)
+            match = search_cache.find_similar(query_embedding)
+            if match is not None:
+                _, results, _ = match
+                return results[:max_results]
+        except Exception:
+            logger.warning("의미 기반 캐시 조회 실패, Tavily로 폴백", exc_info=True)
+
+    merged = await _fetch(query)
+    search_cache.set(query, merged, embedding=query_embedding)
     return merged[:max_results]
+
+
+async def refresh(query: str) -> None:
+    """TTL을 기다리지 않고 캐시를 강제로 새로 채운다 — 인기 질의 우선 갱신
+    스케줄러(popularity_scheduler)가 사용."""
+    merged = await _fetch(query)
+    search_cache.set(query, merged)
 
 
 async def extract(url: str) -> str | None:

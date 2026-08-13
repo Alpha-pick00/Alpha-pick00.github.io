@@ -106,21 +106,23 @@ class _Group:
         return False
 
     def to_dict(self, shared_url_counts: dict[str, int]) -> dict:
-        # URL이 가장 짧은(=파라미터가 적은) 멤버를 대표 후보로 삼아 동률 시 근거로 쓴다.
+        # URL이 가장 짧은(=파라미터가 적은) 멤버를 대표 후보로 삼아 상품명 동률 시 근거로 쓴다.
         canonical = min(self.members, key=lambda m: len(m[1].url or ""))[1]
 
         product_name = _majority(
             [m.product_name for _, m in self.members], canonical.product_name
         )
 
-        retailers = [m.retailer for _, m in self.members if m.retailer]
-        retailer = _majority(retailers, canonical.retailer) if retailers else None
+        # 가격/판매처/URL은 한 세트로 같은 멤버에서 가져온다 — 서비스의 핵심 가치가
+        # "동일 상품의 최저가 안내"이므로, 그룹 내 최저가를 제시한 멤버를 그대로
+        # 대표로 삼는다(가격만 최저가로 바꾸고 URL은 다수결로 뽑으면 그 최저가를
+        # 실제로 안 파는 판매처의 링크가 붙는 불일치가 생긴다).
+        priced_members = [m for _, m in self.members if m.price_krw is not None]
+        cheapest = min(priced_members, key=lambda m: m.price_krw) if priced_members else canonical
 
-        prices = [m.price_krw for _, m in self.members if m.price_krw is not None]
-        price_krw = _majority(prices, canonical.price_krw) if prices else None
-
-        urls = [m.url for _, m in self.members if m.url]
-        url = _majority(urls, canonical.url) if urls else None
+        price_krw = cheapest.price_krw
+        retailer = cheapest.retailer
+        url = cheapest.url
 
         member_norm_urls = {normalize_url(m.url) for _, m in self.members if m.url}
         conflict_counts = [
