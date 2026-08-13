@@ -249,6 +249,37 @@ def build_brand_price_prompt(query: str, brand: str, search_results: list[Search
     return f"{instructions}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
 
 
+# 완전 일치 후보가 하나도 없을 때의 폴백 경로(2026-08-15, "적절한 상품 후보를
+# 찾지 못하면 다시 fallback해서 feedback 구조로 돌아가서 가장 관련성 높은
+# 상품을 추천해주는 시스템") - PROPOSAL_INSTRUCTIONS/CLARIFY_INSTRUCTIONS는
+# 브랜드/스펙이 정확히 일치하지 않으면 후보를 아예 비워서 반환하도록 요구한다
+# (그라운딩 - 존재하지 않는 상품을 지어내지 않기 위함). 이 프롬프트는 딱 그
+# 엄격함만 완화해 "정확히 일치하진 않아도 검색 결과 중 가장 관련성 높은 것
+# 하나"를 고르게 한다 - 여전히 실제로 검색 결과에 있는 상품만 골라야 하고
+# (지어내기는 금지), 왜 완벽히 일치하지 않는지를 reasoning에 반드시 밝히게
+# 해서 UI가 "낮은 확신" 캐비어로 그대로 보여줄 수 있게 한다.
+RELAXED_PICK_INSTRUCTIONS = (
+    "당신은 쇼핑 검색을 돕는 에이전트입니다. 아래 검색 결과 중 사용자 질의와 "
+    "정확히 일치하는 상품이 없더라도, 실망시키지 않도록 그나마 가장 관련성 "
+    "높은 상품 하나를 대신 추천해야 합니다. "
+    "실제로 검색 결과에 나온 상품만 고르세요 - 존재하지 않는 상품을 지어내지 "
+    "마세요. product_name/price/retailer/url은 그 검색 결과에 있는 값을 "
+    "그대로 옮기세요. "
+    "reasoning에는 반드시 이 상품이 질의와 정확히 일치하지 않는 이유(예: "
+    "브랜드는 다르지만 같은 종류의 상품, 또는 용량/사양이 다름)를 솔직하게 "
+    "먼저 밝히고, 그럼에도 가장 관련성 높다고 판단한 근거를 이어서 쓰세요. "
+    "검색 결과 전체에 사용자가 찾는 것과 아예 다른 카테고리 상품만 있어서 "
+    "추천할 만한 게 정말 하나도 없으면, 모든 필드를 빈 문자열로 두세요. "
+    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
+    '{"product_name": "...", "price": "...", "retailer": "...", "url": "...", "reasoning": "..."}'
+)
+
+
+def build_relaxed_pick_prompt(query: str, search_results: list[SearchResult]) -> str:
+    results_block = format_results_block(search_results)
+    return f"{RELAXED_PICK_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
+
+
 REFINE_QUERY_INSTRUCTIONS = (
     "당신은 사용자의 쇼핑 검색어를 실제 쇼핑몰 검색에 더 유리하게 다듬는 에이전트입니다. "
     "질의가 이미 구체적이면(브랜드·모델명·용량 등이 명확하면) 그대로 반환하세요. "

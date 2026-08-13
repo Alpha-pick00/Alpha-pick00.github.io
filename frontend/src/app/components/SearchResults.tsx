@@ -9,8 +9,7 @@ import type {
   BrandOption,
   Proposal,
 } from '../lib/api';
-import { askClarifyQuestion, matchClarifyOption } from '../lib/api';
-import GradientChatInput from './ui/gradient-chat-input';
+import { askClarifyQuestion } from '../lib/api';
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
@@ -221,12 +220,10 @@ export type ClarifyStep = 'brand' | 'product' | 'volume' | 'quantity';
 const CLARIFY_STEP_ORDER: ClarifyStep[] = ['brand', 'product', 'volume', 'quantity'];
 
 // 고정 축(제품/용량/개수 - 브랜드는 아래에서 다나와 브랜드 최저가 단축 경로로
-// 따로 렌더된다) 하나를 실제 상담원처럼 자연스러운 질문 한 문장으로 물어보고,
-// 버튼과 채팅 입력(GradientChatInput, 실사용 승격) 둘 다로 답을 받는다. 이
-// 카드는 턴 하나에 로컬로 붙는 독립 인스턴스라(uncontrolled GradientChatInput) -
-// 사용자가 고른 값 자체는 onSelectOption을 통해 다음 ChatTurn의 말풍선
-// (turn.displayQuery)으로 자연스럽게 이어지므로, 여기서는 봇의 질문/답장
-// 말풍선만 로컬로 보여주면 충분하다(전체 대화 스레드와 중복되지 않는다).
+// 따로 렌더된다) 하나를 실제 상담원처럼 자연스러운 질문 한 문장으로 물어보고
+// 버튼으로 답을 받는다. 채팅으로도 답할 수 있게 별도 입력창을 카드마다
+// 두었었는데, 화면 하단에 이미 검색창(GradientChatInput)이 있어 중복이라
+// 없앴다(사용자 요청, 2026-08-15) - 답은 버튼으로만 받는다.
 const FixedAxisClarifyCard = ({
   query,
   options,
@@ -247,12 +244,6 @@ const FixedAxisClarifyCard = ({
     askClarifyQuestion(query, options).then(setQuestion);
   }, [query, options.join('|')]);
 
-  const handleChatSend = async (message: string): Promise<string> => {
-    const { matched, reply } = await matchClarifyOption(message, options);
-    if (matched) onSelectOption(matched);
-    return reply;
-  };
-
   return (
     <div>
       {question && (
@@ -260,18 +251,11 @@ const FixedAxisClarifyCard = ({
           {question}
         </div>
       )}
-      <div className="flex flex-wrap gap-2 mb-3">
+      <div className="flex flex-wrap gap-2">
         {options.map((value) => (
           <OptionButton key={value} value={value} onClick={() => onSelectOption(value)} />
         ))}
       </div>
-      <GradientChatInput
-        key={options.join('|')}
-        placeholder="채팅으로 말씀하셔도 돼요"
-        autoReply={null}
-        sound={false}
-        onSend={handleChatSend}
-      />
     </div>
   );
 };
