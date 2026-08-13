@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import { motion, useScroll, useTransform, useInView } from 'motion/react';
 import weCraftImage from '../../assets/about/we-craft.jpg';
 
