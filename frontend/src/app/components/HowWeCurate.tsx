@@ -5,8 +5,8 @@ import { Search, Users, Scale, CheckCircle2 } from 'lucide-react';
 const steps = [
   {
     icon: Search,
-    title: '15개 쇼핑몰 동시 검색',
-    description: 'Tavily 검색 API로 실제 판매 중인 국내 리테일러 15곳만 조회해, 존재하지 않는 상품이나 만료된 프로모션이 섞이지 않게 합니다.',
+    title: '다나와 가격비교 검색',
+    description: 'Tavily 검색 API로 다나와의 실제 판매 정보만 조회해, 존재하지 않는 상품이나 만료된 프로모션이 섞이지 않게 합니다.',
   },
   {
     icon: Users,
@@ -78,7 +78,7 @@ export const HowWeCurate = () => {
           <svg
             viewBox="0 0 1120 380"
             role="img"
-            aria-label="검색어가 들어오면 백엔드가 Tavily를 통해 15개 쇼핑몰을 검색하고, 그 결과를 ChatGPT, Gemini, DeepSeek 세 모델에게 동시에 전달한다. 세 모델은 각자 근거를 담아 상품을 제안하고, Claude가 그 근거를 비교 심사해 하나의 최종 추천으로 압축한다."
+            aria-label="검색어가 들어오면 백엔드가 Tavily를 통해 다나와를 검색하고, 그 결과를 ChatGPT, Gemini, DeepSeek 세 모델에게 동시에 전달한다. 세 모델은 각자 근거를 담아 상품을 제안하고, Claude가 그 근거를 비교 심사해 하나의 최종 추천으로 압축한다."
             className="w-full h-auto min-w-[880px]"
           >
             <defs>
@@ -101,7 +101,7 @@ export const HowWeCurate = () => {
             {/* Tavily */}
             <rect x="222" y="150" width="160" height="80" rx="12" fill="#ffffff" stroke="#e5e5e5" />
             <text x="302" y="184" textAnchor="middle" fontSize="13" fontWeight="600" fill="#0a0a0a" fontFamily="-apple-system, sans-serif">Tavily 검색</text>
-            <text x="302" y="202" textAnchor="middle" fontSize="10.5" fill="#8a8a8a" fontFamily="-apple-system, sans-serif">쇼핑몰 15곳 한정</text>
+            <text x="302" y="202" textAnchor="middle" fontSize="10.5" fill="#8a8a8a" fontFamily="-apple-system, sans-serif">다나와 한정</text>
 
             {/* Tavily -> 3 agents fan out */}
             <path d="M382,175 C 430,175 430,50 470,50" fill="none" stroke="#c7c7c7" strokeWidth="1.4" markerEnd="url(#hwc-arrow)" />

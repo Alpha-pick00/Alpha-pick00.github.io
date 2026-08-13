@@ -1,7 +1,8 @@
+import { useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { AlertTriangle, ArrowUpRight, Check, RotateCcw, Truck } from 'lucide-react';
 import type { DecideResult, DecideStage, BrandOption, Proposal } from '../lib/api';
-import { matchClarifyOption } from '../lib/api';
+import { askClarifyQuestion, matchClarifyOption } from '../lib/api';
 import GradientChatInput, { type ChatMessage } from './ui/gradient-chat-input';
 
 const fadeUp = {
@@ -86,7 +87,7 @@ export const LoadingCard = ({
 
 const STAGE_LABEL: Record<DecideStage, string> = {
   refining: '질의를 다듬고 있습니다',
-  searching: '15개 쇼핑몰에서 검색하고 있습니다',
+  searching: '다나와에서 검색하고 있습니다',
   proposing: 'ChatGPT · Gemini · DeepSeek가 후보를 찾고 있습니다',
   challenging: 'DeepSeek가 근거를 검증하고 있습니다',
   judging: 'Claude가 근거를 비교해 최종 추천을 고르고 있습니다',
@@ -177,11 +178,84 @@ export type ClarifyStep = 'brand' | 'product' | 'volume' | 'quantity';
 
 const CLARIFY_STEP_ORDER: ClarifyStep[] = ['brand', 'product', 'volume', 'quantity'];
 
-const CLARIFY_STEP_LABEL: Record<ClarifyStep, string> = {
-  brand: '브랜드를 선택하면 좁혀드려요',
-  product: '제품을 선택하면 좁혀드려요',
-  volume: '용량을 선택하면 좁혀드려요',
-  quantity: '개수를 선택하면 좁혀드려요',
+interface ClarifyCardProps {
+  query: string;
+  step: ClarifyStep;
+  options: string[];
+  onSelectOption: (step: ClarifyStep, value: string) => void;
+  onReset: () => void;
+  messages: ChatMessage[];
+  onMessagesChange: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
+  pushMessage: (text: string, sender: ChatMessage['sender']) => void;
+}
+
+const ClarifyCard = ({
+  query,
+  step,
+  options,
+  onSelectOption,
+  onReset,
+  messages,
+  onMessagesChange,
+  pushMessage,
+}: ClarifyCardProps) => {
+  // "브랜드를 선택하면 좁혀드려요" 같은 고정 라벨 대신, 실제 상담원처럼 후보를
+  // 자연스러운 한 문장으로 물어보는 채팅 말풍선을 먼저 띄운다 — step이나
+  // options 조합이 바뀔 때(새 라운드)만 한 번씩 새로 물어보고, 같은 라운드가
+  // 리렌더될 때는 중복으로 다시 묻지 않는다.
+  const askedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${step}:${options.join('|')}`;
+    if (askedKeyRef.current === key) return;
+    askedKeyRef.current = key;
+    askClarifyQuestion(query, options).then((message) => pushMessage(message, 'bot'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, options.join('|')]);
+
+  // 채팅으로 타이핑한 자유 텍스트도 받는다 — 버튼과 병행이라, 매칭에 실패해도
+  // (LLM이 확신 못 하거나 API 호출 자체가 실패해도) 버튼이 항상 그대로 남아있어
+  // 사용자가 막히지 않는다. messages는 Hero.tsx에서 내려주는 공유 스레드라
+  // 최초 검색어부터 지금까지의 대화가 하나로 이어진다(말풍선 자체는 Hero의
+  // ChatBubbleTrail이 그리므로 여기서는 showBubbles={false}로 입력창만 렌더).
+  // key를 step에 묶는 건 입력창의 남은 텍스트만 다음 라운드에 안 넘어가게 하기 위함.
+  // 답장 문구는 고정 템플릿이 아니라 매번 matchClarifyOption이 GPT로 새로
+  // 생성한 문장이다 — 버튼을 클릭했을 때도 같은 API로 자연스러운 확인 답장을
+  // 받는다(아래 onClick 참고).
+  const handleChatSend = async (message: string): Promise<string> => {
+    const { matched, reply } = await matchClarifyOption(message, options);
+    if (matched) {
+      onSelectOption(step, matched);
+    }
+    return reply;
+  };
+
+  return (
+    <Card>
+      <div className="flex flex-wrap gap-2 mb-6">
+        {options.map((value) => (
+          <OptionButton
+            key={value}
+            value={value}
+            onClick={() => {
+              pushMessage(value, 'user');
+              onSelectOption(step, value);
+              matchClarifyOption(value, options).then(({ reply }) => pushMessage(reply, 'bot'));
+            }}
+          />
+        ))}
+      </div>
+      <GradientChatInput
+        key={step}
+        placeholder="채팅으로 말씀하셔도 돼요"
+        autoReply={null}
+        onSend={handleChatSend}
+        messages={messages}
+        onMessagesChange={onMessagesChange}
+        showBubbles={false}
+      />
+      <ResetLink onReset={onReset} />
+    </Card>
+  );
 };
 
 interface Props {
@@ -239,52 +313,17 @@ export const SearchResults = ({
       return <ErrorCard message="적절한 상품 후보를 찾지 못했습니다." onReset={onReset} />;
     }
 
-    // 채팅으로 타이핑한 자유 텍스트도 받는다 — 버튼과 병행이라, 매칭에 실패해도
-    // (LLM이 확신 못 하거나 API 호출 자체가 실패해도) 버튼이 항상 그대로 남아있어
-    // 사용자가 막히지 않는다. messages는 Hero.tsx에서 내려주는 공유 스레드라
-    // 최초 검색어부터 지금까지의 대화가 하나로 이어진다(말풍선 자체는 Hero의
-    // ChatBubbleTrail이 그리므로 여기서는 showBubbles={false}로 입력창만 렌더).
-    // key를 step에 묶는 건 입력창의 남은 텍스트만 다음 라운드에 안 넘어가게 하기 위함.
-    // 답장 문구는 고정 템플릿이 아니라 매번 matchClarifyOption이 GPT로 새로
-    // 생성한 문장이다 — 버튼을 클릭했을 때도 같은 API로 자연스러운 확인 답장을
-    // 받는다(아래 onClick 참고).
-    const handleChatSend = async (message: string): Promise<string> => {
-      const { matched, reply } = await matchClarifyOption(message, options);
-      if (matched) {
-        onSelectOption(step, matched);
-      }
-      return reply;
-    };
-
     return (
-      <Card>
-        <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
-          {CLARIFY_STEP_LABEL[step]}
-        </span>
-        <div className="flex flex-wrap gap-2 mb-6">
-          {options.map((value) => (
-            <OptionButton
-              key={value}
-              value={value}
-              onClick={() => {
-                pushMessage(value, 'user');
-                onSelectOption(step, value);
-                matchClarifyOption(value, options).then(({ reply }) => pushMessage(reply, 'bot'));
-              }}
-            />
-          ))}
-        </div>
-        <GradientChatInput
-          key={step}
-          placeholder="채팅으로 말씀하셔도 돼요"
-          autoReply={null}
-          onSend={handleChatSend}
-          messages={messages}
-          onMessagesChange={onMessagesChange}
-          showBubbles={false}
-        />
-        <ResetLink onReset={onReset} />
-      </Card>
+      <ClarifyCard
+        query={result.query}
+        step={step}
+        options={options}
+        onSelectOption={onSelectOption}
+        onReset={onReset}
+        messages={messages}
+        onMessagesChange={onMessagesChange}
+        pushMessage={pushMessage}
+      />
     );
   }
 
