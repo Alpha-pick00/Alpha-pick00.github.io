@@ -8,10 +8,12 @@ export const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const location = useLocation();
-  const { status } = useSearch();
-  // 검색/대화가 한 번이라도 시작되면(idle이 아니면) 네비게이션 링크를 치운다 —
-  // 결과 화면에 집중하도록. 리셋하면 status가 다시 idle로 돌아가 자동으로 복원된다.
-  const conversationStarted = status !== 'idle';
+  // 대화가 시작되면(사용자 요청, 2026-08-14) Work/About/Services/Contact는
+  // 숨기고, 배너(nav 바) 자체도 항상 투명하게 해서 채팅 스레드가 위까지
+  // 잘 보이게 한다 - 스크롤 상태(scrolled)에 따라 흰 배경이 붙던 걸 대화
+  // 모드에서는 무시한다.
+  const { turns } = useSearch();
+  const hasConversation = turns.length > 0;
 
   useEffect(() => {
     const handleScroll = () => {
@@ -38,11 +40,15 @@ export const Navbar = () => {
       initial={{ y: -100 }}
       animate={{ y: 0 }}
       className={`fixed w-full z-50 transition-all duration-300 ${
-        scrolled ? 'bg-transparent py-4 border-b border-black/5' : 'py-8 bg-transparent'
+        hasConversation
+          ? 'bg-transparent py-8 pointer-events-none'
+          : scrolled
+          ? 'bg-transparent py-4 border-b border-black/5'
+          : 'py-8 bg-transparent'
       }`}
     >
       <div className="container mx-auto px-6 flex justify-end items-center">
-        {!conversationStarted && (
+        {!hasConversation && (
           <>
             {/* Desktop Menu */}
             <div className="hidden md:flex gap-8">
@@ -86,7 +92,7 @@ export const Navbar = () => {
 
         {/* Mobile Menu */}
         <AnimatePresence>
-          {isOpen && !conversationStarted && (
+          {!hasConversation && isOpen && (
             <motion.div
               initial={{ opacity: 0, x: '100%' }}
               animate={{ opacity: 1, x: 0 }}

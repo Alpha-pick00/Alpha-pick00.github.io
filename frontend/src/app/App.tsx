@@ -10,8 +10,10 @@ import { Footer } from './components/Footer';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 import { Work } from './components/Work';
+import { GradientChatInputDemo } from './components/GradientChatInputDemo';
 import { AuthProvider } from './context/AuthContext';
-import { SearchProvider } from './context/SearchContext';
+import { SearchProvider, useSearch } from './context/SearchContext';
+import { SidebarProvider, useSidebar } from './context/SidebarContext';
 
 // Preloader Component
 const Preloader = () => (
@@ -60,19 +62,34 @@ const ScrollToTop = () => {
   return null;
 };
 
-const HomePage = () => (
-  <>
-    <Hero />
-    <About />
-    <Projects />
-    <Services />
-    <HowWeCurate />
-    <Footer />
-  </>
-);
+const HomePage = () => {
+  // 대화가 시작되면(사용자 요청, 2026-08-15: "채팅이 메인이되게 해줘") 랜딩
+  // 페이지의 나머지 섹션(About/Projects/Services/HowWeCurate/Footer)은 아예
+  // 렌더하지 않는다 - Hero가 h-screen이어도 이 섹션들이 DOM에 남아있으면 그
+  // 아래로 스크롤이 이어져서 다른 LLM 챗 앱들과 달리 채팅이 전체 화면을 차지하지
+  // 않았다. 대화 시작 전에는 지금처럼 그대로 내려서 보인다.
+  const { turns } = useSearch();
+  const hasConversation = turns.length > 0;
 
-function App() {
+  return (
+    <>
+      <Hero />
+      {!hasConversation && (
+        <>
+          <About />
+          <Projects />
+          <Services />
+          <HowWeCurate />
+          <Footer />
+        </>
+      )}
+    </>
+  );
+};
+
+const AppShell = () => {
   const [loading, setLoading] = useState(true);
+  const { isOpen } = useSidebar();
 
   useEffect(() => {
     // Intro animation duration
@@ -83,26 +100,49 @@ function App() {
   }, []);
 
   return (
+    <Router>
+      <ScrollToTop />
+
+      <AnimatePresence mode="wait">
+        {loading && <Preloader key="preloader" />}
+      </AnimatePresence>
+
+      {!loading && (
+        <div className="bg-white min-h-screen text-neutral-950 selection:bg-black/20">
+          {/* Navbar/Sidebar는 항상 fixed라 화면 기준으로 고정돼야 하는 전역 UI다 - 페이지
+              본문과 같은 padding 박스 안에 두면 안 된다(2026-08-12: Work/About/Services/
+              Contact가 사이드바 열림에 반응해 밀리다 잘리는 문제였다). 그래서 이 둘은
+              padding이 걸리는 아래 div 밖의 형제로 뺐다 - 사이드바가 밀어내야 하는 건
+              실제 페이지 컨텐츠(Routes)뿐이다. */}
+          <Navbar />
+          <Sidebar />
+          {/* 사이드바 패널이 열려있으면 본문을 그만큼 오른쪽으로 밀어낸다(모달처럼 덮어서
+              어둡게 가리는 대신, 옆에 도킹된 패널처럼) - 2026-08-12 요청. 두 값 다 리터럴
+              클래스 문자열로 써둬야 Tailwind가 빌드 시점에 인식해 CSS를 만들어낸다. */}
+          <div
+            className={`transition-[padding-left] duration-300 ease-out ${
+              isOpen ? 'md:pl-[280px]' : 'md:pl-[68px]'
+            }`}
+          >
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/work" element={<Work />} />
+              <Route path="/demo/gradient-chat-input" element={<GradientChatInputDemo />} />
+            </Routes>
+          </div>
+        </div>
+      )}
+    </Router>
+  );
+};
+
+function App() {
+  return (
     <AuthProvider>
       <SearchProvider>
-        <Router>
-          <ScrollToTop />
-
-          <AnimatePresence mode="wait">
-            {loading && <Preloader key="preloader" />}
-          </AnimatePresence>
-
-          {!loading && (
-            <div className="bg-white min-h-screen text-neutral-950 selection:bg-black/20 md:pl-[68px]">
-              <Navbar />
-              <Sidebar />
-              <Routes>
-                <Route path="/" element={<HomePage />} />
-                <Route path="/work" element={<Work />} />
-              </Routes>
-            </div>
-          )}
-        </Router>
+        <SidebarProvider>
+          <AppShell />
+        </SidebarProvider>
       </SearchProvider>
     </AuthProvider>
   );

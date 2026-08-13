@@ -1,9 +1,16 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { AlertTriangle, ArrowUpRight, Check, RotateCcw, Truck } from 'lucide-react';
-import type { DecideResult, DecideStage, BrandOption, Proposal } from '../lib/api';
+import { AlertTriangle, ArrowUpRight, Check, RotateCcw, Search, Truck } from 'lucide-react';
+import type {
+  ClarifyFacet as ClarifyFacetType,
+  DanawaStreamCandidate,
+  DecideResult,
+  DecideStage,
+  BrandOption,
+  Proposal,
+} from '../lib/api';
 import { askClarifyQuestion, matchClarifyOption } from '../lib/api';
-import GradientChatInput, { type ChatMessage } from './ui/gradient-chat-input';
+import GradientChatInput from './ui/gradient-chat-input';
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
@@ -20,20 +27,20 @@ const AGENT_LABEL: Record<string, string> = {
 const Card = ({ children }: { children: React.ReactNode }) => (
   <motion.div
     {...fadeUp}
-    className="w-full max-w-4xl mx-auto rounded-3xl border border-black/10 bg-white/80 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.06)] p-8 md:p-10 text-left"
+    className="w-full rounded-3xl border border-black/10 bg-white/80 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.06)] p-6 md:p-8 text-left"
   >
     {children}
   </motion.div>
 );
 
-const ResetLink = ({ onReset }: { onReset: () => void }) => (
+const ResetLink = ({ onReset, label = '다시 검색' }: { onReset: () => void; label?: string }) => (
   <button
     type="button"
     onClick={onReset}
-    className="mt-8 inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-neutral-400 hover:text-neutral-950 transition-colors"
+    className="mt-6 inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-neutral-400 hover:text-neutral-950 transition-colors"
   >
     <RotateCcw className="w-3.5 h-3.5" />
-    다시 검색
+    {label}
   </button>
 );
 
@@ -65,12 +72,29 @@ const BrandOptionRow = ({ option }: { option: BrandOption }) => (
   </a>
 );
 
+const StreamCandidateRow = ({ candidate }: { candidate: DanawaStreamCandidate }) => (
+  <motion.div
+    {...fadeUp}
+    className="flex items-center justify-between gap-4 py-3 border-b border-black/5 last:border-b-0"
+  >
+    <div className="min-w-0">
+      <p className="text-sm font-light text-neutral-600 truncate">{candidate.product_name || '상품명 미확인'}</p>
+      {candidate.retailer && <p className="text-xs font-light text-neutral-400">{candidate.retailer}</p>}
+    </div>
+    <span className="shrink-0 text-sm font-medium text-neutral-950 whitespace-nowrap">
+      {candidate.price || '가격 확인 중'}
+    </span>
+  </motion.div>
+);
+
 export const LoadingCard = ({
   message,
   caption = '최대 1분 소요',
+  candidates = [],
 }: {
   message: React.ReactNode;
   caption?: string;
+  candidates?: DanawaStreamCandidate[];
 }) => (
   <Card>
     <div className="flex flex-col items-center text-center py-6 gap-4">
@@ -82,6 +106,13 @@ export const LoadingCard = ({
       <p className="text-sm font-light text-neutral-500">{message}</p>
       <p className="text-xs font-mono uppercase tracking-widest text-neutral-400">{caption}</p>
     </div>
+    {candidates.length > 0 && (
+      <div className="mt-2 pt-4 border-t border-black/5 text-left">
+        {candidates.map((c, i) => (
+          <StreamCandidateRow key={`${c.product_name}-${i}`} candidate={c} />
+        ))}
+      </div>
+    )}
   </Card>
 );
 
@@ -135,6 +166,9 @@ const CandidateProgressRow = ({ proposal }: { proposal: Proposal }) => (
   </div>
 );
 
+// AI 오케스트레이션(adk_pipeline: 정제→검색→제안→검증→심사) 진행 상태를 턴 안에서
+// 보여준다 - Hero.tsx가 turn.streamingStage/streamingProposals(SearchContext.runTurn이
+// decideStream 이벤트로 채운다)를 이 컴포넌트에 그대로 넘긴다.
 export const StreamingCard = ({ stage, proposals }: { stage: DecideStage; proposals: Proposal[] }) => (
   <Card>
     <div className="flex flex-col items-center text-center py-2 gap-6">
@@ -156,11 +190,19 @@ export const StreamingCard = ({ stage, proposals }: { stage: DecideStage; propos
   </Card>
 );
 
-export const ErrorCard = ({ message, onReset }: { message: string; onReset: () => void }) => (
+export const ErrorCard = ({
+  message,
+  onReset,
+  resetLabel = '다시 검색',
+}: {
+  message: string;
+  onReset?: () => void;
+  resetLabel?: string;
+}) => (
   <Card>
     <div className="text-center py-4">
       <p className="text-sm font-light text-neutral-600">{message}</p>
-      <ResetLink onReset={onReset} />
+      {onReset && <ResetLink onReset={onReset} label={resetLabel} />}
     </div>
   </Card>
 );
@@ -178,152 +220,233 @@ export type ClarifyStep = 'brand' | 'product' | 'volume' | 'quantity';
 
 const CLARIFY_STEP_ORDER: ClarifyStep[] = ['brand', 'product', 'volume', 'quantity'];
 
-interface ClarifyCardProps {
-  query: string;
-  step: ClarifyStep;
-  options: string[];
-  onSelectOption: (step: ClarifyStep, value: string) => void;
-  onReset: () => void;
-  messages: ChatMessage[];
-  onMessagesChange: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
-  pushMessage: (text: string, sender: ChatMessage['sender']) => void;
-}
-
-const ClarifyCard = ({
+// 고정 축(제품/용량/개수 - 브랜드는 아래에서 다나와 브랜드 최저가 단축 경로로
+// 따로 렌더된다) 하나를 실제 상담원처럼 자연스러운 질문 한 문장으로 물어보고,
+// 버튼과 채팅 입력(GradientChatInput, 실사용 승격) 둘 다로 답을 받는다. 이
+// 카드는 턴 하나에 로컬로 붙는 독립 인스턴스라(uncontrolled GradientChatInput) -
+// 사용자가 고른 값 자체는 onSelectOption을 통해 다음 ChatTurn의 말풍선
+// (turn.displayQuery)으로 자연스럽게 이어지므로, 여기서는 봇의 질문/답장
+// 말풍선만 로컬로 보여주면 충분하다(전체 대화 스레드와 중복되지 않는다).
+const FixedAxisClarifyCard = ({
   query,
-  step,
   options,
   onSelectOption,
-  onReset,
-  messages,
-  onMessagesChange,
-  pushMessage,
-}: ClarifyCardProps) => {
-  // "브랜드를 선택하면 좁혀드려요" 같은 고정 라벨 대신, 실제 상담원처럼 후보를
-  // 자연스러운 한 문장으로 물어보는 채팅 말풍선을 먼저 띄운다 — step이나
-  // options 조합이 바뀔 때(새 라운드)만 한 번씩 새로 물어보고, 같은 라운드가
-  // 리렌더될 때는 중복으로 다시 묻지 않는다.
+}: {
+  query: string;
+  options: string[];
+  onSelectOption: (value: string) => void;
+}) => {
+  const [question, setQuestion] = useState<string | null>(null);
   const askedKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
-    const key = `${step}:${options.join('|')}`;
+    const key = options.join('|');
     if (askedKeyRef.current === key) return;
     askedKeyRef.current = key;
-    askClarifyQuestion(query, options).then((message) => pushMessage(message, 'bot'));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, options.join('|')]);
+    setQuestion(null);
+    askClarifyQuestion(query, options).then(setQuestion);
+  }, [query, options.join('|')]);
 
-  // 채팅으로 타이핑한 자유 텍스트도 받는다 — 버튼과 병행이라, 매칭에 실패해도
-  // (LLM이 확신 못 하거나 API 호출 자체가 실패해도) 버튼이 항상 그대로 남아있어
-  // 사용자가 막히지 않는다. messages는 Hero.tsx에서 내려주는 공유 스레드라
-  // 최초 검색어부터 지금까지의 대화가 하나로 이어진다(말풍선 자체는 Hero의
-  // ChatBubbleTrail이 그리므로 여기서는 showBubbles={false}로 입력창만 렌더).
-  // key를 step에 묶는 건 입력창의 남은 텍스트만 다음 라운드에 안 넘어가게 하기 위함.
-  // 답장 문구는 고정 템플릿이 아니라 매번 matchClarifyOption이 GPT로 새로
-  // 생성한 문장이다 — 버튼을 클릭했을 때도 같은 API로 자연스러운 확인 답장을
-  // 받는다(아래 onClick 참고).
   const handleChatSend = async (message: string): Promise<string> => {
     const { matched, reply } = await matchClarifyOption(message, options);
-    if (matched) {
-      onSelectOption(step, matched);
-    }
+    if (matched) onSelectOption(matched);
     return reply;
   };
 
   return (
-    <Card>
-      <div className="flex flex-wrap gap-2 mb-6">
+    <div>
+      {question && (
+        <div className="mb-3 inline-block max-w-[85%] rounded-[14px_14px_14px_4px] bg-black/[0.04] px-4 py-2.5 text-sm font-light text-neutral-700">
+          {question}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 mb-3">
         {options.map((value) => (
-          <OptionButton
-            key={value}
-            value={value}
-            onClick={() => {
-              pushMessage(value, 'user');
-              onSelectOption(step, value);
-              matchClarifyOption(value, options).then(({ reply }) => pushMessage(reply, 'bot'));
-            }}
-          />
+          <OptionButton key={value} value={value} onClick={() => onSelectOption(value)} />
         ))}
       </div>
       <GradientChatInput
-        key={step}
+        key={options.join('|')}
         placeholder="채팅으로 말씀하셔도 돼요"
         autoReply={null}
+        sound={false}
         onSend={handleChatSend}
-        messages={messages}
-        onMessagesChange={onMessagesChange}
-        showBubbles={false}
       />
-      <ResetLink onReset={onReset} />
-    </Card>
+    </div>
   );
 };
 
 interface Props {
   result: DecideResult;
-  onSelectOption: (step: ClarifyStep, value: string) => void;
-  onReset: () => void;
-  resolvedSteps: Set<ClarifyStep>;
-  messages: ChatMessage[];
-  onMessagesChange: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
-  pushMessage: (text: string, sender: ChatMessage['sender']) => void;
+  onSelectBrand: (brand: string) => void;
+  onConfirmFacets: (values: string[]) => void;
+  onSelectClarifyOption: (value: string) => void;
+  onReset?: () => void;
 }
 
 export const SearchResults = ({
   result,
-  onSelectOption,
+  onSelectBrand,
+  onConfirmFacets,
+  onSelectClarifyOption,
   onReset,
-  resolvedSteps,
-  messages,
-  onMessagesChange,
-  pushMessage,
 }: Props) => {
-  if (result.mode === 'clarify') {
-    const optionsByStep: Record<ClarifyStep, string[]> = {
-      brand: result.options.brands,
-      product: result.options.products,
-      volume: result.options.volumes,
-      quantity: result.options.quantities,
-    };
-    // 브랜드 → 제품 → 용량 → 개수 순으로, 아직 애매한 것만 물어본다 — 하나 고르면
-    // 그 값이 검색어에 누적되고(SearchContext.runSearch가 query state를 갱신) 다시
-    // 검색해서 이번엔 남은 기준만 애매하면 그것만 다시 보여준다. 한 번에 다 보여주지
-    // 않는 이유: 브랜드를 안 정한 채 용량부터 고르면 다른 브랜드의 용량과 섞여
-    // 의미가 없어진다.
-    // resolvedSteps(사용자가 이 드릴다운에서 이미 답한 단계, Hero.tsx가 추적)에
-    // 있는 단계는 백엔드가 이번 라운드에 뭘 내려주든 절대 다시 후보로 넣지
-    // 않는다 — 백엔드의 "이미 답했는지" 판정은 질의 텍스트 매칭에 의존하는
-        // 근사치라(LLM이 라운드마다 조금씩 다르게 추출할 수 있음) 같은 단계가
-    // 반복 노출될 수 있는데, 이 목록은 프론트가 사용자의 실제 클릭으로 직접
-    // 관리하므로 100% 확실하다.
-    const candidateSteps = CLARIFY_STEP_ORDER.filter((s) => !resolvedSteps.has(s));
-    // 실제로 2개 이상이라 "애매한" 기준만 먼저 물어본다(백엔드의 _is_ambiguous와
-    // 같은 ">1" 기준) — 1개짜리 기준까지 매번 단계로 넣으면, 브랜드가 이미 하나로
-    // 좁혀졌는데도 계속 "브랜드를 선택하세요"만 반복 노출돼 앞으로 못 나간다.
-    // 그래도 애매한 게 하나도 없는데 이 화면까지 왔다면(기존 폴백 경로 — 브랜드
-    // 하나만 겨우 찾은 경우 등) 그 값이라도 눌러서 진행할 수 있게 ">0"으로 대체한다.
-    const step =
-      candidateSteps.find((s) => optionsByStep[s].length > 1) ??
-      candidateSteps.find((s) => optionsByStep[s].length > 0) ??
-      null;
-    const options = step ? optionsByStep[step] : [];
+  // AI 상세검색: facet마다 하나씩 고르고, 화면에 떠 있는 기준을 전부 고른
+  // 순간에만 검색이 실행된다(사용자 요청, 2026-08-13: "상세검색에서 고를때마다
+  // 검색하는걸로 바꿧어 다시 다 고르면 검색되는걸로 바꿔" - 브랜드 하나만 눌러도
+  // 바로 다음 턴으로 넘어가던 걸 되돌린 것). 선택 상태는 로컬로 들고 있다가,
+  // 모든 facet이 채워지는 순간 useEffect가 자동으로 onConfirmFacets를 부른다
+  // (버튼은 없다 - "검색하기 버튼 없어도 될거같아"). facets는 mode==='clarify'
+  // 일 때만 존재하지만 Hooks는 조건부로 못 부르니 다른 모드에서는 빈 배열로 둔다.
+  const [selectedFacets, setSelectedFacets] = useState<Record<string, string>>({});
+  const [facetQuery, setFacetQuery] = useState<Record<string, string>>({});
+  const facets = result.mode === 'clarify' ? result.options.facets : [];
 
-    if (!step || options.length === 0) {
-      // 남은 단계가 없거나(전부 resolvedSteps에 있음) 옵션이 비었으면 더 물어볼 게
-      // 없다는 뜻 — 이 화면에 왔다는 건 후보를 못 찾았다는 뜻이므로 에러로 안내한다.
-      return <ErrorCard message="적절한 상품 후보를 찾지 못했습니다." onReset={onReset} />;
-    }
+  useEffect(() => {
+    if (facets.length === 0 || !facets.every((f) => selectedFacets[f.label])) return;
+    const values = facets.map((f) => selectedFacets[f.label]).filter((v): v is string => Boolean(v));
+    onConfirmFacets(values);
+    // facets/onConfirmFacets는 매 렌더 새 참조라 deps에 넣으면 무한 루프가 된다 -
+    // "선택 상태가 바뀔 때"만 완주 여부를 재확인하면 충분하다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFacets]);
+
+  if (result.mode === 'clarify') {
+    const { brands, products, volumes, quantities } = result.options;
+    const hasAnyOptions =
+      brands.length > 0 || facets.length > 0 || products.length > 0 || volumes.length > 0 || quantities.length > 0;
+
+    // 지금까지 고른 값들(어느 facet이든 - 브랜드로 한정 안 됨)로 아직 안 고른
+    // facet들의 보이는 옵션을 즉시 좁힌다(추가 요청 없이, 사용자 요청 2026-08-13:
+    // "삼성전자를 누르면은 시리즈에 삼성전자에 관한것만" -> 2026-08-14: "시리즈에
+    // 초코파이 바나나를 골랏다면 용량에 없는것들은 선택할수없게" - 브랜드 전용
+    // 특수 케이스였던 걸 모든 facet 쌍으로 일반화했다). 여러 facet을 골랐으면
+    // 각각의 options_by_selection을 교집합으로 겹쳐 좁힌다.
+    const visibleOptionsFor = (facet: ClarifyFacetType, selected: Record<string, string>): string[] => {
+      let options = facet.options;
+      for (const [otherLabel, value] of Object.entries(selected)) {
+        if (otherLabel === facet.label) continue;
+        const filtered = facet.options_by_selection?.[value];
+        if (filtered) {
+          options = options.filter((o) => filtered.includes(o));
+        }
+      }
+      return options;
+    };
+
+    const toggleFacetOption = (label: string, option: string) => {
+      setSelectedFacets((prev) => {
+        if (prev[label] === option) {
+          const next = { ...prev };
+          delete next[label];
+          return next;
+        }
+        const next = { ...prev, [label]: option };
+        // 이 선택으로 다른 facet의 보이는 옵션이 바뀌어 기존 선택이 더 이상
+        // 유효한 값이 아니게 됐으면 지운다 - 안 그러면 서로 안 맞는 조합(예:
+        // "초코파이 바나나" + "336g")이 그대로 남아있을 수 있다.
+        for (const other of facets) {
+          if (other.label === label) continue;
+          const selectedForOther = next[other.label];
+          if (!selectedForOther) continue;
+          if (!visibleOptionsFor(other, next).includes(selectedForOther)) {
+            delete next[other.label];
+          }
+        }
+        return next;
+      });
+    };
+
+    // 고정 축(제품/용량/개수) 중 이번 라운드에 물어볼 하나만 고른다 - 한 번에
+    // 다 보여주면 서로 다른 축이 뒤섞여 어떤 조합을 고르는 건지 애매해진다.
+    // 옵션이 2개 이상인("진짜 애매한") 축을 우선하고, 전부 1개뿐이면(폴백) 그중
+    // 아무거나로 진행할 수 있게 열어준다. 브랜드는 다나와 브랜드 최저가 단축
+    // 경로(onSelectBrand)로 이미 별도 렌더되므로 이 로테이션에서 제외한다.
+    // facets(AI 상세검색)와는 서로 다른 clarify 소스(check_clarify_facets/
+    // run_clarify)라 겹치지 않고 그대로 병행 노출된다.
+    const fixedOptionsByStep: Partial<Record<ClarifyStep, string[]>> = {
+      product: products,
+      volume: volumes,
+      quantity: quantities,
+    };
+    const fixedSteps = CLARIFY_STEP_ORDER.filter((s): s is Exclude<ClarifyStep, 'brand'> => s !== 'brand');
+    const step =
+      fixedSteps.find((s) => (fixedOptionsByStep[s]?.length ?? 0) > 1) ??
+      fixedSteps.find((s) => (fixedOptionsByStep[s]?.length ?? 0) > 0) ??
+      null;
+    const stepOptions = step ? fixedOptionsByStep[step] ?? [] : [];
 
     return (
-      <ClarifyCard
-        query={result.query}
-        step={step}
-        options={options}
-        onSelectOption={onSelectOption}
-        onReset={onReset}
-        messages={messages}
-        onMessagesChange={onMessagesChange}
-        pushMessage={pushMessage}
-      />
+      <Card>
+        <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
+          {hasAnyOptions ? 'AI 상세검색 · 조건을 선택하거나 채팅으로 답해주세요' : '조건을 좁힐 수 없었어요'}
+        </span>
+        {brands.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-4 last:mb-0">
+            {brands.map((brand) => (
+              <button
+                key={brand}
+                onClick={() => onSelectBrand(brand)}
+                className="px-4 py-2 rounded-full border border-black/10 text-sm font-light hover:bg-neutral-950 hover:text-white hover:border-neutral-950 transition-all"
+              >
+                {brand}
+              </button>
+            ))}
+          </div>
+        )}
+        {facets.map((facet) => {
+          const baseOptions = visibleOptionsFor(facet, selectedFacets);
+          const query = facetQuery[facet.label] ?? '';
+          const visibleOptions = query.trim()
+            ? baseOptions.filter((o) => o.toLowerCase().includes(query.trim().toLowerCase()))
+            : baseOptions;
+          return (
+            <div key={facet.label} className="mb-4 last:mb-0">
+              <span className="text-xs font-light text-neutral-400 block mb-2">{facet.label}</span>
+              {facet.options.length > 4 && (
+                <div className="relative mb-2">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-300" />
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => setFacetQuery((prev) => ({ ...prev, [facet.label]: e.target.value }))}
+                    placeholder={`${facet.label} 찾기`}
+                    className="w-full pl-8 pr-3 py-2 rounded-full border border-black/10 text-sm font-light outline-none focus:border-neutral-950 transition-colors"
+                  />
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {visibleOptions.length > 0 ? (
+                  visibleOptions.map((option) => {
+                    const isSelected = selectedFacets[facet.label] === option;
+                    return (
+                      <button
+                        key={option}
+                        onClick={() => toggleFacetOption(facet.label, option)}
+                        className={`px-4 py-2 rounded-full border text-sm font-light transition-all ${
+                          isSelected
+                            ? 'bg-neutral-950 text-white border-neutral-950'
+                            : 'border-black/10 hover:bg-neutral-950 hover:text-white hover:border-neutral-950'
+                        }`}
+                      >
+                        {option}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <span className="text-xs font-light text-neutral-400">일치하는 항목이 없어요</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {step && (
+          <div className="mb-4 last:mb-0">
+            <FixedAxisClarifyCard query={result.query} options={stepOptions} onSelectOption={onSelectClarifyOption} />
+          </div>
+        )}
+        {onReset && <ResetLink onReset={onReset} />}
+      </Card>
     );
   }
 
@@ -337,7 +460,7 @@ export const SearchResults = ({
           {result.brand} 최저가
         </span>
         <BrandOptionRow option={result.option} />
-        <ResetLink onReset={onReset} />
+        {onReset && <ResetLink onReset={onReset} />}
       </Card>
     );
   }
@@ -362,7 +485,7 @@ export const SearchResults = ({
             <BrandOptionRow key={option.brand} option={option} />
           ))}
         </div>
-        <ResetLink onReset={onReset} />
+        {onReset && <ResetLink onReset={onReset} />}
       </Card>
     );
   }
@@ -415,7 +538,7 @@ export const SearchResults = ({
           </div>
         ))}
       </div>
-      <ResetLink onReset={onReset} />
+      {onReset && <ResetLink onReset={onReset} />}
     </Card>
   );
 };

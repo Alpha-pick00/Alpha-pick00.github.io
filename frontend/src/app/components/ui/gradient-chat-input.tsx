@@ -1,3 +1,5 @@
+"use client";
+
 import * as React from "react";
 import { Plus, Send } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -26,6 +28,8 @@ export interface GradientChatInputProps {
   maxVisible?: number;
   /** Play synthesized send / receive sounds. */
   sound?: boolean;
+  /** The spectrum used for the reveal glow (top → bottom). */
+  gradientColors?: string[];
   /** Fired whenever the user submits a message. Return (or resolve to) a
    * string to use as the bot's reply instead of the static `autoReply` —
    * lets callers answer with something computed from the actual message
@@ -85,6 +89,17 @@ export function ChatBubbleTrail({ messages, maxVisible = 4, className }: ChatBub
 }
 
 /* ------------------------------------------------------------------ */
+/*  defaults                                                          */
+/* ------------------------------------------------------------------ */
+const DEFAULT_GRADIENT = [
+  "#FC2BA3",
+  "#FC6D35",
+  "#F9C83D",
+  "#C2D6E1",
+  "#144EC5",
+];
+
+/* ------------------------------------------------------------------ */
 /*  component                                                         */
 /* ------------------------------------------------------------------ */
 export default function GradientChatInput({
@@ -93,6 +108,7 @@ export default function GradientChatInput({
   autoReplyDelay = 650,
   maxVisible = 4,
   sound = true,
+  gradientColors = DEFAULT_GRADIENT,
   onSend,
   className,
   messages: controlledMessages,

@@ -18,7 +18,16 @@ from .auth import google as google_auth
 from .auth import kakao as kakao_auth
 from .auth import naver as naver_auth
 from .auth.session import issue_session_token, verify_session_token
-from .debate import run_brand_price, run_debate, run_debate_stream, run_single_debate, run_single_debate_stream
+from .debate import (
+    check_clarify_facets,
+    run_brand_price,
+    run_danawa_only_debate,
+    run_danawa_only_debate_stream,
+    run_debate,
+    run_debate_stream,
+    run_single_debate,
+    run_single_debate_stream,
+)
 from .ocr import cleanup as ocr_cleanup
 from .ocr import google_vision as google_vision_ocr
 from .schemas import (
@@ -147,8 +156,8 @@ def health() -> dict[str, str]:
 
 
 @app.get("/autocomplete", response_model=list[str])
-def get_autocomplete(q: str, limit: int = 8) -> list[str]:
-    return autocomplete.suggest(q, limit)
+async def get_autocomplete(q: str, limit: int = 8) -> list[str]:
+    return await autocomplete.suggest_merged(q, limit)
 
 
 @app.post("/clarify/match", response_model=ClarifyMatchResponse)
@@ -306,3 +315,54 @@ async def decide_stream(request: DecideRequest) -> StreamingResponse:
             )
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+@app.post("/decide/clarify", response_model=ClarifyResponse)
+async def decide_clarify(request: DecideRequest) -> ClarifyResponse:
+    """AI 상세검색(2026-08-12) - "음료수"처럼 짧고 애매한 검색어를 다나와 실제
+    검색 상품명에 근거해 DeepSeek이 몇 가지 기준(카테고리/브랜드/용량 등)으로 좁혀나가게
+    제안한다. 프론트는 짧은 검색어에 한해 danawa-only 빠른 경로를 타기 전에 이걸
+    먼저 불러보고, options.facets가 비어 있으면(=명확한 검색어) 그대로 원래
+    빠른 경로로 넘어간다 - 이 엔드포인트 자체가 대부분의 검색어에 대해 검색/LLM
+    호출 없이 즉시 빈 결과로 끝나므로(check_clarify_facets 참고) 매 검색마다
+    호출해도 비용이 거의 없다."""
+    return await check_clarify_facets(request.query, base_query=request.base_query)
+
+
+@app.post("/decide/danawa-only", response_model=DecideResponse | BulkDecideResponse)
+async def decide_danawa_only(request: DecideRequest) -> DecideResponse | BulkDecideResponse:
+    """임시 실험 엔드포인트 - LLM 호출 0번(gpt/gemini/deepseek 제안, judge 결정
+    전부 생략), 다나와 실측 가격표만으로 규칙 기반 추천. LLM API 비용 절감
+    목적의 로컬 테스트 경로라 /decide와 별도로 둔다 - 프론트엔드는 아직
+    이 경로를 쓰지 않는다. 검색어가 서로 다른 상품에 걸쳐 있으면(예: "노트북")
+    DecideResponse 대신 BulkDecideResponse(후보 목록)를 반환한다."""
+    try:
+        return await run_danawa_only_debate(request.query, base_query=request.base_query)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail="다나와 전용 처리 중 오류가 발생했습니다."
+        ) from exc
+
+
+@app.post("/decide/danawa-only/stream")
+async def decide_danawa_only_stream(request: DecideRequest) -> StreamingResponse:
+    """/decide/danawa-only의 스트리밍 버전 - 사용자 요청(2026-08-11, "1개 서치
+    완료되면 1개 올려줘 먼저"). SSE(text/event-stream)로 후보가 끝나는 대로
+    {"type": "candidate", ...}를 내보내고, 마지막에 {"type": "final", ...}
+    (또는 실패 시 {"type": "error", ...})를 내보낸다.
+
+    이미 200으로 스트림을 연 뒤라 HTTP 상태코드로 실패를 알릴 수 없다 - 그래서
+    /decide/danawa-only와 달리 502를 던지지 않고 "error" 이벤트로 실패를
+    알린다(프론트가 이벤트 타입으로 구분해서 처리)."""
+
+    async def _events():
+        try:
+            async for event in run_danawa_only_debate_stream(request.query, base_query=request.base_query):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception:
+            error_event = {"type": "error", "message": "다나와 전용 처리 중 오류가 발생했습니다."}
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_events(), media_type="text/event-stream")
