@@ -16,7 +16,9 @@ import asyncio
 import logging
 import uuid
 from typing import Any, AsyncGenerator, AsyncIterator
+from urllib.parse import urlsplit
 
+from fetchers import danawa as danawa_fetcher
 from google.adk.agents import BaseAgent, LlmAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -31,7 +33,7 @@ from . import search as search_module
 from .agents import gpt as gpt_module
 from .agents import judge as judge_module
 from .category import CategoryClassification, classify_category
-from .intent import has_count_spec, has_volume_spec
+from .intent import has_count_spec, has_volume_spec, needs_clarification
 from .agents.base import (
     NO_CANDIDATE_ERROR,
     build_challenge_prompt,
@@ -185,17 +187,30 @@ def _urls_to_extract(candidates: list[dict]) -> list[str]:
     return [c["url"] for c in candidates[:_MAX_EXTRACT_CANDIDATES] if c.get("url")]
 
 
+def _is_danawa_product_url(url: str | None) -> bool:
+    return bool(url) and urlsplit(url).netloc.lower().endswith("danawa.com")
+
+
 class _ExtractPagesNode(BaseAgent):
     """병합된 후보들의 실제 판매 페이지 원문을 다시 가져와 상태에 저장한다.
     challenge(DeepSeek)는 기존에는 검색 당시 잘린 스니펫(최대 1500자)만 보고
     판단했는데, 여기서 채운 candidate_pages를 함께 주면 지금 이 URL의 실제
     최신 본문을 근거로 재검증할 수 있다 — search.extract()는 원래도 있었지만
     어디서도 쓰이지 않던 함수였다. 개별 URL 조회가 실패해도 그 후보만 스니펫
-    기반 검증으로 남고 나머지는 그대로 진행한다(전체를 막지 않음)."""
+    기반 검증으로 남고 나머지는 그대로 진행한다(전체를 막지 않음).
+
+    후보 URL은 전부 다나와 검색(Tavily include_domains=danawa.com)에서 나오므로,
+    다나와 URL에 한해 fetchers/danawa.py로 직접 재조회해 "가격비교 서비스가
+    종료된 상품" 페이지인지도 함께 확인한다(사용자 요청, 2026-08-13: "가격미확인
+    되어있는것도 뜨거든... 가격 비교가 중지된 상품이라고 뜨는 이런 경우의 수도
+    없애주면"). Tavily extract 텍스트만으로 challenge LLM이 이 패턴을 매번
+    알아채리라 보장할 수 없어서, _is_expired_page()로 이미 검증된 판별을
+    LLM 판단에 맡기지 않고 여기서 결정적으로 걸러낸다."""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         candidates: list[dict] = ctx.session.state.get("candidates") or []
         urls = _urls_to_extract(candidates)
+        danawa_urls = [u for u in urls if _is_danawa_product_url(u)]
 
         async def _safe_extract(url: str) -> tuple[str, str | None]:
             try:
@@ -204,12 +219,28 @@ class _ExtractPagesNode(BaseAgent):
                 logger.warning("후보 페이지 재조회 실패: %r", url, exc_info=True)
                 return url, None
 
-        pages: dict[str, str] = {}
-        if urls:
-            fetched = await asyncio.gather(*(_safe_extract(u) for u in urls))
-            pages = {url: text for url, text in fetched if text}
+        async def _check_expired(url: str) -> tuple[str, bool]:
+            try:
+                result = await danawa_fetcher.fetch_danawa_offers(url)
+                return url, result["parse_status"] == "expired"
+            except Exception:
+                logger.warning("다나와 후보 URL 상태 확인 실패: %r", url, exc_info=True)
+                return url, False
 
-        yield Event(author=self.name, actions=EventActions(state_delta={"candidate_pages": pages}))
+        pages: dict[str, str] = {}
+        expired_urls: list[str] = []
+        if urls:
+            extracted, expiry_checked = await asyncio.gather(
+                asyncio.gather(*(_safe_extract(u) for u in urls)),
+                asyncio.gather(*(_check_expired(u) for u in danawa_urls)),
+            )
+            pages = {url: text for url, text in extracted if text}
+            expired_urls = [url for url, is_expired in expiry_checked if is_expired]
+
+        yield Event(
+            author=self.name,
+            actions=EventActions(state_delta={"candidate_pages": pages, "expired_danawa_urls": expired_urls}),
+        )
 
 
 class _ApplyChallengeNode(BaseAgent):
@@ -220,6 +251,7 @@ class _ApplyChallengeNode(BaseAgent):
         state = ctx.session.state
         candidates: list[dict] = state.get("candidates") or []
         raw_challenge = state.get("raw_challenge")
+        expired_urls = set(state.get("expired_danawa_urls") or [])
 
         verdicts: list[ChallengeVerdict] = []
         if raw_challenge:
@@ -228,7 +260,7 @@ class _ApplyChallengeNode(BaseAgent):
             except Exception:
                 logger.exception("DeepSeek 검증 결과 파싱 실패 — 전부 미검증으로 진행")
 
-        proposals = _apply_challenge(candidates, ChallengeResult(verdicts=verdicts))
+        proposals = _apply_challenge(candidates, ChallengeResult(verdicts=verdicts), expired_urls)
 
         yield Event(
             author=self.name,
@@ -236,14 +268,27 @@ class _ApplyChallengeNode(BaseAgent):
         )
 
 
-def _apply_challenge(candidates: list[dict], challenge: ChallengeResult) -> list[Proposal]:
+def _apply_challenge(
+    candidates: list[dict], challenge: ChallengeResult, expired_urls: set[str] = frozenset()
+) -> list[Proposal]:
     """병합된 후보(merge_candidates 출력 dict)와 검증 결과를 매칭해 Proposal로
-    합성하는 순수 함수 — LLM 호출 없이 테스트 가능."""
+    합성하는 순수 함수 — LLM 호출 없이 테스트 가능.
+
+    expired_urls에 속한 후보(다나와가 "가격비교 서비스가 종료된 상품"으로 표시하는
+    페이지로 확인됨)는 verified=False로 남기지 않고 아예 결과에서 제외한다 —
+    challenge/judge 단계까지 흘려보내면 죽은 링크가 "가격미확인" 카드로 그대로
+    노출될 수 있어서다. 후보가 전부 걸러지면 proposals가 빈 리스트가 되는데,
+    이는 run_stream()의 기존 "후보 0개" 폴백 체인(clarify → relaxed fallback →
+    NO_CANDIDATE_ERROR)이 그대로 처리한다."""
     verdicts_by_url = {v.url: v for v in challenge.verdicts if v.url}
 
     proposals = []
     for i, candidate in enumerate(candidates):
-        verdict = verdicts_by_url.get(candidate.get("url"))
+        url = candidate.get("url")
+        if url in expired_urls:
+            logger.info("다나와 가격비교 중지 페이지로 확인되어 후보에서 제외: %s", url)
+            continue
+        verdict = verdicts_by_url.get(url)
         if verdict is None and i < len(challenge.verdicts):
             verdict = challenge.verdicts[i]
 
@@ -287,6 +332,23 @@ def _model_error_fallback_response(text: str) -> LlmResponse:
     return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
 
 
+def _skip_refine_if_already_specific(callback_context, llm_request) -> LlmResponse | None:
+    """정제(refine)는 파이프라인에서 검색이 시작되기 전에 걸리는 첫 LLM 왕복이라,
+    여기를 건너뛰면 그만큼 전체 응답 지연이 그대로 줄어든다(사용자 요청,
+    2026-08-15: "순차단계 줄이자"). REFINE_QUERY_INSTRUCTIONS 자체가 "질의가
+    이미 구체적이면 그대로 반환하라"고 하므로, 그 판단을 Gemini에 매번 왕복해
+    묻는 대신 이미 있는 needs_clarification() 휴리스틱(브랜드/스펙 없이 짧은
+    질의나 "사고싶어"류 모호한 구매의도 문구만 True)으로 로컬에서 먼저 걸러
+    낸다. 애매하면(True) 여기서 손대지 않고 실제 Gemini 정제를 그대로 태운다 -
+    오탐(정제가 실제로 필요한데 건너뜀)의 대가가 "약간 덜 다듬어진 검색어"
+    정도라 위험하지 않다."""
+    original_query = callback_context.state.get("original_query", "")
+    if not original_query or needs_clarification(original_query):
+        return None
+    fallback = RefinedQuery(query=original_query)
+    return _model_error_fallback_response(fallback.model_dump_json())
+
+
 def _on_refine_model_error(callback_context, llm_request, error) -> LlmResponse:
     """refine의 Gemini 호출이 실패하면 정제를 포기하고 원본 질의를 그대로 쓴다 —
     다듬지 않은 질의로라도 검색을 계속하는 게 파이프라인 전체를 죽이는 것보다
@@ -317,6 +379,7 @@ def _build_refine_agent() -> LlmAgent:
         instruction=instruction,
         output_schema=RefinedQuery,
         output_key="refined_query",
+        before_model_callback=_skip_refine_if_already_specific,
         on_model_error_callback=_on_refine_model_error,
     )
 

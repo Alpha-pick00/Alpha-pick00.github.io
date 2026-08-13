@@ -6,6 +6,7 @@ from app.adk_pipeline import (
     _build_decision,
     _format_price_krw,
     _is_ambiguous,
+    _is_danawa_product_url,
     _judge_eligible_proposals,
     _merge_proposals,
     _urls_to_extract,
@@ -158,6 +159,44 @@ def test_apply_challenge_derives_agent_and_proposed_by_from_candidate():
 
 def test_apply_challenge_empty_candidates_returns_empty_list():
     assert _apply_challenge([], ChallengeResult(verdicts=[])) == []
+
+
+def test_apply_challenge_drops_expired_danawa_candidate_entirely():
+    """가격비교가 중지된(다나와가 서비스 종료로 표시하는) 페이지는 verified=False로
+    남기지 않고 결과에서 아예 빠져야 한다 — "가격미확인" 카드로 노출되면 안 된다."""
+    candidates = [
+        _merged_candidate(COUPANG_URL, ["gpt"], "상품A"),
+        _merged_candidate(ELEVENST_URL, ["gemini"], "상품B"),
+    ]
+
+    proposals = _apply_challenge(candidates, ChallengeResult(verdicts=[]), {ELEVENST_URL})
+
+    assert len(proposals) == 1
+    assert proposals[0].url == COUPANG_URL
+
+
+def test_apply_challenge_all_candidates_expired_returns_empty_list():
+    candidates = [_merged_candidate(COUPANG_URL, ["gpt"])]
+
+    proposals = _apply_challenge(candidates, ChallengeResult(verdicts=[]), {COUPANG_URL})
+
+    assert proposals == []
+
+
+# --- _is_danawa_product_url -------------------------------------------------
+
+
+def test_is_danawa_product_url_matches_prod_danawa():
+    assert _is_danawa_product_url("https://prod.danawa.com/info/?pcode=12345") is True
+
+
+def test_is_danawa_product_url_rejects_other_domains():
+    assert _is_danawa_product_url(COUPANG_URL) is False
+
+
+def test_is_danawa_product_url_rejects_none_and_empty():
+    assert _is_danawa_product_url(None) is False
+    assert _is_danawa_product_url("") is False
 
 
 # --- _build_decision (judge의 자유 텍스트보다 그라운딩된 후보 데이터를 우선) ---
