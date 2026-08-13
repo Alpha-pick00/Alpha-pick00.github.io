@@ -385,7 +385,22 @@ def _build_pipeline() -> SequentialAgent:
     propose_parallel = ParallelAgent(
         name="propose",
         sub_agents=[
-            _build_propose_agent(gpt_raw, LiteLlm(model=f"openai/{settings.gpt_model}")),
+            # "gpt" 슬롯은 2026-08-15부터 Qwen(DashScope)이 담당한다(사용자 요청:
+            # "GPT 토큰이 더 이상 없어서 Qwen 성능 제일 좋은 걸로 바꿔줘") - openai/
+            # 프리픽스 대신, DashScope의 OpenAI 호환 엔드포인트를 api_base로 직접
+            # 지정한다. litellm이 dashscope 프로바이더를 자체적으로 지원하는지에
+            # 기대지 않고, "그냥 OpenAI 호환 엔드포인트"로 취급하는 쪽이 확실하다
+            # (agents/gpt.py의 openai SDK+base_url 방식과 동일한 접근). name/
+            # output_key는 그대로 "gpt"라 스키마의 AgentName 리터럴이나 이 파일
+            # 다른 곳의 "gpt" 참조를 안 건드린다.
+            _build_propose_agent(
+                gpt_raw,
+                LiteLlm(
+                    model=f"openai/{settings.qwen_model}",
+                    api_base=settings.qwen_api_base,
+                    api_key=settings.qwen_api_key,
+                ),
+            ),
             _build_propose_agent(gemini_raw, settings.gemini_model),
             _build_propose_agent(deepseek_raw, LiteLlm(model=f"deepseek/{settings.deepseek_model}")),
         ],
