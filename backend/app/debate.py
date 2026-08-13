@@ -53,7 +53,7 @@ def _compute_price_range(options: list[BrandOption]) -> PriceRange | None:
 
 def _any_llm_key_configured() -> bool:
     return bool(
-        settings.openai_api_key
+        settings.qwen_api_key
         or settings.gemini_api_key
         or settings.deepseek_api_key
         or settings.anthropic_api_key

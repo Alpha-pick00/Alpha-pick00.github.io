@@ -1,26 +1,28 @@
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import { motion, useScroll, useTransform, useInView } from 'motion/react';
 import weCraftImage from '../../assets/about/we-craft.jpg';
 
 import danawaLogo from '../../assets/about/logos/danawa.webp';
 
-import chatgptLogo from '../../assets/about/logos/chatgpt.svg';
+import qwenLogo from '../../assets/about/logos/qwen.svg';
 import geminiLogo from '../../assets/about/logos/gemini.webp';
 import claudeLogo from '../../assets/about/logos/claude.png';
 import deepseekLogo from '../../assets/about/logos/deepseek.svg';
 import awsLogo from '../../assets/about/logos/aws.svg';
 import tavilyLogo from '../../assets/about/logos/tavily.svg';
 
+// "gpt" 에이전트 슬롯은 2026-08-15부터 OpenAI 토큰 소진으로 Qwen(DashScope)이
+// 담당한다(backend/app/agents/gpt.py 참고) - qwen.svg는 정식 로고 에셋을 아직
+// 못 구해 임시 텍스트 워드마크다. 실제 로고 파일이 생기면 교체할 것.
 const poweredByClients = [
-  { name: 'OpenAI ChatGPT', url: 'https://chatgpt.com', logo: chatgptLogo },
+  { name: '다나와', url: 'https://www.danawa.com', logo: danawaLogo },
+  { name: 'Qwen', url: 'https://qwenlm.ai', logo: qwenLogo },
   { name: 'Google Gemini', url: 'https://gemini.google.com', logo: geminiLogo },
   { name: 'Anthropic Claude', url: 'https://claude.ai', logo: claudeLogo },
   { name: 'DeepSeek', url: 'https://www.deepseek.com', logo: deepseekLogo },
   { name: 'Amazon AWS', url: 'https://aws.amazon.com', logo: awsLogo },
   { name: 'Tavily', url: 'https://tavily.com', logo: tavilyLogo },
 ];
-
-const compareClients = [{ name: '다나와', url: 'https://www.danawa.com', logo: danawaLogo }];
 
 export const About = () => {
   const containerRef = useRef(null);
@@ -154,27 +156,10 @@ export const About = () => {
 
         </div>
 
-        {/* Client List - Trust Factor (full section width) */}
+        {/* Powered By - AI Models + Danawa (2026-08-15, "We Compare across 없애버리고
+            Powered By 하나로 통합" - 별도 섹션으로 나눠뒀던 다나와를 이 목록에
+            합쳐서 스캐닝 하나로 통일) */}
         <div className="mt-20 pt-16 border-t border-black/5">
-          <span className="text-base font-mono uppercase tracking-widest text-neutral-400 block mb-6">We Compare across</span>
-          <div className="flex items-center">
-            {compareClients.map((client) => (
-              <a
-                key={client.name}
-                href={client.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={client.name}
-                className="shrink-0 flex items-center justify-center h-16 px-6 rounded-xl bg-neutral-100 grayscale opacity-70 hover:grayscale-0 hover:opacity-100 transition-all cursor-pointer"
-              >
-                <img src={client.logo} alt={client.name} className="h-6 md:h-7 w-auto max-w-[120px] object-contain" />
-              </a>
-            ))}
-          </div>
-        </div>
-
-        {/* Powered By - AI Models */}
-        <div className="mt-16 pt-16 border-t border-black/5">
           <span className="text-base font-mono uppercase tracking-widest text-neutral-400 block mb-6">Powered by</span>
           <div className="relative w-full overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)]">
             <div

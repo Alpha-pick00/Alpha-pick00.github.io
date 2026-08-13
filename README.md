@@ -41,8 +41,8 @@ flowchart LR
         REFINE["질의 정제<br/>(Gemini)"]
         SEARCH["검색<br/>(Tavily + 의미 기반 캐시)"]
         CAT["카테고리 분류<br/>(Gemini, 16종)"]
-        subgraph PROPOSE["제안 · 병렬 실행 (모델별 최대 5개)"]
-            GPT["ChatGPT"]
+        subgraph PROPOSE["제안 · 병렬 실행 (모델별 최선 1개)"]
+            GPT["Qwen"]
             GEMINI["Gemini"]
             DEEPSEEK["DeepSeek"]
         end
@@ -102,7 +102,7 @@ flowchart LR
 | Frontend | React 18, Vite 6, TypeScript, Tailwind CSS v4, Framer Motion(`motion`), React Router (HashRouter) |
 | Backend | FastAPI, Python, httpx, PyJWT |
 | 멀티에이전트 오케스트레이션 | Google ADK(`SequentialAgent`/`ParallelAgent`), LiteLLM |
-| AI / 제안 · 검증 · 심사 | OpenAI(ChatGPT) · Google Gemini · DeepSeek — 병렬 제안(모델별 최대 5개) / DeepSeek — 교차 검증(challenge) / Anthropic Claude — 최종 심사(judge) |
+| AI / 제안 · 검증 · 심사 | Qwen(DashScope) · Google Gemini · DeepSeek — 병렬 제안(모델별 최선 1개) / DeepSeek — 교차 검증(challenge) / Anthropic Claude — 최종 심사(judge) |
 | 검색 | Tavily Search API (다나와로 도메인 한정) + 임베딩 기반 의미 유사도 검색 캐시 |
 | 다나와 실측 가격 연동 | 다나와 직접 검색/상세페이지 페치(`httpx` + `BeautifulSoup4`/`lxml`), 내부 AJAX 엔드포인트를 통한 최저가 판매처 브릿지 URL 해석 |
 | Human-in-the-loop | ① 카테고리 기반 고정 축(브랜드·제품·용량·개수, Gemini 16종 분류 연동) ② AI 상세검색 facet(DeepSeek, 상호 교차 필터링) — 상황에 따라 병행, 대화형 질문/답장은 GPT가 실시간 생성 |
@@ -136,7 +136,7 @@ flowchart LR
 - **Google 로그인 방식**: 공식 렌더 버튼(iframe)은 Kakao/Naver와 스타일을 맞추기 어려워, `google.accounts.oauth2` 토큰 클라이언트 팝업 방식 + 커스텀 버튼으로 전환
 - **CORS 정책**: 인증이 필요 없는 API이지만, 유료 LLM 호출 비용이 드는 만큼 origin을 알려진 도메인으로만 제한(와일드카드 금지)
 - **검색 기록 저장**: 로그인 시 계정별 서버(SQLite) 저장, 비로그인 시 브라우저 로컬(localStorage) 저장으로 분기
-- **판단 구조 재설계(역할 분리형 에이전트 체인)**: 멘토 피드백(데이터 신뢰도 · 토론/지연시간 구조)을 반영해, 한 번의 호출로 검색부터 추천까지 처리하던 구조를 Google ADK 기반의 **정제 → 검색 → 제안(3모델 병렬, 모델별 최대 5개) → 병합 → 교차 검증 → 심사** 단계로 명시적으로 분리
+- **판단 구조 재설계(역할 분리형 에이전트 체인)**: 멘토 피드백(데이터 신뢰도 · 토론/지연시간 구조)을 반영해, 한 번의 호출로 검색부터 추천까지 처리하던 구조를 Google ADK 기반의 **정제 → 검색 → 제안(3모델 병렬, 모델별 최선 1개) → 병합 → 교차 검증 → 심사** 단계로 명시적으로 분리
 - **후보 병합 기준**: 여러 모델이 제안한 동일 상품 후보를 병합할 때 가격 · 판매처 · URL을 필드별로 각각 다수결 처리하면 서로 다른 상품의 필드가 섞일 수 있어, **하나의 최저가 매물(cheapest member) 기준으로 가격 · 판매처 · URL을 함께** 채택하도록 변경 — 최종 추천이 항상 실제로 그 가격에 구매 가능한 하나의 URL을 가리키도록 보장
 - **Human-in-the-loop 도입 방식**: ADK 내부 pause/resume(`long_running_tool_ids` + `FunctionResponse` 재주입)은 커스텀 `BaseAgent` 구조에서 검증되지 않고 세션 영속화가 필요해 리스크가 크다고 판단, 대신 **앱 레벨에서 파이프라인을 완전히 무상태로 나눠 재실행**하는 방식을 채택(별도 세션 저장소 불필요) — 검색 직후 브랜드 · 제품 · 용량 · 개수가 모호하면 파이프라인을 멈추고, 사용자에게 한 축씩 되물어 이미 답한 조건은 다시 묻지 않는다
 - **카테고리 기반 HITL 축 최적화**: "음료가 아닌 식품에도 용량을 묻는다" 같은 무의미한 질문이 상품 매핑 정확도를 떨어뜨려, Gemini로 검색어를 16개 대분류로 분류하고 카테고리별로 용량 · 개수 축의 관련성을 다르게 판정하도록 개선(예: 식품 중 음료만 용량이 유효, 도서는 용량 없이 개수만 유효) — clarify 단계에서만 호출해 지연시간 영향 최소화
@@ -146,6 +146,7 @@ flowchart LR
 - **Human-in-the-loop 이원화(고정 축 + AI 상세검색 facet)**: 두 팀이 각자 발전시킨 clarify 방식(카테고리 기반 고정 4축 · GPT / 다나와 검색 결과 기반 동적 facet · DeepSeek, 상호 교차 필터링)이 서로 다른 강점을 가져 하나를 버리지 않고 병행 — 짧고 애매한 검색어는 먼저 AI 상세검색(facet)을 시도하고, facet이 못 찾으면 AI 오케스트레이션 내부의 고정 축 clarify로 폴백
 - **대화형 UI로 통합(멀티턴 `ChatTurn`)**: 첫 검색어부터 이후의 모든 되묻기 · 재검색까지 하나의 성장하는 대화 스레드로 보이도록 프론트를 `ChatTurn` 배열 기반으로 재구성 — 브랜드/facet/고정 축 선택은 전부 새 턴을 만드는 방식으로 통일하고, 봇의 질문 · 답장은 고정 문구가 아니라 GPT가 매번 실제로 생성
 - **AI 오케스트레이션과 다나와 통합의 병합**: 같은 기능(멀티에이전트 토론 + 다나와 연동 + HITL + 대화형 UI)을 두 갈래로 독립 개발한 뒤 병합하면서, ADK 파이프라인을 정식 오케스트레이션으로 유지하고 다나와 후보를 judge 풀에 직접 주입하는 직접-구현 경로는 `run_single_debate_price_table_variant`로 보존만 해두고 아직 ADK 파이프라인에 이식하지 않음(후속 과제) — 병합 도중 실제 구동 테스트에서 "이미 답한 축을 다시 묻는" 회귀를 발견해 `skip_clarify` 플래그로 즉시 수정
+- **"gpt" 슬롯을 GPT → Qwen으로 교체**: OpenAI 토큰이 소진돼 `agents/gpt.py`가 호출하는 실제 모델을 DashScope(Alibaba Cloud) 기준 최상위 모델인 Qwen으로 바꿈 — `agent="gpt"`라는 내부 식별자(스키마의 `AgentName` 리터럴, 프론트엔드 타입, 테스트 픽스처 등 수십 곳에 걸침)는 그대로 두고 내부에서 호출하는 모델만 교체(파일명·함수명도 유지, `AsyncOpenAI` SDK를 DashScope의 OpenAI 호환 엔드포인트로 base_url만 바꿔 재사용 - `agents/deepseek.py`와 동일한 패턴). 사용자에게 보이는 이름만 프론트엔드 `AGENT_LABEL`에서 "Qwen"으로 변경. `openai_api_key`는 임베딩 기반 검색 캐시에서만 계속 쓰임
 
 ### 문제 해결 내역 (Troubleshooting)
 

@@ -132,10 +132,6 @@ CMPNYC_MAP: dict[str, MallMapping] = {
 }
 
 
-def lookup(cmpnyc: str) -> MallMapping | None:
-    return CMPNYC_MAP.get(cmpnyc)
-
-
 TRUST_TIER: dict[float, set[str]] = {
     1.0: {
         "coupang.com",
