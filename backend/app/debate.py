@@ -616,7 +616,31 @@ def _facet_display_order(facet: ClarifyFacet) -> int:
     return len(_FACET_ORDER_HINTS)
 
 
-async def check_clarify_facets(query: str, base_query: str | None = None) -> ClarifyResponse:
+def _apply_persona_ordering(facets: list[ClarifyFacet], persona: dict[str, str]) -> list[ClarifyFacet]:
+    """사용자 페르소나(2026-08-15, "냉장고 살 때랑 콜라 살 때 쓰는 메타데이터가
+    다르다" - 카테고리별 facet 자체는 이미 실제 검색 결과에서 즉석에 뽑히므로
+    해결됐고, 이건 그 위에서 "이 사용자가 이 라벨에서 평소/이번 세션에 어떤 값을
+    골랐는가"를 반영하는 것). persona는 {facet 라벨: 선호 값} - 세션(이번 대화
+    누적)과 로그인 계정 영구 기록(app.preferences)을 프론트/main.py에서 이미
+    병합해 넘긴다. 하드 필터가 아니라 그 값이 실제로 이 facet의 옵션 목록에
+    있을 때만 맨 앞으로 당기는 소프트 정렬이다 - 옵션 자체를 줄이거나 없는
+    값을 지어내 추가하지 않는다."""
+    if not persona:
+        return facets
+    reordered = []
+    for facet in facets:
+        preferred = persona.get(facet.label)
+        if preferred and preferred in facet.options:
+            options = [preferred] + [o for o in facet.options if o != preferred]
+            reordered.append(facet.model_copy(update={"options": options}))
+        else:
+            reordered.append(facet)
+    return reordered
+
+
+async def check_clarify_facets(
+    query: str, base_query: str | None = None, persona: dict[str, str] | None = None
+) -> ClarifyResponse:
     """AI 상세검색(2026-08-12 요청) - "음료수"처럼 짧고 애매한 검색어를 다나와
     실제 검색 결과 상품명에 근거해 몇 가지 기준(facet)으로 좁혀나가도록 DeepSeek에게
     물어본다(원래 Qwen으로 붙였다가, Model Studio 계정의 과금 플랜 활성화 문제로
@@ -652,6 +676,7 @@ async def check_clarify_facets(query: str, base_query: str | None = None) -> Cla
     facets = await _enrich_facets_per_brand(facets, items, query)
     facets = _attach_facet_crossfilter(facets, items)
     facets = sorted(facets, key=_facet_display_order)
+    facets = _apply_persona_ordering(facets, persona or {})
     return ClarifyResponse(query=query, options=ClarifyOptions(facets=facets))
 
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { AlertTriangle, ArrowUpRight, Check, RotateCcw, Search, Truck } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, Check, RotateCcw, Search, Sparkles, Truck } from 'lucide-react';
 import type {
   ClarifyFacet as ClarifyFacetType,
   DanawaStreamCandidate,
@@ -278,14 +278,22 @@ const FixedAxisClarifyCard = ({
 
 interface Props {
   result: DecideResult;
+  // 사용자 페르소나(2026-08-15) - 이번 세션에서 이미 고른 {facet 라벨: 값}.
+  // 옵션 순서 자체는 백엔드가 이미 반영해 보내주므로, 여기서는 일치하는
+  // 버튼에 "선호" 표시만 붙이는 시각적 용도로 쓴다.
+  sessionPreferences?: Record<string, string>;
   onSelectBrand: (brand: string) => void;
-  onConfirmFacets: (values: string[]) => void;
-  onSelectClarifyOption: (value: string) => void;
+  // (사용자 페르소나, 2026-08-15) label -> 선택값 맵을 그대로 넘긴다 - 값
+  // 배열만 받으면 SearchContext가 어느 facet 라벨에서 이 값을 골랐는지 몰라
+  // 계정/세션 페르소나에 기록할 수 없다.
+  onConfirmFacets: (selected: Record<string, string>) => void;
+  onSelectClarifyOption: (step: Exclude<ClarifyStep, 'brand'>, value: string) => void;
   onReset?: () => void;
 }
 
 export const SearchResults = ({
   result,
+  sessionPreferences = {},
   onSelectBrand,
   onConfirmFacets,
   onSelectClarifyOption,
@@ -304,8 +312,7 @@ export const SearchResults = ({
 
   useEffect(() => {
     if (facets.length === 0 || !facets.every((f) => selectedFacets[f.label])) return;
-    const values = facets.map((f) => selectedFacets[f.label]).filter((v): v is string => Boolean(v));
-    onConfirmFacets(values);
+    onConfirmFacets(selectedFacets);
     // facets/onConfirmFacets는 매 렌더 새 참조라 deps에 넣으면 무한 루프가 된다 -
     // "선택 상태가 바뀔 때"만 완주 여부를 재확인하면 충분하다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -419,16 +426,24 @@ export const SearchResults = ({
                 {visibleOptions.length > 0 ? (
                   visibleOptions.map((option) => {
                     const isSelected = selectedFacets[facet.label] === option;
+                    // 사용자 페르소나(2026-08-15) - 이번 세션에서 이 라벨에 이미
+                    // 골랐던 값이면 별 표시로 "평소 선택"임을 알려준다. 옵션
+                    // 순서 자체(맨 앞으로 당기기)는 백엔드가 이미 반영했으니
+                    // 여기서는 순수 시각적 확인 표시.
+                    const isPersonaPick = !isSelected && sessionPreferences[facet.label] === option;
                     return (
                       <button
                         key={option}
                         onClick={() => toggleFacetOption(facet.label, option)}
-                        className={`px-4 py-2 rounded-full border text-sm font-light transition-all ${
+                        className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full border text-sm font-light transition-all ${
                           isSelected
                             ? 'bg-neutral-950 text-white border-neutral-950'
+                            : isPersonaPick
+                            ? 'border-[#4ADE80]/50 bg-[#4ADE80]/10 hover:bg-neutral-950 hover:text-white hover:border-neutral-950'
                             : 'border-black/10 hover:bg-neutral-950 hover:text-white hover:border-neutral-950'
                         }`}
                       >
+                        {isPersonaPick && <Sparkles className="w-3 h-3 text-[#166534]" strokeWidth={2.5} />}
                         {option}
                       </button>
                     );
@@ -442,7 +457,11 @@ export const SearchResults = ({
         })}
         {step && (
           <div className="mb-4 last:mb-0">
-            <FixedAxisClarifyCard query={result.query} options={stepOptions} onSelectOption={onSelectClarifyOption} />
+            <FixedAxisClarifyCard
+              query={result.query}
+              options={stepOptions}
+              onSelectOption={(value) => onSelectClarifyOption(step, value)}
+            />
           </div>
         )}
         {onReset && <ResetLink onReset={onReset} />}

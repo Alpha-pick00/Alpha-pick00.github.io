@@ -9,6 +9,7 @@ import {
   deleteServerHistoryEntry,
   clearServerHistory,
   looksAmbiguous,
+  recordPreference,
   ApiError,
   type DecideResult,
   type DecideStage,
@@ -24,6 +25,7 @@ import {
   saveHistoryEntry,
   type HistoryEntry,
 } from '../lib/history';
+import type { ClarifyStep } from '../components/SearchResults';
 
 const fromServerEntry = (entry: ServerHistoryEntry): HistoryEntry => ({
   id: entry.id,
@@ -61,10 +63,15 @@ interface SearchContextValue {
   isBusy: boolean;
   ocrBusy: boolean;
   history: HistoryEntry[];
+  // 사용자 페르소나(2026-08-15) - 이번 세션에서 지금까지 고른 {facet 라벨: 값}.
+  // SearchResults가 옵션 버튼에 "선호" 표시를 붙이는 데 쓴다 - 실제 옵션 순서
+  // 반영(우선순위를 앞으로 당기는 것)은 백엔드(check_clarify_facets)가 이미
+  // 하므로, 여기서는 순수하게 시각적 표시 용도다.
+  sessionPreferences: Record<string, string>;
   sendMessage: (q: string) => Promise<void>;
   selectBrand: (turnId: string, brand: string) => Promise<void>;
-  selectFacets: (turnId: string, values: string[]) => Promise<void>;
-  selectClarifyOption: (turnId: string, value: string) => Promise<void>;
+  selectFacets: (turnId: string, selected: Record<string, string>) => Promise<void>;
+  selectClarifyOption: (turnId: string, step: Exclude<ClarifyStep, 'brand'>, value: string) => Promise<void>;
   retryTurn: (turnId: string) => Promise<void>;
   handleImageUpload: (file: File) => Promise<void>;
   handleReset: () => void;
@@ -90,6 +97,15 @@ const dedupeAppend = (base: string, addition: string): string => {
   return [...baseTokens, ...newTokens].join(' ');
 };
 
+// 고정 축(product/volume/quantity) -> 사용자 페르소나 라벨 매핑. AI
+// 상세검색(facet)과 서로 다른 라벨 체계를 쓰므로("volume" vs 실제 facet 라벨
+// "용량"), 향후 facet 재정렬에서 실제로 매칭될 수 있는 축(용량)만 공용 라벨로
+// 옮겨 기록한다. product는 특정 상품명 그 자체라 재사용 가치가 낮아 기록하지 않는다.
+const CLARIFY_STEP_PERSONA_LABEL: Partial<Record<Exclude<ClarifyStep, 'brand'>, string>> = {
+  volume: '용량',
+  quantity: '구매유형',
+};
+
 const newTurn = (
   displayQuery: string,
   requestQuery: string,
@@ -113,6 +129,14 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
+  // 사용자 페르소나(2026-08-15, "냉장고 살 때랑 콜라 살 때 쓰는 메타데이터가
+  // 다르다" -> "사용자 페르소나 기반으로 상품 매핑") - 이번 세션에서 지금까지
+  // 고른 facet/축 값을 {라벨: 값}으로 누적한다. 현재 드릴다운 체인(baseQuery)에
+  // 갇히지 않고 세션 전체(예: 폰 검색에서 "삼성" 고른 뒤, 완전히 새로 시작한
+  // 이어폰 검색에도)에 걸쳐 유지된다. 로그인 계정에는 추가로 영구 저장한다
+  // (rememberPreference 참고) - 세션 값은 새로고침하면 사라지지만, 계정 값은
+  // 다음 방문에도 /decide/clarify가 자동으로 다시 불러와 반영한다.
+  const [sessionPreferences, setSessionPreferences] = useState<Record<string, string>>({});
 
   // 로그인 상태가 바뀌면 기록 소스를 전환한다 — 로그인하면 그 계정의 서버 기록을
   // 불러오고, 로그아웃하면 이 브라우저의 로컬 기록으로 되돌아간다.
@@ -143,6 +167,17 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
     setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   };
 
+  // 페르소나 한 줄(라벨:값) 기록 - 세션 상태는 즉시 반영해 바로 다음
+  // checkClarifyFacets 호출부터 쓰이고, 로그인 계정에는 fire-and-forget으로
+  // 영구 저장한다(실패해도 검색 흐름에 영향 없음).
+  const rememberPreference = (label: string, value: string) => {
+    setSessionPreferences((prev) => ({ ...prev, [label]: value }));
+    if (user) {
+      const token = getStoredToken();
+      if (token) recordPreference(token, label, value).catch(() => {});
+    }
+  };
+
   // 턴 하나의 실제 검색/조회를 실행하고 그 턴만 갱신한다. sendMessage(새 턴 추가)/
   // selectBrand/selectFacets/selectClarifyOption(후속 턴 추가)/retryTurn(기존 턴
   // 재실행) 전부 이 위에서 돈다. AI 오케스트레이션(adk_pipeline, decideStream)이
@@ -155,7 +190,19 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   // 축(브랜드/용량 등)에 대해 서버가 또 clarify를 띄우는 재질문 버그가 생긴다
   // (2026-08 통합 병합 승인안의 "skip_internal_clarify" 요구사항을 기존
   // skip_intent_check 플래그로 구현).
-  const runTurn = async (id: string, requestQuery: string, brand?: string, baseQuery?: string) => {
+  //
+  // personaOverride - 바로 이 턴을 만든 선택(예: 방금 rememberPreference로 기록한
+  // 라벨:값)을 checkClarifyFacets 호출에 즉시 반영하기 위한 값이다. setState는
+  // 비동기라 rememberPreference 직후 곧바로 runTurn을 불러도 이 함수가 캡처한
+  // sessionPreferences는 아직 리렌더 전 값(반영 안 됨)일 수 있어, 호출부가 방금
+  // 배운 값을 명시적으로 얹어 보낸다.
+  const runTurn = async (
+    id: string,
+    requestQuery: string,
+    brand?: string,
+    baseQuery?: string,
+    personaOverride?: Record<string, string>
+  ) => {
     if (brand) {
       try {
         const data = await decide(requestQuery, brand);
@@ -181,7 +228,10 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
       // 좋은 보조 기능이지 필수 경로가 아니다. 후속 턴(skipIntentCheck)에서는
       // 이미 한 축을 답했으므로 다시 묻지 않는다.
       if (!skipIntentCheck && looksAmbiguous(requestQuery)) {
-        const clarify = await checkClarifyFacets(requestQuery, baseQuery).catch(() => null);
+        const persona = { ...sessionPreferences, ...personaOverride };
+        const clarify = await checkClarifyFacets(requestQuery, baseQuery, persona, getStoredToken()).catch(
+          () => null
+        );
         if (clarify && clarify.options.facets.length > 0) {
           patchTurn(id, { status: 'result', result: clarify });
           return;
@@ -239,6 +289,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   const selectBrand = async (turnId: string, brand: string) => {
     const origin = turns.find((t) => t.id === turnId);
     if (!origin) return;
+    rememberPreference('브랜드', brand);
     const turn = newTurn(brand, origin.requestQuery, brand);
     setTurns((prev) => [...prev, turn]);
     await runTurn(turn.id, turn.requestQuery, turn.brand);
@@ -251,25 +302,35 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   // baseQuery는 origin에서 그대로 물려받는다(origin.requestQuery가 아니라) -
   // 드릴다운 체인 전체가 맨 처음 검색어 하나로 고정돼야 백엔드가 매번 그
   // 하나만 캐시해서 재사용할 수 있다(속도 개선, 2026-08-13).
-  const selectFacets = async (turnId: string, values: string[]) => {
+  //
+  // selected가 {라벨: 값}으로 넘어온다(사용자 페르소나, 2026-08-15) - 값
+  // 배열이 아니라 라벨을 같이 받아야 어느 facet에서 이 값을 골랐는지 세션/계정
+  // 페르소나에 정확히 기록할 수 있다.
+  const selectFacets = async (turnId: string, selected: Record<string, string>) => {
     const origin = turns.find((t) => t.id === turnId);
+    const values = Object.values(selected);
     if (!origin || values.length === 0) return;
+    Object.entries(selected).forEach(([label, value]) => rememberPreference(label, value));
     const combined = values.reduce((acc, value) => dedupeAppend(acc, value), origin.requestQuery).trim();
     const turn = newTurn(values.join(' · '), combined, undefined, origin.baseQuery);
     setTurns((prev) => [...prev, turn]);
-    await runTurn(turn.id, turn.requestQuery, undefined, turn.baseQuery);
+    await runTurn(turn.id, turn.requestQuery, undefined, turn.baseQuery, selected);
   };
 
   // 고정 축(제품/용량/개수) clarify 카드에서 옵션 하나를 고르거나 채팅으로
   // 매칭됐을 때 - selectFacets와 같은 방식으로 검색어에 이어붙여 후속 턴을
   // 만든다(run_brand_price로 단축하지 않고 일반 검색 경로를 그대로 탄다).
-  const selectClarifyOption = async (turnId: string, value: string) => {
+  //
+  const selectClarifyOption = async (turnId: string, step: Exclude<ClarifyStep, 'brand'>, value: string) => {
     const origin = turns.find((t) => t.id === turnId);
     if (!origin) return;
+    const personaLabel = CLARIFY_STEP_PERSONA_LABEL[step];
+    const personaOverride = personaLabel ? { [personaLabel]: value } : undefined;
+    if (personaLabel) rememberPreference(personaLabel, value);
     const combined = dedupeAppend(origin.requestQuery, value).trim();
     const turn = newTurn(value, combined, undefined, origin.baseQuery);
     setTurns((prev) => [...prev, turn]);
-    await runTurn(turn.id, turn.requestQuery, undefined, turn.baseQuery);
+    await runTurn(turn.id, turn.requestQuery, undefined, turn.baseQuery, personaOverride);
   };
 
   const retryTurn = async (turnId: string) => {
@@ -354,6 +415,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
         isBusy,
         ocrBusy,
         history,
+        sessionPreferences,
         sendMessage,
         selectBrand,
         selectFacets,

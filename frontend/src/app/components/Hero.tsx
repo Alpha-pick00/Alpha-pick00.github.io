@@ -18,6 +18,7 @@ export const Hero = () => {
     turns,
     isBusy,
     ocrBusy,
+    sessionPreferences,
     sendMessage,
     selectBrand,
     selectFacets,
@@ -343,9 +344,10 @@ export const Hero = () => {
                           {turn.status === 'result' && turn.result && (
                             <SearchResults
                               result={turn.result}
+                              sessionPreferences={sessionPreferences}
                               onSelectBrand={(brand) => selectBrand(turn.id, brand)}
-                              onConfirmFacets={(values) => selectFacets(turn.id, values)}
-                              onSelectClarifyOption={(value) => selectClarifyOption(turn.id, value)}
+                              onConfirmFacets={(selected) => selectFacets(turn.id, selected)}
+                              onSelectClarifyOption={(step, value) => selectClarifyOption(turn.id, step, value)}
                             />
                           )}
                         </div>
