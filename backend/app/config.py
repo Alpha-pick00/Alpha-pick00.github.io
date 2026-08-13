@@ -22,8 +22,6 @@ class Settings:
     qwen_api_base: str = os.environ.get(
         "QWEN_API_BASE", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     )
-    gemini_api_key: str | None = os.environ.get("GEMINI_API_KEY")
-    anthropic_api_key: str | None = os.environ.get("ANTHROPIC_API_KEY")
     deepseek_api_key: str | None = os.environ.get("DEEPSEEK_API_KEY")
     tavily_api_key: str | None = os.environ.get("TAVILY_API_KEY")
     google_merchant_id: str | None = os.environ.get("GOOGLE_MERCHANT_ID")
@@ -32,9 +30,31 @@ class Settings:
     # DashScope(Alibaba Cloud) 기준 범용 성능이 가장 높은 모델 - 필요하면 .env의
     # QWEN_MODEL로 다른 버전(예: qwen-max-latest)으로 바꿀 수 있다.
     qwen_model: str = os.environ.get("QWEN_MODEL", "qwen-max")
-    gemini_model: str = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
-    judge_model: str = os.environ.get("JUDGE_MODEL", "claude-sonnet-5")
     deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+
+    # "gemini"/judge 슬롯은 2026-08-16부터 Groq(무료 API)이 담당한다(사용자 요청:
+    # "deepseek Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" - Gemini는 프로젝트가
+    # 403으로 막혀있었고 Claude는 애초에 상시 무료 티어가 없다). Groq도 OpenAI
+    # 호환 엔드포인트라 gpt.py/deepseek.py와 같은 패턴(AsyncOpenAI+base_url)을
+    # 그대로 쓴다. agent="gemini" 식별자 자체는 안 바꿨다(gpt와 동일한 이유).
+    groq_api_key: str | None = os.environ.get("GROQ_API_KEY")
+    groq_api_base: str = os.environ.get("GROQ_API_BASE", "https://api.groq.com/openai/v1")
+    # 카테고리분류/OCR 텍스트 정리/propose의 "gemini" 슬롯이 공통으로 쓰는 범용
+    # 모델. Groq 무료(on-demand) 티어의 분당 토큰(TPM) 한도가 모델마다 6000~12000인데,
+    # 검색 결과 12건을 그대로 프롬프트에 넣으면(스니펫 트리밍 전 기준) 이 한도를
+    # 매번 초과했다(agents/base.py의 _SNIPPET_MAX_CHARS 참고 - 그 트리밍으로 기본
+    # 해결). groq/compound(-mini)는 TPM은 넉넉하지만 내부적으로 여러 모델에 요청을
+    # 위임하는 에이전틱 모델이라 그 하위 모델들의 rate limit을 그대로 물려받아
+    # 오히려 더 불안정했다 - 순수 모델 중 TPM이 가장 넉넉한 걸 쓴다.
+    groq_model: str = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    # refine은 프롬프트가 원본 질의 하나뿐이라 작지만, ADK가 output_schema를
+    # response_format=json_schema로 요청한다 - groq/compound-mini는 이를 지원하지
+    # 않는다("This model does not support response format json_schema"). 구조화
+    # 출력을 지원하는 gpt-oss 계열 중 작은 쪽을 refine 전용으로 따로 둔다.
+    groq_refine_model: str = os.environ.get("GROQ_REFINE_MODEL", "openai/gpt-oss-20b")
+    # judge(최종 심사)도 output_schema가 필요해 같은 gpt-oss 계열이지만, propose
+    # 쪽보다 큰 120b를 따로 써서 최소한의 판단력 격차를 둔다.
+    groq_judge_model: str = os.environ.get("GROQ_JUDGE_MODEL", "openai/gpt-oss-120b")
 
     google_vision_api_key: str | None = os.environ.get("GOOGLE_VISION_API_KEY")
 

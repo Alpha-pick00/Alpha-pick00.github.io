@@ -52,12 +52,7 @@ def _compute_price_range(options: list[BrandOption]) -> PriceRange | None:
 
 
 def _any_llm_key_configured() -> bool:
-    return bool(
-        settings.qwen_api_key
-        or settings.gemini_api_key
-        or settings.deepseek_api_key
-        or settings.anthropic_api_key
-    )
+    return bool(settings.qwen_api_key or settings.groq_api_key or settings.deepseek_api_key)
 
 
 async def run_debate(query: str) -> DecideResponse | BulkDecideResponse | ClarifyResponse:
@@ -695,7 +690,7 @@ async def _extract_clarify_options(query: str, results: list[SearchResult]) -> C
     """검색 결과에서 브랜드/제품/용량/수량을 뽑아본다. 아무것도 못 찾으면 None.
     이미 가져온 검색 결과를 그대로 받아 재검색하지 않는다 — run_single_debate가
     전체 실패했을 때 같은 결과로 이 함수를 다시 시도하는 용도로도 쓰인다.
-    카테고리 분류(Gemini)는 옵션 추출(GPT)과 동시에 실행해 지연 시간을 늘리지
+    카테고리 분류(Groq)는 옵션 추출(GPT)과 동시에 실행해 지연 시간을 늘리지
     않는다."""
     filtered_results = _filter_listing_pages(results)
     raw, classification = await asyncio.gather(

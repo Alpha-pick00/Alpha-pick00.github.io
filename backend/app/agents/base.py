@@ -98,9 +98,21 @@ BULK_PROPOSAL_INSTRUCTIONS = (
 )
 
 
+# Tavily snippet은 실측으로 건당 최대 1500자까지 나온다 - 검색 결과 12건을 그대로
+# 넣으면 프롬프트가 2만자(약 1만3천 토큰)를 넘어, Groq 무료(on-demand) 티어의
+# 분당 토큰(TPM) 한도(6000~12000)를 매번 초과했다(2026-08-16, "gemini" 슬롯을
+# Groq로 옮기며 발견). 상품 하나를 식별하는 데 스니펫 전체가 필요하진 않으므로
+# 500자로 자른다 - 이 함수가 propose/challenge/clarify/브랜드가격 프롬프트에 전부
+# 쓰여 Qwen/DeepSeek 쪽 비용도 같이 줄어든다.
+_SNIPPET_MAX_CHARS = 500
+
+
 def format_results_block(search_results: list[SearchResult]) -> str:
+    def _snippet(text: str) -> str:
+        return text if len(text) <= _SNIPPET_MAX_CHARS else text[:_SNIPPET_MAX_CHARS] + "…"
+
     return (
-        "\n".join(f"- {r.title} ({r.url}): {r.snippet}" for r in search_results)
+        "\n".join(f"- {r.title} ({r.url}): {_snippet(r.snippet)}" for r in search_results)
         or "(검색 결과 없음)"
     )
 

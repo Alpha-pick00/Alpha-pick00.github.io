@@ -38,17 +38,17 @@ flowchart LR
     end
 
     subgraph PIPE["AI 오케스트레이션 · Google ADK (adk_pipeline)"]
-        REFINE["질의 정제<br/>(Gemini)"]
+        REFINE["질의 정제<br/>(Groq)"]
         SEARCH["검색<br/>(Tavily + 의미 기반 캐시)"]
-        CAT["카테고리 분류<br/>(Gemini, 16종)"]
+        CAT["카테고리 분류<br/>(Groq, 16종)"]
         subgraph PROPOSE["제안 · 병렬 실행 (모델별 최선 1개)"]
             GPT["Qwen"]
-            GEMINI["Gemini"]
+            GEMINI["Groq"]
             DEEPSEEK["DeepSeek"]
         end
         MERGE["병합 · 중복 제거<br/>(최저가 매물 기준 통합)"]
         CHALLENGE["교차 검증<br/>(DeepSeek)"]
-        JUDGE["최종 심사<br/>(Claude)"]
+        JUDGE["최종 심사<br/>(Groq)"]
     end
 
     subgraph DANAWA["다나와 실측 가격 연동"]
@@ -102,11 +102,11 @@ flowchart LR
 | Frontend | React 18, Vite 6, TypeScript, Tailwind CSS v4, Framer Motion(`motion`), React Router (HashRouter) |
 | Backend | FastAPI, Python, httpx, PyJWT |
 | 멀티에이전트 오케스트레이션 | Google ADK(`SequentialAgent`/`ParallelAgent`), LiteLLM |
-| AI / 제안 · 검증 · 심사 | Qwen(DashScope) · Google Gemini · DeepSeek — 병렬 제안(모델별 최선 1개) / DeepSeek — 교차 검증(challenge) / Anthropic Claude — 최종 심사(judge) |
+| AI / 제안 · 검증 · 심사 | Qwen(DashScope) · Groq(Llama) · DeepSeek — 병렬 제안(모델별 최선 1개) / DeepSeek — 교차 검증(challenge) / Groq(GPT-OSS) — 최종 심사(judge) |
 | 검색 | Tavily Search API (다나와로 도메인 한정) + 임베딩 기반 의미 유사도 검색 캐시 |
 | 다나와 실측 가격 연동 | 다나와 직접 검색/상세페이지 페치(`httpx` + `BeautifulSoup4`/`lxml`), 내부 AJAX 엔드포인트를 통한 최저가 판매처 브릿지 URL 해석 |
-| Human-in-the-loop | ① 카테고리 기반 고정 축(브랜드·제품·용량·개수, Gemini 16종 분류 연동) ② AI 상세검색 facet(DeepSeek, 상호 교차 필터링) — 상황에 따라 병행, 대화형 질문/답장은 GPT가 실시간 생성 |
-| 이미지 인식 | Google Cloud Vision (텍스트 추출) → Gemini (정제 · 검색어 추출) |
+| Human-in-the-loop | ① 카테고리 기반 고정 축(브랜드·제품·용량·개수, Groq 16종 분류 연동) ② AI 상세검색 facet(DeepSeek, 상호 교차 필터링) — 상황에 따라 병행, 대화형 질문/답장은 Qwen이 실시간 생성 |
+| 이미지 인식 | Google Cloud Vision (텍스트 추출) → Groq (정제 · 검색어 추출) |
 | 인증 | Google / Kakao / Naver OAuth2 + JWT 기반 세션 |
 | 저장소 | SQLite (검색 기록 · 자동완성 인덱스 · 검색 캐시) |
 | 배포 | Docker, nginx, certbot, AWS GPU 인스턴스, nip.io / GitHub Pages(Frontend), GitHub Actions(CI) |
@@ -127,7 +127,7 @@ flowchart LR
 | --- | --- |
 | parkikk (patrick01053457926@gmail.com) | 백엔드 멀티에이전트 토론 엔진, 검색 품질(Tavily 연동/필터링), 소셜 로그인, 배포(AWS/Docker/nginx), 프론트엔드 UI/UX 전반 |
 | tmdals3000 | 검색어 자동완성(cold-start) 기능 |
-| lou0-ux | OCR 텍스트 추출 파이프라인(Google Vision + Gemini 정제) |
+| lou0-ux | OCR 텍스트 추출 파이프라인(Google Vision + Groq 정제) |
 
 ### 주요 의사결정 사항
 
@@ -147,6 +147,7 @@ flowchart LR
 - **대화형 UI로 통합(멀티턴 `ChatTurn`)**: 첫 검색어부터 이후의 모든 되묻기 · 재검색까지 하나의 성장하는 대화 스레드로 보이도록 프론트를 `ChatTurn` 배열 기반으로 재구성 — 브랜드/facet/고정 축 선택은 전부 새 턴을 만드는 방식으로 통일하고, 봇의 질문 · 답장은 고정 문구가 아니라 GPT가 매번 실제로 생성
 - **AI 오케스트레이션과 다나와 통합의 병합**: 같은 기능(멀티에이전트 토론 + 다나와 연동 + HITL + 대화형 UI)을 두 갈래로 독립 개발한 뒤 병합하면서, ADK 파이프라인을 정식 오케스트레이션으로 유지하고 다나와 후보를 judge 풀에 직접 주입하는 직접-구현 경로는 `run_single_debate_price_table_variant`로 보존만 해두고 아직 ADK 파이프라인에 이식하지 않음(후속 과제) — 병합 도중 실제 구동 테스트에서 "이미 답한 축을 다시 묻는" 회귀를 발견해 `skip_clarify` 플래그로 즉시 수정
 - **"gpt" 슬롯을 GPT → Qwen으로 교체**: OpenAI 토큰이 소진돼 `agents/gpt.py`가 호출하는 실제 모델을 DashScope(Alibaba Cloud) 기준 최상위 모델인 Qwen으로 바꿈 — `agent="gpt"`라는 내부 식별자(스키마의 `AgentName` 리터럴, 프론트엔드 타입, 테스트 픽스처 등 수십 곳에 걸침)는 그대로 두고 내부에서 호출하는 모델만 교체(파일명·함수명도 유지, `AsyncOpenAI` SDK를 DashScope의 OpenAI 호환 엔드포인트로 base_url만 바꿔 재사용 - `agents/deepseek.py`와 동일한 패턴). 사용자에게 보이는 이름만 프론트엔드 `AGENT_LABEL`에서 "Qwen"으로 변경. `openai_api_key`는 임베딩 기반 검색 캐시에서만 계속 쓰임
+- **Gemini · Claude → Groq(무료 API)로 교체**: Gemini 프로젝트가 403으로 막히고 Anthropic엔 상시 무료 티어가 없어, DeepSeek/Qwen을 뺀 나머지 전부를 무료 API인 Groq로 전환 — `agent="gemini"` 식별자와 `agents/gemini.py`/`agents/judge.py` 파일·함수명은 그대로 두고 호출 모델만 교체(Qwen 때와 동일한 패턴). 역할별로 다른 모델을 쓰는데, ADK의 구조화 출력(`output_schema`→`response_format=json_schema`)을 지원하는 모델이 Groq 카탈로그에 `gpt-oss` 계열뿐이라 refine(작은 프롬프트)은 `gpt-oss-20b`, judge(그보다 큰 프롬프트 · 최종 심사)는 `gpt-oss-120b`를 쓰고, 구조화 출력이 필요 없는 categorize/OCR정제/propose의 "gemini" 슬롯은 무료 티어 분당 토큰(TPM) 한도가 가장 넉넉한 `llama-3.3-70b-versatile`을 쓴다 — `groq/compound(-mini)`는 TPM은 넉넉했지만 내부적으로 여러 모델에 요청을 위임하는 에이전틱 모델이라 하위 모델 rate limit을 그대로 물려받아 오히려 더 자주 실패해 제외. 검색 결과 12건을 그대로 프롬프트에 넣으면(Tavily 스니펫 건당 최대 1500자) 이 TPM 한도를 매번 초과해, `format_results_block`이 스니펫을 500자로 잘라 담도록 함께 수정(Qwen/DeepSeek 쪽 프롬프트 비용도 동반 절감)
 
 ### 문제 해결 내역 (Troubleshooting)
 
@@ -177,7 +178,7 @@ flowchart LR
 - 상품 상세/가격 정보가 없는 콘텐츠·매거진·검색결과 목록 도메인 제외 (`EXCLUDE_DOMAINS`)
 - 정규식 기반 제네릭 목록 URL 필터링 (`is_generic_listing_url`)
 - 브랜드-URL 그라운딩 검증으로 무관한 상품이 섞이는 것을 방지
-- OCR 원문에서 가격/바코드/프로모션 문구를 제거하고 상품명·용량 등 핵심 메타데이터만 남기는 Gemini 정제 단계(`search_query` 추출)
+- OCR 원문에서 가격/바코드/프로모션 문구를 제거하고 상품명·용량 등 핵심 메타데이터만 남기는 Groq 정제 단계(`search_query` 추출)
 
 ### 평가 기준 (무엇으로 "좋은 답"을 판단할지)
 
@@ -198,14 +199,14 @@ sequenceDiagram
     participant B as 백엔드(ADK 파이프라인)
     participant Cache as 검색 캐시(의미 기반)
     participant T as Tavily
-    participant P as 제안 에이전트(GPT·Gemini·DeepSeek)
+    participant P as 제안 에이전트(Qwen·Groq·DeepSeek)
     participant D as DeepSeek(교차 검증)
-    participant J as Claude(심사)
+    participant J as Groq(심사)
     participant DW as 다나와(브릿지 URL 해석)
 
     U->>CTX: 검색어 입력(첫 턴)
     CTX->>B: POST /decide/stream (skip_intent_check=false)
-    B->>B: 질의 정제(Gemini)
+    B->>B: 질의 정제(Groq)
     B->>Cache: 캐시 조회
     alt 캐시 미스
         B->>T: 다나와 한정 검색
@@ -215,11 +216,11 @@ sequenceDiagram
     alt 브랜드/제품/용량/개수 모호 (Human-in-the-loop)
         B-->>CTX: mode: clarify (고정 축 옵션)
         CTX-->>U: 새 턴으로 이어붙여 되묻기(버튼 · 채팅 둘 다)
-        U->>CTX: 옵션 선택 또는 채팅 답변(GPT가 매칭)
+        U->>CTX: 옵션 선택 또는 채팅 답변(Qwen이 매칭)
         CTX->>B: 후속 턴 POST /decide/stream (skip_intent_check=true)
         Note over B: skip_clarify=true → 내부 애매함 판정을 건너뛰고<br/>바로 제안 단계로 진행(재질문 방지)
     end
-    B->>P: 검색 결과 + 질의 전달 (병렬, 모델별 최대 5개)
+    B->>P: 검색 결과 + 질의 전달 (병렬, 모델별 최선 1개)
     P-->>B: 상품 후보 제안 (근거 포함)
     B->>B: 후보 병합 · 중복 제거(최저가 매물 기준)
     B->>D: 병합된 후보 교차 검증 요청
@@ -246,7 +247,7 @@ sequenceDiagram
 - 검색 캐시를 정확 일치(exact-key) 방식에서 **임베딩 기반 의미 유사도 매칭**으로 업그레이드해, 표현만 다른 유사 질의의 중복 Tavily/LLM 호출 비용을 절감
 - 동일 상품 후보 병합 시 가격 · 판매처 · URL을 최저가 매물 하나에서 함께 채택하도록 바꿔 "가격과 실제 연결 URL이 다른 상품" 불일치 제거
 - 제안/교차 검증 프롬프트에 브랜드 · 제품 · 용량 · 개수 정확 일치 조건을 명시해, Human-in-the-loop으로 이미 좁힌 조건이 검색 품질 문제로 다시 섞이지 않도록 개선
-- 카테고리별로 용량 · 개수 축의 관련성을 다르게 판정해(Gemini 16종 분류), 해당 없는 축을 억지로 고르게 해 상품 매핑이 틀어지는 문제 감소
+- 카테고리별로 용량 · 개수 축의 관련성을 다르게 판정해(Groq 16종 분류), 해당 없는 축을 억지로 고르게 해 상품 매핑이 틀어지는 문제 감소
 - AI 상세검색(facet) 다중 라운드 시 base_query를 유지해 다나와 검색 캐시(1시간, 10초 crawl-delay)를 재사용하도록 개선해 드릴다운 응답속도 단축
 - 다나와 실측 최저가를 별도로 확보해 LLM 추정 가격 · URL의 오차를 줄이고, 최종 URL이 다나와 가격비교 페이지 자체로 남지 않도록 실제 구매처 브릿지 URL로 항상 변환
 - 멀티턴 대화 흐름에서 후속 턴에 `skip_clarify`를 적용해, 이미 답한 조건에 대해 파이프라인이 다시 되묻는 무한 재질문을 제거

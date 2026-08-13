@@ -1,5 +1,4 @@
-from google import genai
-from google.genai import types
+from openai import AsyncOpenAI
 
 from ..agents.base import parse_json_object
 from ..config import settings
@@ -21,21 +20,20 @@ CLEANUP_INSTRUCTIONS = (
     '"notes": "정리하면서 처리한 내용(중복 제거, 줄바꿈 정리 등). 없으면 빈 문자열"}'
 )
 
-JSON_CONFIG = types.GenerateContentConfig(response_mime_type="application/json")
-
 
 async def clean(raw_text: str) -> OcrCleanupResult:
     if not raw_text.strip():
         return OcrCleanupResult(error="정리할 OCR 텍스트가 없습니다.")
 
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=f"{CLEANUP_INSTRUCTIONS}\n\nOCR 원본 텍스트:\n{raw_text}",
-            config=JSON_CONFIG,
+        client = AsyncOpenAI(api_key=settings.groq_api_key, base_url=settings.groq_api_base)
+        response = await client.chat.completions.create(
+            model=settings.groq_model,
+            messages=[
+                {"role": "user", "content": f"{CLEANUP_INSTRUCTIONS}\n\nOCR 원본 텍스트:\n{raw_text}"}
+            ],
         )
-        data = parse_json_object(response.text or "")
+        data = parse_json_object(response.choices[0].message.content or "")
         return OcrCleanupResult(**data)
     except Exception as exc:
         return OcrCleanupResult(error=str(exc))
