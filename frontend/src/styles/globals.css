@@ -190,3 +190,16 @@
 html {
   font-size: var(--font-size);
 }
+
+/* About.tsx의 "Powered by" 로고 트랙(marquee-track) - 왼쪽으로 천천히 흐르는
+   무한 스크롤. 목록을 두 번 이어붙여 렌더링하므로(poweredByClients 두 배)
+   -50% 지점이 정확히 원본 목록 하나 분량이라, 거기서 처음 위치로 돌아가면
+   이음매 없이 반복된다. */
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}

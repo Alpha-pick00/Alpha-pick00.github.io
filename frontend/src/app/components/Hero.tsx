@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useScroll, useTransform } from 'motion/react';
-import { ArrowUp, Loader2, Plus, Search } from 'lucide-react';
-import { useSearch } from '../context/SearchContext';
+import { ArrowUp, Check, Copy, Loader2, Pencil, Plus, RotateCcw, Search } from 'lucide-react';
+import { useSearch, type ChatTurn } from '../context/SearchContext';
 import { useSidebar } from '../context/SidebarContext';
 import { fetchAutocomplete } from '../lib/api';
 import { StreamingCard, ErrorCard, SearchResults } from './SearchResults';
@@ -24,6 +24,7 @@ export const Hero = () => {
     selectFacets,
     selectClarifyOption,
     retryTurn,
+    editTurn,
     handleImageUpload,
     handleReset,
   } = useSearch();
@@ -35,8 +36,47 @@ export const Hero = () => {
   const [activeIndex, setActiveIndex] = useState(-1);
   const searchBarRef = useRef<HTMLFormElement>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
+  // 내 메시지 편집(사용자 요청, "클로드 너처럼 ... 편집기능") - 지금 편집 중인
+  // 턴 id와 그 초안. 한 번에 하나만 편집 가능.
+  const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState('');
 
   const hasConversation = turns.length > 0;
+
+  // 내가 보낸 메시지 복사(사용자 요청, "내가 말한것을 복사하는기능") - 다른 LLM
+  // 채팅 앱들처럼 말풍선에 마우스를 올리면 복사 버튼이 뜨고, 누르면 잠깐
+  // 체크 아이콘으로 바뀌었다가 원래대로 돌아온다.
+  const handleCopyTurn = async (turnId: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedTurnId(turnId);
+      setTimeout(() => setCopiedTurnId((current) => (current === turnId ? null : current)), 1500);
+    } catch {
+      // 클립보드 권한이 없는 환경 등 - 조용히 무시한다.
+    }
+  };
+
+  // 클로드처럼 메시지 옆에 시간을 보여준다(사용자 요청, "날짜기능").
+  const formatTime = (ts: number) =>
+    new Date(ts).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+
+  const startEditTurn = (turn: ChatTurn) => {
+    setEditingTurnId(turn.id);
+    setEditDraft(turn.displayQuery);
+  };
+
+  const cancelEditTurn = () => {
+    setEditingTurnId(null);
+    setEditDraft('');
+  };
+
+  const submitEditTurn = (turnId: string) => {
+    const text = editDraft;
+    setEditingTurnId(null);
+    setEditDraft('');
+    editTurn(turnId, text);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -324,13 +364,77 @@ export const Hero = () => {
                 <div className="space-y-6">
                   {turns.map((turn) => (
                     <div key={turn.id} className="space-y-3">
-                      <div className="flex justify-end">
-                        <div className="max-w-[80%] rounded-[18px_18px_4px_18px] bg-neutral-950 text-white px-4 py-2.5 text-sm md:text-base font-light text-left break-words">
-                          {turn.displayQuery}
+                      {editingTurnId === turn.id ? (
+                        <div className="flex flex-col items-end gap-2">
+                          <textarea
+                            autoFocus
+                            value={editDraft}
+                            onChange={(e) => setEditDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                submitEditTurn(turn.id);
+                              } else if (e.key === 'Escape') {
+                                cancelEditTurn();
+                              }
+                            }}
+                            rows={2}
+                            className="w-full max-w-[80%] min-w-[240px] rounded-2xl border border-black/10 bg-white px-4 py-2.5 text-sm md:text-base font-light text-neutral-800 outline-none focus:border-black/30 resize-none"
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={cancelEditTurn}
+                              className="px-3 py-1.5 rounded-full text-xs text-neutral-500 hover:bg-black/5"
+                            >
+                              취소
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => submitEditTurn(turn.id)}
+                              disabled={!editDraft.trim()}
+                              className="px-3 py-1.5 rounded-full text-xs text-white bg-neutral-950 disabled:opacity-50"
+                            >
+                              보내기
+                            </button>
+                          </div>
                         </div>
-                      </div>
+                      ) : (
+                        <div className="flex flex-col items-end group">
+                          <div className="max-w-[80%] rounded-[18px_18px_4px_18px] bg-neutral-950 text-white px-4 py-2.5 text-sm md:text-base font-light text-left break-words">
+                            {turn.displayQuery}
+                          </div>
+                          <div className="mt-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                            <span className="text-[11px] text-neutral-400 px-1">{formatTime(turn.createdAt)}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyTurn(turn.id, turn.displayQuery)}
+                              aria-label="메시지 복사"
+                              className="flex items-center gap-1 px-1.5 py-1 rounded-md text-neutral-400 hover:text-neutral-700 hover:bg-black/5"
+                            >
+                              {copiedTurnId === turn.id ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+                                  <span className="text-xs">복사됨</span>
+                                </>
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" strokeWidth={2} />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => startEditTurn(turn)}
+                              disabled={isBusy}
+                              aria-label="메시지 편집"
+                              className="flex items-center gap-1 px-1.5 py-1 rounded-md text-neutral-400 hover:text-neutral-700 hover:bg-black/5 disabled:opacity-50 disabled:pointer-events-none"
+                            >
+                              <Pencil className="w-3.5 h-3.5" strokeWidth={2} />
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       <div className="flex justify-start">
-                        <div className="w-full">
+                        <div className="w-full group/assistant">
                           {turn.status === 'loading' && (
                             <StreamingCard stage={turn.streamingStage || 'refining'} proposals={turn.streamingProposals} />
                           )}
@@ -342,13 +446,28 @@ export const Hero = () => {
                             />
                           )}
                           {turn.status === 'result' && turn.result && (
-                            <SearchResults
-                              result={turn.result}
-                              sessionPreferences={sessionPreferences}
-                              onSelectBrand={(brand) => selectBrand(turn.id, brand)}
-                              onConfirmFacets={(selected) => selectFacets(turn.id, selected)}
-                              onSelectClarifyOption={(step, value) => selectClarifyOption(turn.id, step, value)}
-                            />
+                            <>
+                              <SearchResults
+                                result={turn.result}
+                                sessionPreferences={sessionPreferences}
+                                onSelectBrand={(brand) => selectBrand(turn.id, brand)}
+                                onConfirmFacets={(selected) => selectFacets(turn.id, selected)}
+                                onSelectClarifyOption={(step, value) => selectClarifyOption(turn.id, step, value)}
+                              />
+                              <div className="mt-2 flex items-center gap-2 opacity-0 group-hover/assistant:opacity-100 transition-opacity">
+                                <span className="text-[11px] text-neutral-400 px-1">{formatTime(turn.createdAt)}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => retryTurn(turn.id)}
+                                  disabled={isBusy}
+                                  aria-label="다시 답변 받기"
+                                  className="flex items-center gap-1 px-1.5 py-1 rounded-md text-neutral-400 hover:text-neutral-700 hover:bg-black/5 disabled:opacity-50 disabled:pointer-events-none"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5" strokeWidth={2} />
+                                  <span className="text-xs">다시 답변 받기</span>
+                                </button>
+                              </div>
+                            </>
                           )}
                         </div>
                       </div>
