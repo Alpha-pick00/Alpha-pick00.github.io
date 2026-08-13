@@ -65,10 +65,12 @@ export interface BulkDecideResponse {
 export interface ClarifyFacet {
   label: string;
   options: string[];
-  // 브랜드가 아닌 facet에만 채워진다(2026-08-13) - 사용자가 브랜드를 고르면
-  // 추가 요청 없이 이 매핑으로 이 facet의 보이는 옵션을 그 브랜드에 맞게 즉시
-  // 좁힌다(예: 브랜드="삼성전자" -> 시리즈가 갤럭시 계열만).
-  options_by_brand?: Record<string, string[]> | null;
+  // 다른 facet(어느 것이든 - 브랜드로 한정 안 됨)에서 뭘 고르면, 추가 요청
+  // 없이 이 매핑으로 이 facet의 보이는 옵션을 즉시 좁힌다(2026-08-14 일반화:
+  // 브랜드="삼성전자" -> 시리즈가 갤럭시 계열만이었던 걸, 시리즈="초코파이
+  // 바나나" -> 용량이 그 시리즈에 실제로 있는 값만으로도 확장). 키는 다른
+  // facet의 옵션 문자열, 값은 그 선택이 주어졌을 때 이 facet에서 유효한 옵션들.
+  options_by_selection?: Record<string, string[]> | null;
 }
 
 export interface ClarifyOptions {
@@ -144,14 +146,20 @@ export type DanawaStreamEvent = DanawaStreamCandidate | DanawaStreamFinal | Dana
 // 1개 올려줘 먼저"): 후보가 끝나는 대로 하나씩 onEvent로 넘긴다. EventSource는
 // GET 전용이라 못 쓰고(이 엔드포인트는 POST + JSON body) fetch + ReadableStream을
 // 직접 읽어 "data: {...}\n\n" 프레임을 파싱한다.
+// baseQuery(2026-08-14, "이런식으로 가격 정보를 찾지 못하는 결과는 없어야해") -
+// AI 상세검색으로 facet을 여러 개 이어붙인 아주 구체적인 검색어는 다나와
+// 검색엔진에서 결과가 아예 안 나올 수 있다(실제 상품이 없어서가 아니라
+// 검색어 자체의 문제). 그 조합의 맨 처음 검색어를 실어 보내면, 백엔드가 정확한
+// 검색이 빈손일 때 이걸로 한 번 더 시도해 진짜 "못 찾았다" 화면을 최대한 줄인다.
 export async function decideDanawaOnlyStream(
   query: string,
-  onEvent: (event: DanawaStreamEvent) => void
+  onEvent: (event: DanawaStreamEvent) => void,
+  baseQuery?: string
 ): Promise<void> {
   const response = await fetch(`${API_URL}/decide/danawa-only/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify(baseQuery ? { query, base_query: baseQuery } : { query }),
   });
 
   if (!response.ok || !response.body) {

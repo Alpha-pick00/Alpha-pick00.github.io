@@ -141,11 +141,14 @@ class ClarifyFacet(BaseModel):
 
     label: str
     options: list[str] = []
-    # 브랜드 facet이 아닌 facet에만 채워진다(app.debate._attach_brand_crossfilter) -
-    # 사용자가 브랜드를 고르면 프론트가 추가 검색 없이 이 매핑으로 이 facet의
-    # 보이는 옵션을 즉시 그 브랜드에 맞게 좁혀 보여준다(예: 브랜드="삼성전자" ->
-    # 시리즈가 갤럭시 계열만). 없거나 해당 브랜드 키가 없으면 options 전체를 보여준다.
-    options_by_brand: dict[str, list[str]] | None = None
+    # 다른 어떤 facet의 값이든 - 브랜드 한정이 아니다(app.debate._attach_facet_crossfilter,
+    # 2026-08-14: "시리즈에 초코파이 바나나를 골랐다면 용량에 없는것들은 선택할수
+    # 없게"). 키는 "다른 facet에서 고를 수 있는 옵션 문자열"이고, 값은 그 선택이
+    # 주어졌을 때 이 facet에서 실제로 유효한(같은 상품명에 같이 등장하는) 옵션들이다.
+    # 예: 시리즈="초코파이 바나나" -> 용량이 [468g, ...]만. 프론트는 지금까지 고른
+    # 값 전부를 이 매핑에 돌려 교집합으로 보이는 옵션을 좁힌다. 해당 키가 없으면
+    # options 전체를 보여준다.
+    options_by_selection: dict[str, list[str]] | None = None
 
 
 class ClarifyOptions(BaseModel):

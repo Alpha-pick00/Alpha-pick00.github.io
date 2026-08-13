@@ -70,6 +70,23 @@ interface SearchContextValue {
 
 const SearchContext = createContext<SearchContextValue | null>(null);
 
+// facet 선택을 이어붙일 때 이미 있는 단어를 또 붙이지 않는다(사용자 요청,
+// 2026-08-14: "다나와에서 '초코파이 오리온 초코파이 바나나 468g'에 대한 가격
+// 정보를 찾지 못했다" - 시리즈 옵션 "초코파이 바나나" 자체가 이미 원래 검색어
+// "초코파이"를 포함하고 있어서, 그냥 이어붙이면 "초코파이"가 두 번 들어가
+// 다나와 검색이 이상하게 안 맞는 검색어가 됐다). 토큰(공백 기준) 단위로만
+// 비교한다 - "초코파이바나나"처럼 붙어있는 부분 문자열까지 잡으려는 게 아니라,
+// 정확히 같은 단어의 중복만 없앤다.
+const dedupeAppend = (base: string, addition: string): string => {
+  const baseTokens = base.trim().split(/\s+/).filter(Boolean);
+  const seen = new Set(baseTokens.map((t) => t.toLowerCase()));
+  const newTokens = addition
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t && !seen.has(t.toLowerCase()));
+  return [...baseTokens, ...newTokens].join(' ');
+};
+
 const newTurn = (
   displayQuery: string,
   requestQuery: string,
@@ -155,19 +172,23 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
       }
 
       let finalResult: DecideResult | null = null;
-      await decideDanawaOnlyStream(requestQuery, (event) => {
-        if (event.type === 'candidate') {
-          setTurns((prev) =>
-            prev.map((t) =>
-              t.id === id ? { ...t, partialCandidates: [...t.partialCandidates, event] } : t
-            )
-          );
-        } else if (event.type === 'final') {
-          finalResult = event.result;
-        } else if (event.type === 'error') {
-          throw new ApiError(event.message);
-        }
-      });
+      await decideDanawaOnlyStream(
+        requestQuery,
+        (event) => {
+          if (event.type === 'candidate') {
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === id ? { ...t, partialCandidates: [...t.partialCandidates, event] } : t
+              )
+            );
+          } else if (event.type === 'final') {
+            finalResult = event.result;
+          } else if (event.type === 'error') {
+            throw new ApiError(event.message);
+          }
+        },
+        baseQuery
+      );
       if (!finalResult) {
         throw new ApiError('요청 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
       }
@@ -210,7 +231,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   const selectFacets = async (turnId: string, values: string[]) => {
     const origin = turns.find((t) => t.id === turnId);
     if (!origin || values.length === 0) return;
-    const combined = [origin.requestQuery, ...values].join(' ').trim();
+    const combined = values.reduce((acc, value) => dedupeAppend(acc, value), origin.requestQuery).trim();
     const turn = newTurn(values.join(' · '), combined, undefined, origin.baseQuery);
     setTurns((prev) => [...prev, turn]);
     await runTurn(turn.id, turn.requestQuery, undefined, turn.baseQuery);

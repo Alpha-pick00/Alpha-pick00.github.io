@@ -79,7 +79,9 @@ export const Hero = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // 새 메시지가 오가거나 답변 상태가 바뀔 때마다(로딩 -> 결과 등) 스레드 맨 아래로 따라간다.
+  // 새 메시지가 오가거나 답변 상태가 바뀔 때마다 스레드 맨 아래로 붙인다(사용자
+  // 요청, 2026-08-15: "채팅은 밑에 붙이고"). 위쪽에 로고/배너용 여백을 따로 예약해
+  // 두지 않는다 - 그 예약된 빈 공간 자체가 "배너처럼 떠 보인다"는 신고의 원인이었다.
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [turns]);
@@ -298,9 +300,15 @@ export const Hero = () => {
             αlpha Pick
           </button>
 
-          <div className="relative z-10 flex flex-col flex-1 min-h-0 pt-24 md:pt-28">
-            <div className="flex-1 min-h-0 overflow-y-auto px-6">
-              <div className="max-w-3xl mx-auto w-full py-4">
+          <div className="relative z-10 flex flex-col flex-1 min-h-0">
+            {/* 위쪽에 로고용 여백을 예약해두지 않는다(사용자 신고, 2026-08-15:
+                "위에 배너 알파픽부터 위에 이어지는 부분 없애라") - 그 예약 공간이
+                내용이 짧을 때도 항상 배너처럼 남아 있었다. 스크롤 컨테이너를 세로
+                flex로 만들고 내용물에 mt-auto를 줘서, 내용이 뷰포트보다 짧으면
+                아래(입력창 바로 위)에 붙고, 넘치면 원래대로 위에서부터 쌓여
+                스크롤된다. */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 flex flex-col">
+              <div className="max-w-3xl mx-auto w-full py-4 mt-auto">
                 <div className="space-y-6">
                 {turns.map((turn) => (
                   <div key={turn.id} className="space-y-3">

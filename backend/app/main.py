@@ -221,7 +221,7 @@ async def decide_danawa_only(request: DecideRequest) -> DecideResponse | BulkDec
     이 경로를 쓰지 않는다. 검색어가 서로 다른 상품에 걸쳐 있으면(예: "노트북")
     DecideResponse 대신 BulkDecideResponse(후보 목록)를 반환한다."""
     try:
-        return await run_danawa_only_debate(request.query)
+        return await run_danawa_only_debate(request.query, base_query=request.base_query)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
@@ -243,7 +243,7 @@ async def decide_danawa_only_stream(request: DecideRequest) -> StreamingResponse
 
     async def _events():
         try:
-            async for event in run_danawa_only_debate_stream(request.query):
+            async for event in run_danawa_only_debate_stream(request.query, base_query=request.base_query):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception:
             error_event = {"type": "error", "message": "다나와 전용 처리 중 오류가 발생했습니다."}

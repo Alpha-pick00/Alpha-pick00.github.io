@@ -12,7 +12,7 @@ import { Sidebar } from './components/Sidebar';
 import { Work } from './components/Work';
 import { GradientChatInputDemo } from './components/GradientChatInputDemo';
 import { AuthProvider } from './context/AuthContext';
-import { SearchProvider } from './context/SearchContext';
+import { SearchProvider, useSearch } from './context/SearchContext';
 import { SidebarProvider, useSidebar } from './context/SidebarContext';
 
 // Preloader Component
@@ -62,16 +62,30 @@ const ScrollToTop = () => {
   return null;
 };
 
-const HomePage = () => (
-  <>
-    <Hero />
-    <About />
-    <Projects />
-    <Services />
-    <HowWeCurate />
-    <Footer />
-  </>
-);
+const HomePage = () => {
+  // 대화가 시작되면(사용자 요청, 2026-08-15: "채팅이 메인이되게 해줘") 랜딩
+  // 페이지의 나머지 섹션(About/Projects/Services/HowWeCurate/Footer)은 아예
+  // 렌더하지 않는다 - Hero가 h-screen이어도 이 섹션들이 DOM에 남아있으면 그
+  // 아래로 스크롤이 이어져서 다른 LLM 챗 앱들과 달리 채팅이 전체 화면을 차지하지
+  // 않았다. 대화 시작 전에는 지금처럼 그대로 내려서 보인다.
+  const { turns } = useSearch();
+  const hasConversation = turns.length > 0;
+
+  return (
+    <>
+      <Hero />
+      {!hasConversation && (
+        <>
+          <About />
+          <Projects />
+          <Services />
+          <HowWeCurate />
+          <Footer />
+        </>
+      )}
+    </>
+  );
+};
 
 const AppShell = () => {
   const [loading, setLoading] = useState(true);

@@ -188,10 +188,13 @@ def test_extract_facets_from_names_drops_facets_with_only_one_distinct_option(mo
     assert labels == {"브랜드"}
 
 
-def test_check_clarify_facets_attaches_brand_crossfilter_to_other_facets(monkeypatch):
+def test_check_clarify_facets_attaches_facet_crossfilter_symmetrically(monkeypatch):
     """사용자 요청(2026-08-13: "삼성전자를 누르면은 시리즈에 삼성전자에 관한것만
-    APPLE을 누르면 시리즈에 아이폰만") - 검색을 다시 하지 않고, 이미 받아온
-    상품명만으로 시리즈 옵션을 브랜드별로 미리 나눠서 응답에 실어줘야 한다."""
+    APPLE을 누르면 시리즈에 아이폰만" -> 2026-08-14: "시리즈에 초코파이 바나나를
+    골랐다면 용량에 없는것들은 선택할수 없게" - 브랜드 전용이었던 걸 모든 facet
+    쌍으로 일반화했다) - 검색을 다시 하지 않고, 이미 받아온 상품명만으로 옵션을
+    다른 facet 값별로 미리 나눠서 응답에 실어줘야 한다. 양방향(브랜드->시리즈,
+    시리즈->브랜드)으로 다 계산돼야 한다."""
 
     async def _fake_search_danawa(query, limit=3):
         return [
@@ -214,11 +217,74 @@ def test_check_clarify_facets_attaches_brand_crossfilter_to_other_facets(monkeyp
     result = asyncio.run(check_clarify_facets("핸드폰"))
 
     by_label = {f.label: f for f in result.options.facets}
-    assert by_label["브랜드"].options_by_brand is None
-    assert by_label["시리즈"].options_by_brand == {
+    assert by_label["브랜드"].options_by_selection == {
+        "갤럭시S25": ["삼성전자"],
+        "갤럭시Z 폴드8": ["삼성전자"],
+        "아이폰17": ["APPLE"],
+        "아이폰17 프로": ["APPLE"],
+    }
+    assert by_label["시리즈"].options_by_selection == {
         "삼성전자": ["갤럭시S25", "갤럭시Z 폴드8"],
         "APPLE": ["아이폰17", "아이폰17 프로"],
     }
+
+
+def test_check_clarify_facets_crossfilter_works_between_non_brand_facets(monkeypatch):
+    """사용자 요청(2026-08-14: "내가 만약 시리즈에 초코파이 바나나를 골랏다면
+    용량에 없는것들은 선택할수없게 해야해") - 브랜드가 아니어도(시리즈 -> 용량)
+    facet 사이 연관이 계산돼야 한다."""
+
+    async def _fake_search_danawa(query, limit=3):
+        return [
+            {"pcode": "1", "product_name": "오리온 초코파이 바나나 468g", "total_mall_count": None},
+            {"pcode": "2", "product_name": "오리온 초코파이 바나나 234g", "total_mall_count": None},
+            {"pcode": "3", "product_name": "오리온 초코파이 오리지널 336g", "total_mall_count": None},
+            {"pcode": "4", "product_name": "오리온 초코파이 오리지널 672g", "total_mall_count": None},
+        ]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+
+    async def _fake_extract_facets(query, names):
+        return [
+            ClarifyFacet(label="시리즈", options=["초코파이 바나나", "초코파이 오리지널"]),
+            ClarifyFacet(label="용량", options=["468g", "234g", "336g", "672g"]),
+        ]
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
+
+    result = asyncio.run(check_clarify_facets("초코파이"))
+
+    by_label = {f.label: f for f in result.options.facets}
+    assert by_label["용량"].options_by_selection == {
+        "초코파이 바나나": ["468g", "234g"],
+        "초코파이 오리지널": ["336g", "672g"],
+    }
+
+
+def test_check_clarify_facets_orders_facets_from_macro_to_micro(monkeypatch):
+    """사용자 요청(2026-08-14: "거시적인 선택에서 미시적인 선택으로 점차
+    줄여나가게") - LLM이 낸 순서와 무관하게 카테고리/브랜드 같은 넓은 기준이
+    용량/특징 같은 좁은 기준보다 먼저 오도록 정렬해야 한다."""
+
+    async def _fake_search_danawa(query, limit=3):
+        return [{"pcode": "1", "product_name": "오리온 초코파이 바나나 468g", "total_mall_count": None}]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+
+    async def _fake_extract_facets(query, names):
+        # 일부러 미시적인 것부터 거꾸로 반환한다 - 정렬이 실제로 라벨 순서를
+        # 바꾸는지 확인하려면 원래 순서가 이미 macro->micro면 안 된다.
+        return [
+            ClarifyFacet(label="특징", options=["저당", "고당"]),
+            ClarifyFacet(label="용량", options=["468g", "234g"]),
+            ClarifyFacet(label="브랜드", options=["오리온", "롯데"]),
+        ]
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
+
+    result = asyncio.run(check_clarify_facets("초코파이"))
+
+    assert [f.label for f in result.options.facets] == ["브랜드", "용량", "특징"]
 
 
 def test_extract_facets_from_names_returns_empty_on_no_product_names():
@@ -382,8 +448,8 @@ def test_check_clarify_facets_enriches_minority_brand_series_via_per_brand_extra
     # 원래 결합 호출(전체 상품명, 삼성 우세)로는 "아이폰17"이 안 나왔어야 하지만,
     # APPLE 전용 재추출 덕분에 병합돼 있어야 한다.
     assert "아이폰17" in by_label["시리즈"].options
-    assert by_label["시리즈"].options_by_brand is not None
-    assert by_label["시리즈"].options_by_brand["APPLE"] == ["아이폰17"]
+    assert by_label["시리즈"].options_by_selection is not None
+    assert by_label["시리즈"].options_by_selection["APPLE"] == ["아이폰17"]
 
 
 def test_check_clarify_facets_falls_back_to_unfiltered_when_too_few_matches(monkeypatch):
@@ -441,7 +507,7 @@ def test_decide_clarify_endpoint_returns_clarify_response(monkeypatch):
     data = resp.json()
     assert data["mode"] == "clarify"
     assert data["options"]["facets"] == [
-        {"label": "카테고리", "options": ["탄산음료", "주스"], "options_by_brand": None}
+        {"label": "카테고리", "options": ["탄산음료", "주스"], "options_by_selection": None}
     ]
 
 

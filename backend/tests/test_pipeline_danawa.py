@@ -980,6 +980,53 @@ def test_run_danawa_only_debate_raises_when_no_price_table(monkeypatch):
         assert "찾지 못했다" in str(exc)
 
 
+def test_run_danawa_only_debate_falls_back_to_base_query_when_specific_query_finds_nothing(monkeypatch):
+    """회귀 테스트(2026-08-14: "이런식으로 가격 정보를 찾지 못하는 결과는
+    없어야해") - AI 상세검색으로 조합한 아주 구체적인 검색어(예: "초코파이
+    오리온 초코파이 바나나 468g")가 다나와 검색에서 빈손이면, 그 조합을 만든
+    원래(더 넓은) base_query로 한 번 더 시도해야 한다 - 바로 에러로 끝나면 안 된다."""
+    _forbid_llm_calls(monkeypatch)
+
+    async def _search_danawa(query, limit=5):
+        if query == "초코파이":
+            return [{"pcode": "1", "product_name": "오리온 초코파이 바나나 468g", "total_mall_count": None}]
+        return []  # 너무 구체적인 조합 검색어는 실제로 빈손이었다고 재현
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
+
+    html = _danawa_html("오리온 초코파이 바나나 468g", [_offer_li("쿠팡", "10,000", "TP40F")])
+
+    async def _fake_fetch(url):
+        return parse_danawa_html(url, html)
+
+    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fake_fetch)
+
+    result = asyncio.run(
+        run_danawa_only_debate("초코파이 오리온 초코파이 바나나 468g", base_query="초코파이")
+    )
+
+    assert result.decision.chosen_agent == "danawa"
+    assert result.decision.retailer == "쿠팡"
+    # 원래 물어본 게 뭐였는지는 솔직하게 reasoning에 남아야 한다 - 조용히 다른
+    # 검색어로 찾았다는 사실을 숨기면 안 된다.
+    assert "초코파이 오리온 초코파이 바나나 468g" in result.decision.reasoning
+    assert "초코파이" in result.decision.reasoning
+
+
+def test_run_danawa_only_debate_still_raises_when_base_query_also_finds_nothing(monkeypatch):
+    """base_query 폴백도 빈손이면(진짜로 그 상품군 자체가 없는 경우) 여전히
+    RuntimeError로 끝나야 한다 - 폴백이 "절대 에러 없음"을 보장하는 건 아니고,
+    검색어 자체의 문제로 인한 빈손을 줄여줄 뿐이다."""
+    _forbid_llm_calls(monkeypatch)
+    _patch_direct_danawa_search(monkeypatch, None)  # 뭘 검색하든 빈손
+
+    try:
+        asyncio.run(run_danawa_only_debate("존재하지 않는 상품 아주 구체적인 조합", base_query="존재하지 않는 상품"))
+        raise AssertionError("RuntimeError가 났어야 한다")
+    except RuntimeError as exc:
+        assert "찾지 못했다" in str(exc)
+
+
 def test_run_danawa_only_debate_raises_when_no_a_grade_offer(monkeypatch):
     _forbid_llm_calls(monkeypatch)
     _patch_direct_danawa_search(monkeypatch, "1")

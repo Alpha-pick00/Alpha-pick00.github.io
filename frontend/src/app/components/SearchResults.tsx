@@ -1,12 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowUpRight, RotateCcw, Search, Truck } from 'lucide-react';
-import type { DanawaStreamCandidate, DecideResult, BrandOption } from '../lib/api';
-
-// AI 상세검색 facet 라벨 중 "브랜드"/"제조사" - 이 facet에서 뭘 고르면 다른
-// facet(시리즈 등)의 options_by_brand로 보이는 옵션을 즉시 좁힌다(백엔드
-// app/debate.py::_attach_brand_crossfilter가 같은 패턴으로 계산해서 보내준다).
-const BRAND_LABEL_PATTERN = /브랜드|제조사/;
+import type { ClarifyFacet as ClarifyFacetType, DanawaStreamCandidate, DecideResult, BrandOption } from '../lib/api';
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
@@ -161,25 +156,42 @@ export const SearchResults = ({ result, onSelectBrand, onConfirmFacets, onReset 
     const { brands, volumes, quantities } = result.options;
     const hasAnyOptions = brands.length > 0 || facets.length > 0;
 
-    // 브랜드 facet에서 지금 뭘 골랐는지 - 있으면 다른 facet들의 보이는 옵션을
-    // options_by_brand로 즉시 좁힌다(추가 요청 없이, 사용자 요청 2026-08-13:
-    // "삼성전자를 누르면은 시리즈에 삼성전자에 관한것만").
-    const brandFacet = facets.find((f) => BRAND_LABEL_PATTERN.test(f.label));
-    const selectedBrand = brandFacet ? selectedFacets[brandFacet.label] : undefined;
+    // 지금까지 고른 값들(어느 facet이든 - 브랜드로 한정 안 됨)로 아직 안 고른
+    // facet들의 보이는 옵션을 즉시 좁힌다(추가 요청 없이, 사용자 요청 2026-08-13:
+    // "삼성전자를 누르면은 시리즈에 삼성전자에 관한것만" -> 2026-08-14: "시리즈에
+    // 초코파이 바나나를 골랏다면 용량에 없는것들은 선택할수없게" - 브랜드 전용
+    // 특수 케이스였던 걸 모든 facet 쌍으로 일반화했다). 여러 facet을 골랐으면
+    // 각각의 options_by_selection을 교집합으로 겹쳐 좁힌다.
+    const visibleOptionsFor = (facet: ClarifyFacetType, selected: Record<string, string>): string[] => {
+      let options = facet.options;
+      for (const [otherLabel, value] of Object.entries(selected)) {
+        if (otherLabel === facet.label) continue;
+        const filtered = facet.options_by_selection?.[value];
+        if (filtered) {
+          options = options.filter((o) => filtered.includes(o));
+        }
+      }
+      return options;
+    };
 
     const toggleFacetOption = (label: string, option: string) => {
       setSelectedFacets((prev) => {
-        const isBrandFacet = BRAND_LABEL_PATTERN.test(label);
-        if (isBrandFacet && prev[label] !== option) {
-          // 브랜드를 (다르게) 고르면 다른 facet의 옵션 목록 자체가 바뀌므로,
-          // 이전에 골라둔 다른 facet 선택은 더 이상 안 맞을 수 있어 초기화한다.
-          return { [label]: option };
-        }
-        const next = { ...prev };
-        if (next[label] === option) {
+        if (prev[label] === option) {
+          const next = { ...prev };
           delete next[label];
-        } else {
-          next[label] = option;
+          return next;
+        }
+        const next = { ...prev, [label]: option };
+        // 이 선택으로 다른 facet의 보이는 옵션이 바뀌어 기존 선택이 더 이상
+        // 유효한 값이 아니게 됐으면 지운다 - 안 그러면 서로 안 맞는 조합(예:
+        // "초코파이 바나나" + "336g")이 그대로 남아있을 수 있다.
+        for (const other of facets) {
+          if (other.label === label) continue;
+          const selectedForOther = next[other.label];
+          if (!selectedForOther) continue;
+          if (!visibleOptionsFor(other, next).includes(selectedForOther)) {
+            delete next[other.label];
+          }
         }
         return next;
       });
@@ -204,8 +216,7 @@ export const SearchResults = ({ result, onSelectBrand, onConfirmFacets, onReset 
           </div>
         )}
         {facets.map((facet) => {
-          const crossFiltered = selectedBrand ? facet.options_by_brand?.[selectedBrand] : undefined;
-          const baseOptions = crossFiltered ?? facet.options;
+          const baseOptions = visibleOptionsFor(facet, selectedFacets);
           const query = facetQuery[facet.label] ?? '';
           const visibleOptions = query.trim()
             ? baseOptions.filter((o) => o.toLowerCase().includes(query.trim().toLowerCase()))

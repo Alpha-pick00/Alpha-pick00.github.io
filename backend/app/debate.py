@@ -141,7 +141,36 @@ async def run_single_debate(query: str) -> DecideResponse:
     return DecideResponse(query=query, proposals=proposals, decision=decision, price_table=price_table)
 
 
-async def run_danawa_only_debate(query: str) -> DecideResponse | BulkDecideResponse:
+async def _search_danawa_urls_with_fallback(
+    query: str, base_query: str | None
+) -> tuple[list[str], str]:
+    """가격 실측용 다나와 URL 검색(사용자 요청, 2026-08-14: "이런식으로 가격
+    정보를 찾지 못하는 결과는 없어야해"). AI 상세검색으로 facet을 여러 개
+    이어붙인 아주 구체적인 검색어(예: "초코파이 오리온 초코파이 바나나 468g")는
+    다나와 검색엔진이 토큰이 많거나 표현이 어색해 결과가 아예 안 나올 수 있다 -
+    실제 상품이 없어서가 아니라 검색어 자체의 문제일 수 있다는 뜻이다. query가
+    빈손이면 그 조합을 만든 원래(더 넓은) base_query로 한 번 더 시도한다.
+    (effective_query, urls) 대신 (urls, effective_query) 순서로 반환 - 호출자가
+    이후 _finalize_danawa_only에 "실제로 무엇으로 검색해서 찾았는지"를 넘겨야
+    해서다."""
+    urls = await price_table_module._search_danawa_urls(query, limit=price_table_module.DANAWA_ONLY_SEARCH_LIMIT)
+    if urls:
+        return urls, query
+    if base_query and base_query.strip() and base_query.strip() != query.strip():
+        fallback_urls = await price_table_module._search_danawa_urls(
+            base_query, limit=price_table_module.DANAWA_ONLY_SEARCH_LIMIT
+        )
+        if fallback_urls:
+            logger.info(
+                "danawa-only fallback: %r found nothing, retried with base_query %r", query, base_query
+            )
+            return fallback_urls, base_query
+    return [], query
+
+
+async def run_danawa_only_debate(
+    query: str, base_query: str | None = None
+) -> DecideResponse | BulkDecideResponse:
     """LLM API 비용 절감을 위한 임시 로컬 실험 경로 - gpt/gemini/deepseek
     제안도, judge 최종 결정도 전부 건너뛴다. LLM 호출 0번. 다나와 실측
     가격표(다나와 직접검색만)에서 A등급(구매 링크 생성 가능) offer를
@@ -172,13 +201,21 @@ async def run_danawa_only_debate(query: str) -> DecideResponse | BulkDecideRespo
        가격 오름차순으로 나열해 사용자가 직접 고르게 한다.
 
     후보 수는 DANAWA_ONLY_SEARCH_LIMIT(3) - 사용자 요청(네 번째 라운드,
-    2026-08-11: "한번에 5개 찾아주는거 너무 느린데")로 5에서 줄였다."""
-    urls = await price_table_module._search_danawa_urls(query, limit=price_table_module.DANAWA_ONLY_SEARCH_LIMIT)
+    2026-08-11: "한번에 5개 찾아주는거 너무 느린데")로 5에서 줄였다.
+
+    base_query(2026-08-14, "이런식으로 가격 정보를 찾지 못하는 결과는 없어야해") -
+    AI 상세검색으로 facet을 여러 개 이어붙인 아주 구체적인 검색어(예: "초코파이
+    오리온 초코파이 바나나 468g")는 다나와 검색엔진이 토큰이 많거나 어색해서
+    결과가 아예 안 나올 수 있다 - 그러면 그 조합을 만든 원래(더 넓은) 검색어로
+    한 번 더 시도한다(_search_danawa_urls_with_fallback 참고)."""
+    urls, effective_query = await _search_danawa_urls_with_fallback(query, base_query)
     danawa_tables = await price_table_module.fetch_price_tables_for_urls(urls)
-    return await _finalize_danawa_only(query, danawa_tables)
+    return await _finalize_danawa_only(effective_query, danawa_tables, original_query=query)
 
 
-async def run_danawa_only_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
+async def run_danawa_only_debate_stream(
+    query: str, base_query: str | None = None
+) -> AsyncIterator[dict[str, Any]]:
     """run_danawa_only_debate()의 스트리밍 버전 - 사용자 요청(네 번째 라운드,
     2026-08-11: "1개 서치 완료되면 1개 올려줘 먼저"). 후보 3개를 asyncio.gather로
     한꺼번에 기다리는 대신 stream_price_tables_for_urls()로 끝나는 대로 하나씩
@@ -186,8 +223,12 @@ async def run_danawa_only_debate_stream(query: str) -> AsyncIterator[dict[str, A
     빼고) 모이면 run_danawa_only_debate()와 완전히 동일한 로직(_finalize_danawa_only)
     으로 최종 판단을 만들어 {"type": "final", "result": ...}로 내보낸다.
 
-    /decide/danawa-only/stream 전용 - run_debate()에서 자동으로 타지 않는다."""
-    urls = await price_table_module._search_danawa_urls(query, limit=price_table_module.DANAWA_ONLY_SEARCH_LIMIT)
+    /decide/danawa-only/stream 전용 - run_debate()에서 자동으로 타지 않는다.
+
+    base_query(2026-08-14) - run_danawa_only_debate() 참고. 여기서도 query가
+    아무 결과도 못 찾으면 base_query로 한 번 더 시도해 진짜 빈손으로 끝나는
+    경우를 최대한 줄인다."""
+    urls, effective_query = await _search_danawa_urls_with_fallback(query, base_query)
     if not urls:
         yield {"type": "error", "message": f"다나와에서 '{query}'에 대한 가격 정보를 찾지 못했다(검색/실측 모두 실패)."}
         return
@@ -213,7 +254,7 @@ async def run_danawa_only_debate_stream(query: str) -> AsyncIterator[dict[str, A
         }
 
     try:
-        result = await _finalize_danawa_only(query, danawa_tables)
+        result = await _finalize_danawa_only(effective_query, danawa_tables, original_query=query)
     except RuntimeError as exc:
         yield {"type": "error", "message": str(exc)}
         return
@@ -221,11 +262,26 @@ async def run_danawa_only_debate_stream(query: str) -> AsyncIterator[dict[str, A
 
 
 async def _finalize_danawa_only(
-    query: str, danawa_tables: list[tuple[Any, danawa.DanawaResult]]
+    query: str,
+    danawa_tables: list[tuple[Any, danawa.DanawaResult]],
+    *,
+    original_query: str | None = None,
 ) -> DecideResponse | BulkDecideResponse:
     """run_danawa_only_debate()/run_danawa_only_debate_stream() 공유 로직 -
     이미 페치된 danawa_tables로부터 최종 DecideResponse(단일 상품) 또는
-    BulkDecideResponse(애매모호한 검색어 후보 목록)를 만든다."""
+    BulkDecideResponse(애매모호한 검색어 후보 목록)를 만든다.
+
+    original_query(2026-08-14) - query가 _search_danawa_urls_with_fallback으로
+    base_query로 대체된 경우("초코파이 오리온 초코파이 바나나 468g"를 못 찾아
+    "초코파이"로 넓혀 찾은 경우), 사용자가 원래 물어본 게 뭐였는지 reasoning에
+    솔직하게 남긴다 - 조용히 다른 상품을 최종 추천으로 내밀지 않는다."""
+    used_fallback = bool(original_query) and original_query.strip() != query.strip()
+    fallback_note = (
+        f"'{original_query}'에 정확히 맞는 상품을 찾지 못해 더 넓은 검색어 '{query}'로 찾은 결과입니다. "
+        if used_fallback
+        else ""
+    )
+
     if not danawa_tables:
         raise RuntimeError(f"다나와에서 '{query}'에 대한 가격 정보를 찾지 못했다(검색/실측 모두 실패).")
 
@@ -234,12 +290,12 @@ async def _finalize_danawa_only(
         if not options:
             raise RuntimeError(f"'{query}'는 여러 상품에 걸친 검색어인데, 구매 링크를 만들 수 있는 후보가 없다.")
         return BulkDecideResponse(
-            query=query,
+            query=original_query or query,
             proposals=[],
             decision=BulkDecision(
                 options=options,
                 reasoning=(
-                    f"'{query}'는 서로 다른 상품에 걸친 검색어라 하나로 단정하지 않고, "
+                    f"{fallback_note}'{query}'는 서로 다른 상품에 걸친 검색어라 하나로 단정하지 않고, "
                     f"실측 최저가 순으로 후보 {len(options)}개를 보여드립니다."
                 ),
             ),
@@ -260,13 +316,13 @@ async def _finalize_danawa_only(
         price=f"{offer['price_krw']:,}원",
         retailer=offer["seller"],
         url=resolved_url,
-        reasoning="다나와 실측 최저가(A등급, 구매링크 검증됨) - LLM 미사용, 규칙 기반 선택",
+        reasoning=f"{fallback_note}다나와 실측 최저가(A등급, 구매링크 검증됨) - LLM 미사용, 규칙 기반 선택",
         chosen_agent="danawa",
         price_source="danawa_offer",
     )
     decision = await price_table_module.exclude_price_comparison_site_as_final_pick(decision, [], danawa_tables)
 
-    return DecideResponse(query=query, proposals=[], decision=decision, price_table=table)
+    return DecideResponse(query=original_query or query, proposals=[], decision=decision, price_table=table)
 
 
 # check_clarify_facets()의 base_query 재사용 필터링 전용(사용자 요청, 2026-08-13:
@@ -366,44 +422,65 @@ async def _enrich_facets_per_brand(
     return enriched
 
 
-def _attach_brand_crossfilter(
+def _attach_facet_crossfilter(
     facets: list[ClarifyFacet], items: list[danawa_search.DanawaSearchItem]
 ) -> list[ClarifyFacet]:
-    """브랜드 facet과 다른 facet(시리즈/모델 등) 사이의 연관을 상품명에서 직접
-    계산해 붙인다(사용자 요청, 2026-08-13: "삼성전자를 누르면 시리즈에 삼성전자에
-    관한것만, APPLE을 누르면 아이폰만"). 검색을 다시 하지 않고, 이미 받아온
-    items(상품명)만으로 "이 옵션과 이 브랜드가 같은 상품명에 같이 등장하는가"를
-    보고 옵션별로 브랜드를 매핑한다 - 그래서 프론트가 브랜드를 고르는 순간
-    (그 자체로는 아직 검색을 트리거하지 않는다) 다른 facet의 보이는 옵션만
-    즉시 좁혀 보여줄 수 있다."""
-    brand_facet = next((f for f in facets if deepseek._BRAND_LABEL_PATTERN.search(f.label)), None)
-    if brand_facet is None or len(brand_facet.options) < 2:
+    """facet 쌍 전부(브랜드 한정이 아니다) 사이의 연관을 상품명에서 직접 계산해
+    붙인다(사용자 요청, 2026-08-13: "삼성전자를 누르면 시리즈에 삼성전자에 관한것만"
+    -> 2026-08-14: "시리즈에 초코파이 바나나를 골랐다면 용량에 없는것들은
+    선택할수 없게" - 브랜드 특수 케이스였던 걸 모든 facet 쌍으로 일반화했다).
+    검색을 다시 하지 않고, 이미 받아온 items(상품명)만으로 "이 두 옵션이 같은
+    상품명에 같이 등장하는가"를 모든 (선택 가능한 facet, 대상 facet) 쌍에 대해
+    계산한다 - 그래서 프론트가 어느 facet에서든 값을 고르는 순간(그 자체로는
+    아직 검색을 트리거하지 않는다) 아직 안 고른 다른 facet들의 보이는 옵션만
+    즉시 좁혀 보여줄 수 있다(여러 개를 고르면 교집합은 프론트가 계산한다)."""
+    if len(facets) < 2:
         return facets
 
     normalized_names = [_normalize_for_match(item["product_name"]) for item in items]
 
+    def _relevant(selector_value: str, target_options: list[str]) -> list[str]:
+        nv = _normalize_for_match(selector_value)
+        return [
+            option
+            for option in target_options
+            if any(nv in name and _normalize_for_match(option) in name for name in normalized_names)
+        ]
+
     updated = []
-    for facet in facets:
-        if facet is brand_facet:
-            updated.append(facet)
-            continue
-        by_brand: dict[str, list[str]] = {}
-        for brand in brand_facet.options:
-            nb = _normalize_for_match(brand)
-            relevant = [
-                option
-                for option in facet.options
-                if any(nb in name and _normalize_for_match(option) in name for name in normalized_names)
-            ]
-            if relevant:
-                by_brand[brand] = relevant
-        # 모든 브랜드에서 다 그 facet의 옵션 전체가 그대로 나오면 실제로 좁혀주는
-        # 게 없으니 매핑을 안 붙인다(쓸모없는 데이터를 응답에 얹지 않는다).
-        if by_brand and any(len(v) < len(facet.options) for v in by_brand.values()):
-            updated.append(facet.model_copy(update={"options_by_brand": by_brand}))
-        else:
-            updated.append(facet)
+    for target in facets:
+        by_selection: dict[str, list[str]] = {}
+        for selector in facets:
+            if selector is target:
+                continue
+            for value in selector.options:
+                relevant = _relevant(value, target.options)
+                # 이 선택이 target의 옵션을 실제로 좁혀줄 때만(전체가 그대로
+                # 나오거나 아예 안 나오면 매핑을 안 붙인다) 쓸모없는 데이터를
+                # 응답에 얹지 않는다.
+                if relevant and len(relevant) < len(target.options):
+                    by_selection[value] = relevant
+        updated.append(target.model_copy(update={"options_by_selection": by_selection}) if by_selection else target)
     return updated
+
+
+# 상세검색 facet을 넓은(거시적) 기준부터 좁은(미시적) 기준 순서로 보여주기 위한
+# 우선순위 힌트(사용자 요청, 2026-08-14: "거시적인 선택에서 미시적인 선택으로
+# 점차 줄여나가게"). 라벨에 이 키워드가 포함되면 그 순번을 쓴다 - 못 찾은
+# 라벨은 맨 뒤로(기존 순서 유지, 정렬은 stable). 실제 좁히기 자체는
+# _attach_facet_crossfilter가 순서와 무관하게 다 계산해두므로, 이건 어떤 순서로
+# "물어보면" 자연스러운지에 대한 화면 표시 순서일 뿐이다.
+_FACET_ORDER_HINTS = [
+    "카테고리", "브랜드", "제조사", "시리즈", "모델", "타입", "종류",
+    "용량", "무게", "사이즈", "용기형태", "구매유형", "특징", "색상",
+]
+
+
+def _facet_display_order(facet: ClarifyFacet) -> int:
+    for i, hint in enumerate(_FACET_ORDER_HINTS):
+        if hint in facet.label:
+            return i
+    return len(_FACET_ORDER_HINTS)
 
 
 async def check_clarify_facets(query: str, base_query: str | None = None) -> ClarifyResponse:
@@ -440,7 +517,8 @@ async def check_clarify_facets(query: str, base_query: str | None = None) -> Cla
     names = [item["product_name"] for item in items]
     facets = await deepseek.extract_facets_from_names(query, names)
     facets = await _enrich_facets_per_brand(facets, items, query)
-    facets = _attach_brand_crossfilter(facets, items)
+    facets = _attach_facet_crossfilter(facets, items)
+    facets = sorted(facets, key=_facet_display_order)
     return ClarifyResponse(query=query, options=ClarifyOptions(facets=facets))
 
 
