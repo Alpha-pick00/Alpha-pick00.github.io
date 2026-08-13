@@ -146,6 +146,15 @@ class ClarifyMatchResponse(BaseModel):
     reply: str
 
 
+class ClarifyAskRequest(BaseModel):
+    query: str
+    options: list[str]
+
+
+class ClarifyAskResponse(BaseModel):
+    message: str
+
+
 class BrandPriceResponse(BaseModel):
     mode: Literal["brand_price"] = "brand_price"
     query: str

@@ -10,6 +10,7 @@ from ..schemas import (
 from .base import (
     build_brand_price_prompt,
     build_bulk_prompt,
+    build_clarify_ask_prompt,
     build_clarify_match_prompt,
     build_clarify_prompt,
     filter_bulk_options,
@@ -73,6 +74,29 @@ async def match_clarify_reply(message: str, options: list[str]) -> tuple[str | N
         return matched, reply
     except Exception:
         return None, _CLARIFY_MATCH_FALLBACK_REPLY
+
+
+_CLARIFY_ASK_FALLBACK = "몇 가지 후보를 찾았어요 — 아래에서 골라주시겠어요?"
+
+
+async def generate_clarify_question(query: str, options: list[str]) -> str:
+    """이번 라운드에 물어봐야 할 축(브랜드/제품/용량/개수)의 후보들을 실제
+    상담원처럼 자연스러운 한 질문으로 바꾼다 — 프론트가 "브랜드를 선택하면
+    좁혀드려요" 같은 고정 라벨 대신 이 문장을 채팅 말풍선으로 보여준다.
+    호출 실패 시 고정 안내 문구로 대체한다."""
+    if not options:
+        return _CLARIFY_ASK_FALLBACK
+    try:
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=settings.gpt_model,
+            messages=[{"role": "user", "content": build_clarify_ask_prompt(query, options)}],
+            response_format={"type": "json_object"},
+        )
+        data = parse_json_object(response.choices[0].message.content or "")
+        return data.get("message") or _CLARIFY_ASK_FALLBACK
+    except Exception:
+        return _CLARIFY_ASK_FALLBACK
 
 
 async def find_lowest_price(

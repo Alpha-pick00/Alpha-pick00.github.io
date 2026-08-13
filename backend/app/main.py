@@ -25,6 +25,8 @@ from .schemas import (
     AuthResponse,
     BrandPriceResponse,
     BulkDecideResponse,
+    ClarifyAskRequest,
+    ClarifyAskResponse,
     ClarifyMatchRequest,
     ClarifyMatchResponse,
     ClarifyResponse,
@@ -158,6 +160,15 @@ async def clarify_match(request: ClarifyMatchRequest) -> ClarifyMatchResponse:
     이 경우 다시 물어보면 된다."""
     matched, reply = await gpt_agent.match_clarify_reply(request.message, request.options)
     return ClarifyMatchResponse(matched=matched, reply=reply)
+
+
+@app.post("/clarify/ask", response_model=ClarifyAskResponse)
+async def clarify_ask(request: ClarifyAskRequest) -> ClarifyAskResponse:
+    """이번 라운드에 물어볼 축(브랜드/제품/용량/개수)의 후보들을 실제 상담원처럼
+    자연스러운 질문 문장으로 바꾼다 — 프론트가 "브랜드를 선택하면 좁혀드려요"
+    같은 고정 라벨 대신 이 문장을 채팅 말풍선으로 먼저 보여준다."""
+    message = await gpt_agent.generate_clarify_question(request.query, request.options)
+    return ClarifyAskResponse(message=message)
 
 
 @app.get("/auth/me", response_model=User)
