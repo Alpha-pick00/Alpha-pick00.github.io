@@ -1,8 +1,17 @@
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 from ..config import settings
 from ..schemas import BulkDecision, BulkProposal, Decision, JudgeVerdict, Proposal
 from .base import parse_json_object
+
+# judge 슬롯은 2026-08-16부터 Claude가 아니라 Groq(openai/gpt-oss-120b)가
+# 담당한다(사용자 요청: "deepseek Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" -
+# Anthropic엔 상시 무료 API 티어가 없다). Groq도 OpenAI 호환 엔드포인트라
+# gpt.py/deepseek.py와 같은 패턴을 쓴다.
+
+
+def _client() -> AsyncOpenAI:
+    return AsyncOpenAI(api_key=settings.groq_api_key, base_url=settings.groq_api_base)
 
 # 병합된 후보들이 이미 어느 모델(들)이 제안했는지(proposed_by)와 DeepSeek의
 # 검증 결과(verified/challenge_note)를 달고 들어오므로, judge는 그 두 신호를 보고
@@ -94,10 +103,9 @@ async def decide(query: str, proposals: list[Proposal]) -> Decision:
         for p in valid
     )
 
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    response = await client.messages.create(
-        model=settings.judge_model,
-        max_tokens=1024,
+    client = _client()
+    response = await client.chat.completions.create(
+        model=settings.groq_judge_model,
         messages=[
             {
                 "role": "user",
@@ -107,8 +115,7 @@ async def decide(query: str, proposals: list[Proposal]) -> Decision:
             }
         ],
     )
-    text = "".join(block.text for block in response.content if block.type == "text")
-    data = parse_json_object(text)
+    data = parse_json_object(response.choices[0].message.content or "")
     return Decision(**data)
 
 
@@ -127,10 +134,9 @@ async def organize_options(query: str, proposals: list[BulkProposal]) -> BulkDec
         for p in valid
     )
 
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    response = await client.messages.create(
-        model=settings.judge_model,
-        max_tokens=1536,
+    client = _client()
+    response = await client.chat.completions.create(
+        model=settings.groq_judge_model,
         messages=[
             {
                 "role": "user",
@@ -140,6 +146,5 @@ async def organize_options(query: str, proposals: list[BulkProposal]) -> BulkDec
             }
         ],
     )
-    text = "".join(block.text for block in response.content if block.type == "text")
-    data = parse_json_object(text)
+    data = parse_json_object(response.choices[0].message.content or "")
     return BulkDecision(**data)

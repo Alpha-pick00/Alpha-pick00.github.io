@@ -1,9 +1,10 @@
 """ADK(Google Agent Development Kit) 기반 역할 분리형 검색 파이프라인.
 
-정제(Gemini) → 검색 → 제안(GPT·Gemini·DeepSeek 병렬, 각자 최선 1개) →
-필터링+병합(fusion.dedup 재사용) → 검증(DeepSeek) → 매칭/합성 → 심사(Claude)
+정제(Groq) → 검색 → 제안(Qwen·Groq·DeepSeek 병렬, 각자 최선 1개) →
+필터링+병합(fusion.dedup 재사용) → 검증(DeepSeek) → 매칭/합성 → 심사(Groq)
 순서로 실행된다 — `debate.py`의 run_single_debate/run_single_debate_stream이
-이 모듈의 run()/run_stream()을 호출한다.
+이 모듈의 run()/run_stream()을 호출한다. (제안 슬롯 이름은 여전히 "gpt"/"gemini"
+다 - 스키마의 AgentName 리터럴이라 실제 백엔드 모델이 바뀌어도 그대로 둔다.)
 
 SequentialAgent/ParallelAgent는 google-adk 2.6.3 기준 deprecated(대체 예정인
 Workflow가 아직 LlmAgent의 sub-agent로 못 쓰여 미완성 상태)이지만, 실제로는
@@ -369,13 +370,26 @@ def _on_propose_model_error(callback_context, llm_request, error) -> LlmResponse
     return _model_error_fallback_response("[]")
 
 
+def _groq_model(model_name: str) -> LiteLlm:
+    """Groq는 OpenAI 호환 엔드포인트라 "openai/" 프리픽스 뒤에 api_base/api_key로
+    Groq 엔드포인트를 직접 지정한다 - litellm이 groq 프로바이더를 자체 지원하는지에
+    기대지 않고 "그냥 OpenAI 호환 엔드포인트"로 취급하는 쪽이 확실하다(agents/gpt.py의
+    DashScope 처리와 동일한 접근)."""
+    return LiteLlm(model=f"openai/{model_name}", api_base=settings.groq_api_base, api_key=settings.groq_api_key)
+
+
 def _build_refine_agent() -> LlmAgent:
     def instruction(ctx: ReadonlyContext) -> str:
         return build_refine_query_prompt(ctx.state.get("original_query", ""))
 
     return LlmAgent(
         name="refine",
-        model=settings.gemini_model,  # 네이티브 Gemini — LiteLlm 불필요
+        # refine은 2026-08-16부터 Gemini가 아니라 Groq다(사용자 요청: "deepseek
+        # Qwen 빼고 싹 다 무료 모델로 바꾸려고 해"). ADK가 output_schema를
+        # response_format=json_schema로 요청하는데 propose 쪽 groq_model
+        # (groq/compound-mini)은 이를 지원하지 않아, 구조화 출력이 되는 전용
+        # 모델(groq_refine_model)을 따로 쓴다(config.py 주석 참고).
+        model=_groq_model(settings.groq_refine_model),
         instruction=instruction,
         output_schema=RefinedQuery,
         output_key="refined_query",
@@ -433,7 +447,13 @@ def _build_judge_agent() -> LlmAgent:
 
     return LlmAgent(
         name="judge",
-        model=LiteLlm(model=f"anthropic/{settings.judge_model}"),
+        # judge는 2026-08-16부터 Claude가 아니라 Groq(openai/gpt-oss-120b)다
+        # (사용자 요청: "deepseek Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" -
+        # Anthropic엔 상시 무료 API 티어가 없다). propose 쪽 gemini 슬롯도 같은
+        # gpt-oss 계열(20b)이지만 judge는 그보다 큰 120b를 따로 써서 최소한의
+        # 판단력 격차를 둔다 - Groq 카탈로그에 구조화 출력(json_schema)을 지원하는
+        # 모델이 gpt-oss 계열뿐이라 propose·judge가 완전히 다른 계보를 쓰긴 어렵다.
+        model=_groq_model(settings.groq_judge_model),
         instruction=instruction,
         output_schema=judge_module.JudgeVerdict,
         output_key="raw_decision",
@@ -464,7 +484,12 @@ def _build_pipeline() -> SequentialAgent:
                     api_key=settings.qwen_api_key,
                 ),
             ),
-            _build_propose_agent(gemini_raw, settings.gemini_model),
+            # "gemini" 슬롯은 2026-08-16부터 Groq(gpt-oss-20b)가 담당한다
+            # (사용자 요청: "deepseek Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" -
+            # Gemini 프로젝트가 403으로 막혀있기도 했다). name/output_key는 그대로
+            # "gemini"라 스키마의 AgentName 리터럴이나 이 파일 다른 곳의 "gemini"
+            # 참조를 안 건드린다.
+            _build_propose_agent(gemini_raw, _groq_model(settings.groq_model)),
             _build_propose_agent(deepseek_raw, LiteLlm(model=f"deepseek/{settings.deepseek_model}")),
         ],
     )
