@@ -7,6 +7,7 @@ from ..schemas import (
     BrandOption,
     BulkProposal,
     ClarifyOptions,
+    JudgeVerdict,
     SearchResult,
 )
 from .base import (
@@ -16,6 +17,7 @@ from .base import (
     build_clarify_match_prompt,
     build_clarify_prompt,
     build_prompt,
+    build_relaxed_pick_prompt,
     filter_bulk_options,
     filter_candidates,
     is_generic_listing_url,
@@ -138,5 +140,33 @@ async def find_lowest_price(
         if is_generic_listing_url(data.get("url", "")):
             return None
         return BrandOption(brand=brand, **data)
+    except Exception:
+        return None
+
+
+async def pick_most_relevant(query: str, search_results: list[SearchResult]) -> JudgeVerdict | None:
+    """정확히 일치하는 후보가 하나도 없을 때의 폴백(2026-08-15, "적절한 상품
+    후보를 찾지 못하면 다시 fallback해서 feedback 구조로 돌아가서 가장
+    관련성 높은 상품을 추천해주는 시스템") - adk_pipeline.run_stream()이
+    일반 propose/challenge/judge 경로에서 후보를 하나도 못 건졌을 때만
+    호출한다. 완벽히 일치하지 않아도 검색 결과 중 가장 관련성 높은 것을
+    고르되, reasoning에 왜 완벽히 일치하지 않는지를 먼저 밝히게 해서 UI가
+    "낮은 확신" 캐비어로 보여줄 수 있게 한다(build_relaxed_pick_prompt 참고).
+    그마저도 없으면(검색 결과 전체가 아예 무관) None."""
+    if not search_results:
+        return None
+    try:
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=settings.gpt_model,
+            messages=[{"role": "user", "content": build_relaxed_pick_prompt(query, search_results)}],
+            response_format={"type": "json_object"},
+        )
+        data = parse_json_object(response.choices[0].message.content or "")
+        if not data.get("product_name") or not data.get("url"):
+            return None
+        if is_generic_listing_url(data.get("url", "")):
+            return None
+        return JudgeVerdict(**data)
     except Exception:
         return None

@@ -58,8 +58,24 @@ export interface ChatTurn {
   streamingProposals: Proposal[];
 }
 
+// ChatGPT/Gemini처럼 "창(대화)" 하나에 여러 턴이 계속 이어지고, 새 상품을 검색할
+// 때는 새 창을 연다(2026-08-15, "새로운 상품을 검색할 때는 새로운 창을 띄워서
+// 검색할 수 있게하고 하나의 창에서는 하나의 대화로그가 계속 이어질수 있도록").
+// 세션 범위로만 유지한다(새로고침하면 사라짐) - 완료된 검색 결과 자체는
+// 기존 history(HistoryEntry, 서버/로컬 영구 저장)가 이미 별도로 보존한다.
+export interface Conversation {
+  id: string;
+  // 사이드바 목록에 보여줄 제목 - 이 대화의 첫 턴 displayQuery로 고정한다
+  // (이후 턴이 쌓여도 안 바뀜, ChatGPT의 대화 제목과 같은 동작).
+  title: string;
+  turns: ChatTurn[];
+  updatedAt: number;
+}
+
 interface SearchContextValue {
   turns: ChatTurn[];
+  conversations: Conversation[];
+  activeConversationId: string | null;
   isBusy: boolean;
   ocrBusy: boolean;
   history: HistoryEntry[];
@@ -75,6 +91,7 @@ interface SearchContextValue {
   retryTurn: (turnId: string) => Promise<void>;
   handleImageUpload: (file: File) => Promise<void>;
   handleReset: () => void;
+  switchConversation: (id: string) => void;
   loadFromHistory: (entry: HistoryEntry) => void;
   deleteFromHistory: (id: string) => void;
   clearAllHistory: () => void;
@@ -126,17 +143,21 @@ const newTurn = (
 
 export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   const { user } = useAuth();
-  const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
   // 사용자 페르소나(2026-08-15, "냉장고 살 때랑 콜라 살 때 쓰는 메타데이터가
   // 다르다" -> "사용자 페르소나 기반으로 상품 매핑") - 이번 세션에서 지금까지
-  // 고른 facet/축 값을 {라벨: 값}으로 누적한다. 현재 드릴다운 체인(baseQuery)에
-  // 갇히지 않고 세션 전체(예: 폰 검색에서 "삼성" 고른 뒤, 완전히 새로 시작한
-  // 이어폰 검색에도)에 걸쳐 유지된다. 로그인 계정에는 추가로 영구 저장한다
+  // 고른 facet/축 값을 {라벨: 값}으로 누적한다. 대화(conversation) 하나에
+  // 갇히지 않고 세션 전체(예: 폰 대화에서 "삼성" 고른 뒤, 완전히 새로 연
+  // 이어폰 대화에도)에 걸쳐 유지된다. 로그인 계정에는 추가로 영구 저장한다
   // (rememberPreference 참고) - 세션 값은 새로고침하면 사라지지만, 계정 값은
   // 다음 방문에도 /decide/clarify가 자동으로 다시 불러와 반영한다.
   const [sessionPreferences, setSessionPreferences] = useState<Record<string, string>>({});
+
+  const activeConversation = conversations.find((c) => c.id === activeConversationId) ?? null;
+  const turns = activeConversation?.turns ?? [];
 
   // 로그인 상태가 바뀌면 기록 소스를 전환한다 — 로그인하면 그 계정의 서버 기록을
   // 불러오고, 로그아웃하면 이 브라우저의 로컬 기록으로 되돌아간다.
@@ -163,8 +184,55 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
     setHistory(saveHistoryEntry(q, data));
   };
 
+  // 턴 ID는 crypto.randomUUID()로 전역 유일하므로, 어느 대화가 활성 상태인지와
+  // 무관하게 모든 대화를 뒤져 실제로 그 턴을 담고 있는 대화만 갱신한다 - 스트리밍
+  // 응답이 도착하는 동안 사용자가 다른 대화로 전환해도 엉뚱한(현재 활성) 대화가
+  // 아니라 turn이 실제로 속한 대화가 정확히 갱신된다.
   const patchTurn = (id: string, patch: Partial<ChatTurn>) => {
-    setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.turns.some((t) => t.id === id)
+          ? { ...c, turns: c.turns.map((t) => (t.id === id ? { ...t, ...patch } : t)), updatedAt: Date.now() }
+          : c
+      )
+    );
+  };
+
+  const appendStreamingProposal = (turnId: string, proposal: Proposal) => {
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.turns.some((t) => t.id === turnId)
+          ? {
+              ...c,
+              turns: c.turns.map((t) =>
+                t.id === turnId ? { ...t, streamingProposals: [...t.streamingProposals, proposal] } : t
+              ),
+            }
+          : c
+      )
+    );
+  };
+
+  const findTurn = (turnId: string): ChatTurn | undefined =>
+    conversations.flatMap((c) => c.turns).find((t) => t.id === turnId);
+
+  // 새 턴을 대화에 붙인다 - conversationId가 없으면(새 대화의 첫 턴) 새 대화를
+  // 만들어 목록 맨 앞에 얹고 활성으로 전환한다. 이게 "새로운 상품을 검색할 때는
+  // 새로운 창"의 실제 진입점: handleReset이 activeConversationId를 null로
+  // 돌려놓으면, 다음 sendMessage가 이 분기를 타 자동으로 새 창을 연다.
+  const appendTurn = (conversationId: string | null, turn: ChatTurn) => {
+    if (conversationId) {
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === conversationId ? { ...c, turns: [...c.turns, turn], updatedAt: Date.now() } : c
+        )
+      );
+      return conversationId;
+    }
+    const id = crypto.randomUUID();
+    setConversations((prev) => [{ id, title: turn.displayQuery, turns: [turn], updatedAt: Date.now() }, ...prev]);
+    setActiveConversationId(id);
+    return id;
   };
 
   // 페르소나 한 줄(라벨:값) 기록 - 세션 상태는 즉시 반영해 바로 다음
@@ -182,7 +250,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   // selectBrand/selectFacets/selectClarifyOption(후속 턴 추가)/retryTurn(기존 턴
   // 재실행) 전부 이 위에서 돈다. AI 오케스트레이션(adk_pipeline, decideStream)이
   // 이 함수 안쪽(백엔드 API 호출)에서 한 턴을 처리하는 stateless 단계를 맡는다 -
-  // 턴/히스토리/baseQuery 관리는 이 함수 바깥(sendMessage 등 호출부)의 책임이다.
+  // 턴/대화/baseQuery 관리는 이 함수 바깥(sendMessage 등 호출부)의 책임이다.
   //
   // skipIntentCheck - 이미 브랜드를 골랐거나(brand) 이전 턴에서 축적된 검색어로
   // 이어가는 드릴다운 후속 턴(requestQuery !== baseQuery)이면 백엔드의 내부
@@ -246,11 +314,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
           if (event.type === 'status') {
             patchTurn(id, { streamingStage: event.stage });
           } else if (event.type === 'proposal') {
-            setTurns((prev) =>
-              prev.map((t) =>
-                t.id === id ? { ...t, streamingProposals: [...t.streamingProposals, event.proposal] } : t
-              )
-            );
+            appendStreamingProposal(id, event.proposal);
           } else if (event.type === 'final') {
             finalResult = event.result;
           } else if (event.type === 'error') {
@@ -276,29 +340,32 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
+  // 활성 대화가 있으면 그 대화에 이어붙이고(ChatGPT에서 입력창에 타이핑하는 것과
+  // 동일), 없으면(방금 새 검색을 눌렀거나 첫 방문) 새 대화를 연다.
   const sendMessage = async (q: string) => {
     const trimmed = q.trim();
     if (!trimmed) return;
     const turn = newTurn(trimmed, trimmed);
-    setTurns((prev) => [...prev, turn]);
+    appendTurn(activeConversationId, turn);
     await runTurn(turn.id, turn.requestQuery, undefined, turn.baseQuery);
   };
 
-  // clarify 카드에서 브랜드를 고르면 "새 메시지를 보낸 것"처럼 대화에 이어붙인다 -
+  // clarify 카드에서 브랜드를 고르면 "새 메시지를 보낸 것"처럼 같은 대화에 이어붙인다 -
   // 원래 검색어는 그대로 두고 브랜드만 골라 재조회하는 후속 질문 취급.
   const selectBrand = async (turnId: string, brand: string) => {
-    const origin = turns.find((t) => t.id === turnId);
-    if (!origin) return;
+    const origin = findTurn(turnId);
+    const conversation = conversations.find((c) => c.turns.some((t) => t.id === turnId));
+    if (!origin || !conversation) return;
     rememberPreference('브랜드', brand);
     const turn = newTurn(brand, origin.requestQuery, brand);
-    setTurns((prev) => [...prev, turn]);
+    appendTurn(conversation.id, turn);
     await runTurn(turn.id, turn.requestQuery, turn.brand);
   };
 
   // AI 상세검색 카드에서 기준(facet) 옵션을 하나 고르면 원래 검색어 뒤에 덧붙여
-  // 새 메시지처럼 이어붙인다. brand 파라미터를 안 써서(run_brand_price가 아니라)
-  // 일반 검색 경로를 그대로 타므로, 조합한 검색어가 여전히 애매하면 runTurn의
-  // clarify 선체크가 다시 걸려 자연스럽게 여러 턴에 걸쳐 좁혀나갈 수 있다.
+  // 같은 대화에 새 메시지처럼 이어붙인다. brand 파라미터를 안 써서(run_brand_price가
+  // 아니라) 일반 검색 경로를 그대로 타므로, 조합한 검색어가 여전히 애매하면
+  // runTurn의 clarify 선체크가 다시 걸려 자연스럽게 여러 턴에 걸쳐 좁혀나갈 수 있다.
   // baseQuery는 origin에서 그대로 물려받는다(origin.requestQuery가 아니라) -
   // 드릴다운 체인 전체가 맨 처음 검색어 하나로 고정돼야 백엔드가 매번 그
   // 하나만 캐시해서 재사용할 수 있다(속도 개선, 2026-08-13).
@@ -307,34 +374,35 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   // 배열이 아니라 라벨을 같이 받아야 어느 facet에서 이 값을 골랐는지 세션/계정
   // 페르소나에 정확히 기록할 수 있다.
   const selectFacets = async (turnId: string, selected: Record<string, string>) => {
-    const origin = turns.find((t) => t.id === turnId);
+    const origin = findTurn(turnId);
+    const conversation = conversations.find((c) => c.turns.some((t) => t.id === turnId));
     const values = Object.values(selected);
-    if (!origin || values.length === 0) return;
+    if (!origin || !conversation || values.length === 0) return;
     Object.entries(selected).forEach(([label, value]) => rememberPreference(label, value));
     const combined = values.reduce((acc, value) => dedupeAppend(acc, value), origin.requestQuery).trim();
     const turn = newTurn(values.join(' · '), combined, undefined, origin.baseQuery);
-    setTurns((prev) => [...prev, turn]);
+    appendTurn(conversation.id, turn);
     await runTurn(turn.id, turn.requestQuery, undefined, turn.baseQuery, selected);
   };
 
-  // 고정 축(제품/용량/개수) clarify 카드에서 옵션 하나를 고르거나 채팅으로
-  // 매칭됐을 때 - selectFacets와 같은 방식으로 검색어에 이어붙여 후속 턴을
-  // 만든다(run_brand_price로 단축하지 않고 일반 검색 경로를 그대로 탄다).
-  //
+  // 고정 축(제품/용량/개수) clarify 카드에서 옵션 하나를 골랐을 때 - selectFacets와
+  // 같은 방식으로 검색어에 이어붙여 같은 대화의 후속 턴을 만든다(run_brand_price로
+  // 단축하지 않고 일반 검색 경로를 그대로 탄다).
   const selectClarifyOption = async (turnId: string, step: Exclude<ClarifyStep, 'brand'>, value: string) => {
-    const origin = turns.find((t) => t.id === turnId);
-    if (!origin) return;
+    const origin = findTurn(turnId);
+    const conversation = conversations.find((c) => c.turns.some((t) => t.id === turnId));
+    if (!origin || !conversation) return;
     const personaLabel = CLARIFY_STEP_PERSONA_LABEL[step];
     const personaOverride = personaLabel ? { [personaLabel]: value } : undefined;
     if (personaLabel) rememberPreference(personaLabel, value);
     const combined = dedupeAppend(origin.requestQuery, value).trim();
     const turn = newTurn(value, combined, undefined, origin.baseQuery);
-    setTurns((prev) => [...prev, turn]);
+    appendTurn(conversation.id, turn);
     await runTurn(turn.id, turn.requestQuery, undefined, turn.baseQuery, personaOverride);
   };
 
   const retryTurn = async (turnId: string) => {
-    const turn = turns.find((t) => t.id === turnId);
+    const turn = findTurn(turnId);
     if (!turn) return;
     patchTurn(turnId, { status: 'loading', errorMessage: '', streamingStage: null, streamingProposals: [] });
     await runTurn(turnId, turn.requestQuery, turn.brand, turn.baseQuery);
@@ -346,44 +414,44 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
       const { ocr, cleaned } = await extractOcr(file);
       const extractedText = (cleaned?.search_query || cleaned?.cleaned_text || ocr.text || '').trim();
       if (!extractedText) {
-        setTurns((prev) => [
-          ...prev,
-          {
-            ...newTurn('(이미지)', ''),
-            status: 'error',
-            errorMessage: ocr.error || '이미지에서 텍스트를 찾지 못했습니다.',
-          },
-        ]);
+        appendTurn(activeConversationId, {
+          ...newTurn('(이미지)', ''),
+          status: 'error',
+          errorMessage: ocr.error || '이미지에서 텍스트를 찾지 못했습니다.',
+        });
         return;
       }
       await sendMessage(extractedText);
     } catch (err) {
-      setTurns((prev) => [
-        ...prev,
-        {
-          ...newTurn('(이미지)', ''),
-          status: 'error',
-          errorMessage:
-            err instanceof ApiError ? err.message : '이미지 분석 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.',
-        },
-      ]);
+      appendTurn(activeConversationId, {
+        ...newTurn('(이미지)', ''),
+        status: 'error',
+        errorMessage:
+          err instanceof ApiError ? err.message : '이미지 분석 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.',
+      });
     } finally {
       setOcrBusy(false);
     }
   };
 
+  // "새 검색"(사이드바) - ChatGPT의 "+New chat"과 동일하게, 지금 대화는 목록에
+  // 그대로 남겨두고 활성 대화만 비운다. 다음 sendMessage가 activeConversationId
+  // 없음을 보고 자동으로 새 대화를 연다(appendTurn 참고) - 여기서 바로 새
+  // Conversation을 만들지 않는 이유는, 사용자가 "새 검색"만 누르고 아무것도
+  // 입력하지 않으면 빈 대화가 목록에 쌓이는 걸 막기 위해서다.
   const handleReset = () => {
-    setTurns([]);
+    setActiveConversationId(null);
+  };
+
+  const switchConversation = (id: string) => {
+    setActiveConversationId(id);
   };
 
   const loadFromHistory = (entry: HistoryEntry) => {
-    setTurns([
-      {
-        ...newTurn(entry.query, entry.query),
-        status: 'result',
-        result: entry.result,
-      },
-    ]);
+    const turn: ChatTurn = { ...newTurn(entry.query, entry.query), status: 'result', result: entry.result };
+    const id = crypto.randomUUID();
+    setConversations((prev) => [{ id, title: entry.query, turns: [turn], updatedAt: Date.now() }, ...prev]);
+    setActiveConversationId(id);
   };
 
   const deleteFromHistory = (id: string) => {
@@ -412,6 +480,8 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
     <SearchContext.Provider
       value={{
         turns,
+        conversations,
+        activeConversationId,
         isBusy,
         ocrBusy,
         history,
@@ -423,6 +493,7 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
         retryTurn,
         handleImageUpload,
         handleReset,
+        switchConversation,
         loadFromHistory,
         deleteFromHistory,
         clearAllHistory,

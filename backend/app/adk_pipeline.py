@@ -28,6 +28,7 @@ from google.genai import types
 from pydantic import TypeAdapter
 
 from . import search as search_module
+from .agents import gpt as gpt_module
 from .agents import judge as judge_module
 from .category import CategoryClassification, classify_category
 from .intent import has_count_spec, has_volume_spec
@@ -449,6 +450,50 @@ def _build_decision(state: dict, proposals: list[Proposal]) -> Decision | None:
     )
 
 
+async def _relaxed_fallback_decision(query: str, search_results: list[SearchResult]) -> Decision | None:
+    """적절한 후보를 하나도 못 찾았을 때의 폴백(2026-08-15, "적절한 상품 후보를
+    찾지 못하면 다시 fallback해서 feedback 구조로 돌아가서 가장 관련성 높은
+    상품을 추천해주는 시스템으로 가고 싶어" - 완전 재검색 루프(끝없이 검색어를
+    넓혀가는 것)와 단순 1회 재시도의 중간): 최대 두 라운드만 시도하고 그래도
+    없으면 정직하게 포기한다(NO_CANDIDATE_ERROR).
+
+    1라운드 - 이미 가져온 검색 결과 그대로, gpt.pick_most_relevant로 완벽히
+    일치하지 않아도 가장 관련성 높은 것을 고르게 한다(브랜드/스펙 그라운딩만
+    완화 - 존재하지 않는 상품을 지어내는 건 여전히 금지). 검색 자체는 다시
+    안 하므로 비용이 거의 없다.
+
+    2라운드(1라운드가 그마저도 못 찾았을 때만 - 즉 검색 결과 자체가 질의와
+    아예 무관했을 때) - 질의를 앞 2단어로 넓혀 한 번만 재검색한 뒤 같은 완화
+    기준으로 다시 시도한다. 넓힌 질의가 원래 질의와 같으면(이미 짧은 질의라
+    넓힐 게 없으면) 똑같은 검색을 반복하는 낭비이므로 건너뛴다."""
+    verdict = await gpt_module.pick_most_relevant(query, search_results)
+    used_broadened = False
+    if verdict is None:
+        tokens = query.split()
+        broadened_query = " ".join(tokens[:2]) if len(tokens) > 2 else query
+        if broadened_query != query:
+            try:
+                broadened_results = await search_module.search(broadened_query)
+            except Exception:
+                broadened_results = []
+            verdict = await gpt_module.pick_most_relevant(query, broadened_results)
+            used_broadened = True
+    if verdict is None or not verdict.product_name:
+        return None
+
+    reasoning = verdict.reasoning
+    if used_broadened:
+        reasoning = f"'{query}'로는 적절한 상품을 찾지 못해 검색 범위를 넓혀 찾았습니다. {reasoning}"
+    return Decision(
+        product_name=verdict.product_name,
+        price=verdict.price,
+        retailer=verdict.retailer,
+        url=verdict.url,
+        reasoning=reasoning,
+        chosen_agent="gpt",
+    )
+
+
 def _is_ambiguous(query: str, options: ClarifyOptions) -> bool:
     """브랜드/제품/용량/개수 중 하나라도 2개 이상이면 사용자에게 물어볼 만큼
     애매하다고 본다 — 0~1개뿐이면 고를 게 없으니 그대로 진행.
@@ -546,10 +591,20 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
         if clarify is not None:
             yield {"type": "final", "result": clarify.model_dump()}
             return
+        fallback_decision = await _relaxed_fallback_decision(query, search_results)
+        if fallback_decision is not None:
+            result = DecideResponse(query=query, proposals=[], decision=fallback_decision)
+            yield {"type": "final", "result": result.model_dump()}
+            return
         raise RuntimeError(NO_CANDIDATE_ERROR)
 
     decision = _build_decision(final_state, proposals)
     if decision is None:
+        fallback_decision = await _relaxed_fallback_decision(query, _search_results_from_state(final_state))
+        if fallback_decision is not None:
+            result = DecideResponse(query=query, proposals=proposals, decision=fallback_decision)
+            yield {"type": "final", "result": result.model_dump()}
+            return
         raise RuntimeError(NO_CANDIDATE_ERROR)
 
     result = DecideResponse(query=query, proposals=proposals, decision=decision)
