@@ -101,6 +101,17 @@ class DecideRequest(BaseModel):
     # 넘기면, 백엔드가 그걸로 검색해 캐시를 재사용하고 나머지는 로컬 필터링만
     # 한다 - 다른 엔드포인트는 이 필드를 무시한다.
     base_query: str | None = None
+    # /decide/clarify 전용(2026-08-15, 사용자 페르소나 기반 상품 매핑) - 로그인
+    # 여부와 무관하게 "이번 세션에서 지금까지 고른 값들"을 {facet 라벨: 값}으로
+    # 프론트가 누적해 매 요청에 실어 보낸다. 로그인 계정의 영구 선호도
+    # (app.preferences)와 병합해 facet 옵션 순서에 소프트하게 반영한다 - 세션
+    # 값이 계정 값보다 최신이라 우선한다.
+    session_preferences: dict[str, str] | None = None
+
+
+class PreferenceRecordRequest(BaseModel):
+    label: str
+    value: str
 
 
 class PriceTableOffer(BaseModel):
