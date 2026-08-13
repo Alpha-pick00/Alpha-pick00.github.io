@@ -3,7 +3,6 @@ import { motion } from 'motion/react';
 import { AlertTriangle, ArrowUpRight, Check, RotateCcw, Search, Sparkles, Truck } from 'lucide-react';
 import type {
   ClarifyFacet as ClarifyFacetType,
-  DanawaStreamCandidate,
   DecideResult,
   DecideStage,
   BrandOption,
@@ -70,50 +69,6 @@ const BrandOptionRow = ({ option }: { option: BrandOption }) => (
       <ArrowUpRight className="w-4 h-4 text-neutral-300 group-hover:text-neutral-950 transition-colors" />
     </div>
   </a>
-);
-
-const StreamCandidateRow = ({ candidate }: { candidate: DanawaStreamCandidate }) => (
-  <motion.div
-    {...fadeUp}
-    className="flex items-center justify-between gap-4 py-3 border-b border-black/5 last:border-b-0"
-  >
-    <div className="min-w-0">
-      <p className="text-sm font-light text-neutral-600 truncate">{candidate.product_name || '상품명 미확인'}</p>
-      {candidate.retailer && <p className="text-xs font-light text-neutral-400">{candidate.retailer}</p>}
-    </div>
-    <span className="shrink-0 text-sm font-medium text-neutral-950 whitespace-nowrap">
-      {candidate.price || '가격 확인 중'}
-    </span>
-  </motion.div>
-);
-
-export const LoadingCard = ({
-  message,
-  caption = '최대 1분 소요',
-  candidates = [],
-}: {
-  message: React.ReactNode;
-  caption?: string;
-  candidates?: DanawaStreamCandidate[];
-}) => (
-  <Card>
-    <div className="flex flex-col items-center text-center py-6 gap-4">
-      <motion.div
-        animate={{ rotate: 360 }}
-        transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
-        className="w-8 h-8 rounded-full border-2 border-black/10 border-t-[#4ADE80]"
-      />
-      <p className="text-sm font-light text-neutral-500">{message}</p>
-      <p className="text-xs font-mono uppercase tracking-widest text-neutral-400">{caption}</p>
-    </div>
-    {candidates.length > 0 && (
-      <div className="mt-2 pt-4 border-t border-black/5 text-left">
-        {candidates.map((c, i) => (
-          <StreamCandidateRow key={`${c.product_name}-${i}`} candidate={c} />
-        ))}
-      </div>
-    )}
-  </Card>
 );
 
 const STAGE_LABEL: Record<DecideStage, string> = {
