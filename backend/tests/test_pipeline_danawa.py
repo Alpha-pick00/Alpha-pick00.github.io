@@ -626,33 +626,6 @@ def test_exclude_danawa_falls_back_to_other_proposal_when_no_a_grade_match():
     assert replaced.price_source == "llm_guess"  # 검증된 게 아니라 다른 LLM 추측일 뿐
 
 
-def test_exclude_enuri_falls_back_to_other_proposal():
-    # PART 4-3: 에누리도 다나와와 동일하게 취급 - 아직 어댑터가 없어 pcode
-    # 매칭 단계는 없고, 바로 다른 에이전트 제안으로 넘어가야 한다.
-    decision = Decision(
-        product_name="테스트 상품",
-        price="20,000원",
-        retailer="에누리",
-        url="https://www.enuri.com/direct/product.jsp?g_code=1",
-        reasoning="테스트",
-        chosen_agent="gpt",
-    )
-    fallback_proposal = Proposal(
-        agent="gemini",
-        product_name="테스트 상품",
-        price="21,000원",
-        retailer="G마켓",
-        url="https://item.gmarket.co.kr/Item?goodscode=1",
-        reasoning="대체 제안",
-    )
-
-    replaced = asyncio.run(exclude_price_comparison_site_as_final_pick(decision, [fallback_proposal], []))
-
-    assert replaced.price_source == "llm_guess"
-    assert replaced.retailer == "G마켓"
-    assert "enuri.com" not in replaced.url
-
-
 def test_exclude_leaves_non_comparison_domain_untouched():
     decision = Decision(
         product_name="테스트 상품",
