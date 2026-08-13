@@ -149,15 +149,6 @@ def main() -> None:
     print("=" * 70)
     print(f"  {side.get('unknown_cmpnyc_seen', [])}")
 
-    # PART 2-4: enuri.com URL 수집 결과
-    print("\n" + "=" * 70)
-    print("PART 2-4: enuri.com URL 관측 (페치 안 함)")
-    print("=" * 70)
-    enuri_urls = side.get("enuri_urls_seen", [])
-    print(f"  {len(enuri_urls)}건")
-    for u in enuri_urls:
-        print(f"    {u}")
-
 
 if __name__ == "__main__":
     main()

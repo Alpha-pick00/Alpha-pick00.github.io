@@ -639,10 +639,10 @@ def _product_name_matches(decision_name: str, danawa_name: str) -> bool:
     return True
 
 
-# PART 4-3: 에누리도 다나와와 완전히 동일하게 취급한다 - 수수료 0%인 가격비교
-# 사이트를 최종 추천으로 노출하면 안 된다는 원칙은 어느 쪽이든 같다. 에누리는
-# 아직 어댑터가 없어 pcode 기반 매칭(_find_table_by_pcode)은 다나와만 적용된다.
-PRICE_COMPARISON_DOMAINS = {DANAWA_ROOT_DOMAIN, "enuri.com"}
+# 수수료 0%인 가격비교 사이트(다나와) 자체를 최종 추천 판매처로 노출하면
+# 안 된다는 원칙에 걸리는 도메인 집합. 에누리는 검색 비교 대상에서 완전히
+# 빠졌으므로(2026-08-15) 더 이상 여기 포함하지 않는다.
+PRICE_COMPARISON_DOMAINS = {DANAWA_ROOT_DOMAIN}
 
 
 def _root_domain_matches(url: str | None, root: str) -> bool:
@@ -723,13 +723,12 @@ async def exclude_price_comparison_site_as_final_pick(
     proposals: list[Proposal],
     tables: list[tuple[PriceTable, danawa.DanawaResult]],
 ) -> Decision:
-    """다나와도 에누리도 수수료 0%인 가격비교 사이트라 최종 추천 판매처가 될
-    수 없다(이 어댑터를 만든 이유 자체가 그거다) - 그런데 라이브 검증에서
-    judge가 실제로 다나와 자신을 "판매처"로 고르는 사례가 3/5 관찰됐다.
-    decision.url이 둘 중 하나면:
-    1) 다나와 URL이고 pcode가 일치하는(=같은 상품이 확실한) 페치 결과가
-       있으면 그 A등급 최저가로 교체한다(상품명 대조 불필요 - pcode 일치가
-       더 강한 증거). 에누리는 아직 어댑터가 없어 이 단계가 없다.
+    """다나와는 수수료 0%인 가격비교 사이트라 최종 추천 판매처가 될 수 없다
+    (이 어댑터를 만든 이유 자체가 그거다) - 그런데 라이브 검증에서 judge가
+    실제로 다나와 자신을 "판매처"로 고르는 사례가 3/5 관찰됐다.
+    decision.url이 다나와면:
+    1) pcode가 일치하는(=같은 상품이 확실한) 페치 결과가 있으면 그 A등급
+       최저가로 교체한다(상품명 대조 불필요 - pcode 일치가 더 강한 증거).
     2) 없으면 가격비교 사이트가 아닌 다른 에이전트 제안으로 넘어간다
        (price_source는 여전히 llm_guess - 검증된 게 아니라 그냥 다른 LLM
        추측이다).
