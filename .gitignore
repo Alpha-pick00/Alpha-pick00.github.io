@@ -12,3 +12,4 @@ __pycache__/
 backend/app/data/autocomplete.db
 backend/app/data/history.db
 backend/app/data/search_cache.db
+backend/app/data/preferences.db

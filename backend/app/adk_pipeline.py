@@ -203,6 +203,24 @@ class _DanawaFetchNode(BaseAgent):
         )
 
 
+class _CoupangCheckNode(BaseAgent):
+    """challenge 단계에 쿠팡 검색 결과를 독립 교차 확인 신호로 추가한다
+    (사용자 요청, 2026-08-16: "그라운딩 성능을 높여줘"). propose_parallel
+    소속이라 gpt/gemini/deepseek/danawa와 동시 실행되어 지연시간이 추가되지
+    않는다. 다나와처럼 가격을 추출해 후보로 올리지는 않는다 - 쿠팡 페이지를
+    직접 파싱하지 않고(과거 15개 리테일러를 다나와 하나로 좁힌 이유였던
+    "스니펫만으로 파싱하면 엉뚱한 상품/가격이 섞이는 문제"를 재현하지 않기
+    위해) Tavily 스니펫만 challenge LLM에게 참고 신호로 넘긴다."""
+
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        query = _refined_query_text(ctx.session.state)
+        results = await search_module.search_coupang(query)
+        yield Event(
+            author=self.name,
+            actions=EventActions(state_delta={"coupang_results": [r.model_dump() for r in results]}),
+        )
+
+
 class _FilterMergeNode(BaseAgent):
     """3개 제안 노드 + 다나와 후보의 원시 JSON을 각각 파싱+필터링한 뒤,
     fusion.dedup으로 동일 상품을 병합한다 — 지금까지 어디서도 안 쓰이던
@@ -495,7 +513,8 @@ def _build_challenge_agent() -> LlmAgent:
         candidates = ctx.state.get("candidates") or []
         results = _search_results_from_state(ctx.state)
         candidate_pages = ctx.state.get("candidate_pages") or {}
-        return build_challenge_prompt(query, candidates, results, candidate_pages)
+        coupang_results = [SearchResult(**r) for r in ctx.state.get("coupang_results") or []]
+        return build_challenge_prompt(query, candidates, results, candidate_pages, coupang_results)
 
     return LlmAgent(
         name="challenge",
@@ -573,6 +592,10 @@ def _build_pipeline() -> SequentialAgent:
             # 아니라 커스텀 BaseAgent지만 같은 ParallelAgent 소속이라 gpt/gemini/
             # deepseek와 동시에 실행된다(지연시간 추가 없음).
             _DanawaFetchNode(name="danawa"),
+            # 쿠팡 교차 확인(2026-08-16, "그라운딩 성능을 높여줘") - 후보를 만들지
+            # 않고 challenge 단계의 참고 신호만 채운다. 같은 ParallelAgent 소속이라
+            # 지연시간이 추가되지 않는다.
+            _CoupangCheckNode(name="coupang_check"),
         ],
     )
 
