@@ -33,7 +33,9 @@ EXCLUDE_DOMAINS = [
 ]
 
 
-async def _tavily_search(query: str, max_results: int) -> list[SearchResult]:
+async def _tavily_search(
+    query: str, max_results: int, domains: list[str] = RETAILER_DOMAINS
+) -> list[SearchResult]:
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
             TAVILY_URL,
@@ -42,7 +44,7 @@ async def _tavily_search(query: str, max_results: int) -> list[SearchResult]:
                 "query": query,
                 "search_depth": "advanced",
                 "max_results": max_results,
-                "include_domains": RETAILER_DOMAINS,
+                "include_domains": domains,
                 "exclude_domains": EXCLUDE_DOMAINS,
                 "include_raw_content": "text",
             },
@@ -129,3 +131,24 @@ async def extract(url: str) -> str | None:
     if not results:
         return None
     return results[0].get("raw_content")
+
+
+COUPANG_DOMAINS = ["coupang.com"]
+_COUPANG_MAX_RESULTS = 5
+
+
+async def search_coupang(query: str) -> list[SearchResult]:
+    """challenge 단계 그라운딩 보조 신호(2026-08-16, "그라운딩 성능을 높여줘") -
+    다나와 검색과 완전히 별도로 쿠팡에 한정해 Tavily를 직접 호출한다. search()의
+    캐시/임베딩 유사도 매칭은 안 쓴다 - 참고 신호일 뿐이라 캐시 재사용 이점이
+    크지 않고, 매 요청 최신 재고를 보는 게 더 정확하다. 쿠팡 페이지를 직접
+    파싱해 가격/후보를 뽑지는 않는다 - Tavily 스니펫만 challenge LLM에게
+    참고 자료로 넘긴다(다나와 하나로 리테일러 도메인을 좁힌 이유였던 "페이지
+    구조가 달라 스니펫만으로 파싱하면 엉뚱한 상품/가격이 섞이는 문제"를
+    재현하지 않기 위함). 실패해도 조용히 빈 리스트 - challenge는 이 신호 없이도
+    기존 방식대로 동작한다."""
+    try:
+        return await _tavily_search(query, _COUPANG_MAX_RESULTS, domains=COUPANG_DOMAINS)
+    except Exception:
+        logger.warning("쿠팡 교차 확인 검색 실패: %r", query, exc_info=True)
+        return []

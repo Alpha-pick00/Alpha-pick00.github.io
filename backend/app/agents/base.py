@@ -282,6 +282,12 @@ CHALLENGE_INSTRUCTIONS = (
     "일부 후보에는 '실제 페이지 재조회 원문'이 함께 제공됩니다 — 이는 검색 당시 "
     "잘린 스니펫보다 더 최신이고 완전한 정보이므로, 스니펫과 내용이 다르면 "
     "재조회 원문을 우선 신뢰해 판단하세요. "
+    "일부 경우에는 '쿠팡 교차 확인 검색 결과'가 추가로 제공됩니다 — 검색 결과와는 "
+    "별도로 쿠팡에서 같은 상품을 검색한 참고 자료입니다. 후보와 일치하는 상품이 "
+    "쿠팡에서도 보이면 그라운딩 신뢰도가 더 높다는 뜻으로 참고하세요. 쿠팡에 "
+    "없다고 해서 곧바로 false로 판단하지 마세요(품절·검색 누락일 수 있음) — "
+    "원 검색 결과나 재조회 원문과 명백히 모순될 때만 이 신호를 근거로 우려를 "
+    "표시하세요. "
     "반드시 입력된 후보와 같은 개수, 같은 순서로 아래 JSON 배열 형식으로만 답하세요. "
     "다른 텍스트나 코드펜스를 덧붙이지 마세요.\n\n"
     '[{"url": "...", "verified": true, "note": "..."}, ...]\n\n'
@@ -312,13 +318,17 @@ def build_challenge_prompt(
     candidates: list,
     search_results: list[SearchResult],
     candidate_pages: dict[str, str] | None = None,
+    coupang_results: list[SearchResult] | None = None,
 ) -> str:
     candidates_block = _format_candidates_block(candidates, candidate_pages)
     results_block = format_results_block(search_results)
-    return (
+    prompt = (
         f"{CHALLENGE_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n"
         f"검증할 후보:\n{candidates_block}\n\n검색 결과:\n{results_block}"
     )
+    if coupang_results:
+        prompt += f"\n\n쿠팡 교차 확인 검색 결과(참고용):\n{format_results_block(coupang_results)}"
+    return prompt
 
 
 def _normalize(text: str) -> str:
