@@ -478,7 +478,7 @@ def test_finalize_with_danawa_enriches_matching_llm_decision():
     """judge가 이름이 일치하는 다나와 실측가를 고르지 않았어도(chosen_agent="gpt"),
     상품명이 맞으면 enrich_decision이 가격/URL을 실측치로 덮어쓴다."""
     table, result = _danawa_price_table_pair(
-        "테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="777")]
+        "테스트 상품", [_offer_li("옥션", "23,000", "EE715", link_pcode="777")]
     )
     decision = Decision(
         product_name="테스트 상품",
@@ -493,7 +493,7 @@ def test_finalize_with_danawa_enriches_matching_llm_decision():
 
     assert updated.price_source == "danawa_offer"
     assert updated.price == "23,000원"
-    assert updated.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=777"
+    assert updated.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=EE715&link_pcode=777"
     assert price_table is not None
 
 

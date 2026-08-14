@@ -500,10 +500,22 @@ def _is_danawa_bridge_passthrough(url: str | None) -> bool:
     exclude_price_comparison_site_as_final_pick()이 이를 오인해 멀쩡한
     danawa_offer 추천을 LLM 추측(때로는 완전히 다른 상품)으로 갈아치웠다.
     /bridge/ 경로는 그 자체로 "다나와가 최종 판매처"인 경우가 없으므로
-    이 함수로 미리 걸러낸다."""
+    이 함수로 미리 걸러낸다.
+
+    (2026-08-16 강화) 경로만 보고 "이미 검증된 링크"로 믿으면 안 된다 -
+    relaxed fallback(gpt.pick_most_relevant)은 cheapest_linkable_raw_offer/
+    resolve_purchase_url을 거치지 않고, LLM이 Tavily 원문 스니펫에 그대로
+    박혀 있는 bridge_url 문자열을 아무 검증 없이 베껴올 수 있다 - 그 cmpnyc가
+    CMPNYC_MAP에서 지금 실제로 url_rule="bridge_passthrough"인 판매처인지까지
+    확인해야, cmpnyc가 깨진 것으로 확인돼 None으로 내려간 판매처(예: 쿠팡
+    TP40F)의 죽은 링크를 "이미 정상"이라고 오인해 통과시키지 않는다."""
     if not url:
         return False
-    return _root_domain_matches(url, DANAWA_ROOT_DOMAIN) and urlsplit(url).path.startswith("/bridge/")
+    if not (_root_domain_matches(url, DANAWA_ROOT_DOMAIN) and urlsplit(url).path.startswith("/bridge/")):
+        return False
+    cmpnyc = _query_param(url, "cmpnyc")
+    mapping = CMPNYC_MAP.get(cmpnyc) if cmpnyc else None
+    return mapping is not None and mapping["url_rule"] == "bridge_passthrough"
 
 
 def _is_danawa_domain(url: str | None) -> bool:

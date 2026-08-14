@@ -108,7 +108,7 @@ def test_cheapest_linkable_offer_skips_cheaper_b_grade():
         "테스트 상품",
         [
             _offer_li("호갱마켓", "19,000", "TW627F"),  # B등급, 더 저렴
-            _offer_li("쿠팡", "23,000", "TP40F", link_pcode="555"),  # A등급
+            _offer_li("옥션", "23,000", "EE715", link_pcode="555"),  # A등급
         ],
     )
     result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
@@ -117,11 +117,11 @@ def test_cheapest_linkable_offer_skips_cheaper_b_grade():
     assert table.offers[0].seller == "호갱마켓"
     assert table.offers[0].price_krw == 19000
     assert table.offers[0].linkable is False
-    assert table.offers[1].seller == "쿠팡"
+    assert table.offers[1].seller == "옥션"
     assert table.offers[1].linkable is True
 
     cheapest_linkable = cheapest_linkable_raw_offer(result)
-    assert cheapest_linkable["seller"] == "쿠팡"
+    assert cheapest_linkable["seller"] == "옥션"
     assert cheapest_linkable["price_krw"] == 23000
 
 
@@ -186,6 +186,27 @@ def test_unknown_cmpnyc_domain_is_none_not_downgraded():
     assert offer.linkable is False
 
 
+def test_coupang_tp40f_is_not_linkable_pending_affiliate_fix():
+    """회귀 테스트(2026-08-16, 사용자 리포트 "구매링크를 안띄워주는거야") - 다나와의
+    쿠팡 제휴 코드(TP40F) bridge_url을 실제로 열어보면(사용자 본인 브라우저로
+    직접 확인) 서로 다른 pcode 여러 건에서 전부 "사용권한이 제한된 페이지입니다"
+    (쿠팡 접근 제한 에러)만 뜬다 - 특정 상품이 아니라 이 cmpnyc 자체가 막혀
+    있다는 뜻이라 danawa_mall_map.CMPNYC_MAP에서 url_rule을 None으로 내렸다.
+    domain은 여전히 사실(coupang.com)이라 trust 등급에는 그대로 반영된다 -
+    "링크를 못 만든다"와 "신뢰도가 낮다"는 다른 질문이라는 이 파일의 원칙과
+    같은 맥락. 다나와-쿠팡 제휴가 복구되면 이 테스트도 함께 갱신해야 한다."""
+    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
+    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
+
+    table = build_price_table(result)
+    offer = table.offers[0]
+    assert offer.seller == "쿠팡"
+    assert offer.domain == "coupang.com"
+    assert offer.trust == 1.0
+    assert offer.linkable is False
+    assert cheapest_linkable_raw_offer(result) is None
+
+
 # -- 8. 다나와 URL이 4개 이상일 때 3개로 잘리는가 -------------------------------
 
 
@@ -193,7 +214,7 @@ def test_unknown_cmpnyc_domain_is_none_not_downgraded():
 
 
 def test_name_match_fills_price_when_llm_price_missing():
-    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="777")])
+    html = _danawa_html("테스트 상품", [_offer_li("옥션", "23,000", "EE715", link_pcode="777")])
     result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
 
     decision = Decision(
@@ -209,8 +230,8 @@ def test_name_match_fills_price_when_llm_price_missing():
 
     assert enriched.price_source == "danawa_offer"
     assert enriched.price == "23,000원"
-    assert enriched.retailer == "쿠팡"
-    assert enriched.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=777"
+    assert enriched.retailer == "옥션"
+    assert enriched.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=EE715&link_pcode=777"
 
 
 # -- STEP 6: 모델명 충돌(V8 vs V15)이면 매칭 실패 -------------------------------
@@ -296,7 +317,7 @@ def test_chip_generation_conflict_blocks_match_ipad_pro():
 
 
 def test_spec_token_on_one_side_only_still_matches():
-    html = _danawa_html("iPad Air M2 128GB", [_offer_li("쿠팡", "900,000", "TP40F", link_pcode="1")])
+    html = _danawa_html("iPad Air M2 128GB", [_offer_li("옥션", "900,000", "EE715", link_pcode="1")])
     result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
 
     decision = Decision(
@@ -318,7 +339,7 @@ def test_multiple_values_in_same_family_but_identical_sets_still_matches():
     # 집합이 양쪽 다 동일하면 충돌이 아니어야 한다 - 자기 자신과 비교해도
     # 실패하면 안 된다는 최소 불변식.
     html = _danawa_html(
-        "삼성전자 갤럭시탭S10 울트라 (램12GB,256GB)", [_offer_li("쿠팡", "1,200,000", "TP40F", link_pcode="1")]
+        "삼성전자 갤럭시탭S10 울트라 (램12GB,256GB)", [_offer_li("옥션", "1,200,000", "EE715", link_pcode="1")]
     )
     result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
 
@@ -355,7 +376,7 @@ def test_different_multi_value_specs_in_same_family_conflict():
 
 
 def test_same_spec_token_matches():
-    html = _danawa_html("갤럭시 버즈3 프로 SM-R630N", [_offer_li("쿠팡", "230,000", "TP40F", link_pcode="1")])
+    html = _danawa_html("갤럭시 버즈3 프로 SM-R630N", [_offer_li("옥션", "230,000", "EE715", link_pcode="1")])
     result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
 
     decision = Decision(
@@ -408,7 +429,7 @@ def test_installment_months_not_mistaken_for_quantity_token():
 
 
 def test_exclude_price_comparison_site_as_final_pick_replaces_with_a_grade_offer():
-    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="999")])
+    html = _danawa_html("테스트 상품", [_offer_li("옥션", "23,000", "EE715", link_pcode="999")])
     result = parse_danawa_html("https://prod.danawa.com/info?pcode=42", html)
     table = build_price_table(result)
 
@@ -424,8 +445,8 @@ def test_exclude_price_comparison_site_as_final_pick_replaces_with_a_grade_offer
     replaced = asyncio.run(exclude_price_comparison_site_as_final_pick(decision, [], [(table, result)]))
 
     assert replaced.price_source == "danawa_offer"
-    assert replaced.retailer == "쿠팡"
-    assert replaced.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=999"
+    assert replaced.retailer == "옥션"
+    assert replaced.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=EE715&link_pcode=999"
 
 
 def test_exclude_leaves_bridge_passthrough_url_untouched():
@@ -434,13 +455,15 @@ def test_exclude_leaves_bridge_passthrough_url_untouched():
     danawa.com 서브도메인이라는 이유만으로 exclude_price_comparison_site_as_final_pick()이
     "다나와 자신이 최종 판매처로 뽑혔다"고 오인해 멀쩡한 danawa_offer 추천을
     엉뚱한 LLM 추측(fallback_proposal, 완전히 다른 상품일 수도 있음)으로
-    갈아치우고 있었다. retailer가 "다나와"가 아니라 실제 판매처(쿠팡)면
-    손대지 않아야 한다."""
+    갈아치우고 있었다. retailer가 "다나와"가 아니라 실제 판매처(옥션)면
+    손대지 않아야 한다(cmpnyc가 CMPNYC_MAP에서 지금도 bridge_passthrough로
+    확인되는 정상 판매처일 때에 한해서 - 깨진 cmpnyc의 회귀는
+    test_exclude_replaces_broken_bridge_passthrough_cmpnyc 참고)."""
     decision = Decision(
         product_name="테스트 상품",
         price="23,000원",
-        retailer="쿠팡",
-        url="https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=999",
+        retailer="옥션",
+        url="https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=EE715&link_pcode=999",
         reasoning="다나와 실측 최저가",
         chosen_agent="gpt",
         price_source="danawa_offer",
@@ -456,9 +479,39 @@ def test_exclude_leaves_bridge_passthrough_url_untouched():
 
     replaced = asyncio.run(exclude_price_comparison_site_as_final_pick(decision, [fallback_proposal], []))
 
-    assert replaced.retailer == "쿠팡"
-    assert replaced.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=999"
-    assert replaced.price_source == "danawa_offer"
+    assert replaced.retailer == "옥션"
+    assert replaced.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=EE715&link_pcode=999"
+
+
+def test_exclude_replaces_broken_bridge_passthrough_cmpnyc():
+    """회귀 테스트(2026-08-16, 사용자 리포트 "구매링크를 안띄워주는거야") - relaxed
+    fallback(gpt.pick_most_relevant)은 cheapest_linkable_raw_offer/
+    resolve_purchase_url을 거치지 않고 Tavily 원문 스니펫에서 bridge_url을
+    그대로 베껴올 수 있다 - cmpnyc가 CMPNYC_MAP에서 url_rule=None으로 내려간
+    판매처(예: 쿠팡 TP40F)라면, 경로가 /bridge/여도 "이미 검증된 링크"로 믿지
+    않고 다른 제안으로 대체해야 한다."""
+    decision = Decision(
+        product_name="테스트 상품",
+        price="23,000원",
+        retailer="쿠팡",
+        url="https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=999",
+        reasoning="LLM이 원문 스니펫에서 베껴온 링크",
+        chosen_agent="gpt",
+    )
+    fallback_proposal = Proposal(
+        agent="gemini",
+        product_name="테스트 상품",
+        price="99,000원",
+        retailer="G마켓",
+        url="https://item.gmarket.co.kr/Item?goodscode=1",
+        reasoning="대체 제안",
+    )
+
+    replaced = asyncio.run(exclude_price_comparison_site_as_final_pick(decision, [fallback_proposal], []))
+
+    assert replaced.retailer == "G마켓"
+    assert replaced.url == "https://item.gmarket.co.kr/Item?goodscode=1"
+    assert replaced.price_source == "llm_guess"  # 검증된 게 아니라 다른 LLM 추측일 뿐
 
 
 def test_exclude_danawa_falls_back_to_other_proposal_when_no_a_grade_match():
@@ -686,7 +739,7 @@ def test_run_danawa_only_debate_never_calls_any_llm(monkeypatch):
     _forbid_llm_calls(monkeypatch)
     _patch_direct_danawa_search(monkeypatch, "1")
 
-    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
+    html = _danawa_html("테스트 상품", [_offer_li("옥션", "10,000", "EE715")])
 
     async def _fake_fetch(url):
         return parse_danawa_html(url, html)
@@ -698,8 +751,8 @@ def test_run_danawa_only_debate_never_calls_any_llm(monkeypatch):
     assert result.proposals == []
     assert result.decision.chosen_agent == "danawa"
     assert result.decision.price_source == "danawa_offer"
-    assert result.decision.retailer == "쿠팡"
-    assert result.decision.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=999"
+    assert result.decision.retailer == "옥션"
+    assert result.decision.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=EE715&link_pcode=999"
     assert result.price_table is not None
 
 
@@ -728,7 +781,7 @@ def test_run_danawa_only_debate_falls_back_to_base_query_when_specific_query_fin
 
     monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
 
-    html = _danawa_html("오리온 초코파이 바나나 468g", [_offer_li("쿠팡", "10,000", "TP40F")])
+    html = _danawa_html("오리온 초코파이 바나나 468g", [_offer_li("옥션", "10,000", "EE715")])
 
     async def _fake_fetch(url):
         return parse_danawa_html(url, html)
@@ -740,7 +793,7 @@ def test_run_danawa_only_debate_falls_back_to_base_query_when_specific_query_fin
     )
 
     assert result.decision.chosen_agent == "danawa"
-    assert result.decision.retailer == "쿠팡"
+    assert result.decision.retailer == "옥션"
     # 원래 물어본 게 뭐였는지는 솔직하게 reasoning에 남아야 한다 - 조용히 다른
     # 검색어로 찾았다는 사실을 숨기면 안 된다.
     assert "초코파이 오리온 초코파이 바나나 468g" in result.decision.reasoning
@@ -794,7 +847,7 @@ def test_decide_danawa_only_endpoint_returns_200_with_no_proposals(monkeypatch):
     _forbid_llm_calls(monkeypatch)
     _patch_direct_danawa_search(monkeypatch, "1")
 
-    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
+    html = _danawa_html("테스트 상품", [_offer_li("옥션", "10,000", "EE715")])
 
     async def _fake_fetch(url):
         return parse_danawa_html(url, html)
@@ -817,7 +870,7 @@ def test_decide_auto_routes_to_danawa_only_when_no_llm_key_configured(monkeypatc
     monkeypatch.setattr("app.autocomplete.record_terms", lambda terms: None)
     _patch_direct_danawa_search(monkeypatch, "1")
 
-    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
+    html = _danawa_html("테스트 상품", [_offer_li("옥션", "10,000", "EE715")])
 
     async def _fake_fetch(url):
         return parse_danawa_html(url, html)
@@ -879,11 +932,11 @@ def test_run_danawa_only_debate_prefers_cheapest_variant_over_richest_table(monk
     )
 
     html_by_pcode = {
-        "1": _danawa_html("테스트 상품 실버 256GB", [_offer_li("쿠팡", "1,300,000", "TP40F")]),
+        "1": _danawa_html("테스트 상품 실버 256GB", [_offer_li("옥션", "1,300,000", "EE715")]),
         "2": _danawa_html(
             "테스트 상품 그레이 256GB",
             [
-                _offer_li("쿠팡", "1,600,000", "TP40F"),
+                _offer_li("옥션", "1,600,000", "EE715"),
                 _offer_li("11번가", "1,650,000", "TH201", link_pcode="123"),
             ],
         ),
@@ -915,7 +968,7 @@ def test_run_danawa_only_debate_returns_options_for_ambiguous_query(monkeypatch)
     )
 
     html_by_pcode = {
-        "1": _danawa_html("LG전자 그램 노트북", [_offer_li("쿠팡", "2,000,000", "TP40F")]),
+        "1": _danawa_html("LG전자 그램 노트북", [_offer_li("옥션", "2,000,000", "EE715")]),
         "2": _danawa_html("MSI 게이밍 노트북", [_offer_li("11번가", "1,500,000", "TH201", link_pcode="123")]),
     }
 
@@ -944,7 +997,7 @@ def test_decide_danawa_only_endpoint_returns_bulk_mode_for_ambiguous_query(monke
     )
 
     html_by_pcode = {
-        "1": _danawa_html("LG전자 그램 노트북", [_offer_li("쿠팡", "2,000,000", "TP40F")]),
+        "1": _danawa_html("LG전자 그램 노트북", [_offer_li("옥션", "2,000,000", "EE715")]),
         "2": _danawa_html("MSI 게이밍 노트북", [_offer_li("11번가", "1,500,000", "TH201", link_pcode="123")]),
     }
 
@@ -979,8 +1032,8 @@ def test_run_danawa_only_debate_stream_yields_candidates_in_completion_order(mon
     )
 
     html_by_pcode = {
-        "1": _danawa_html("테스트 상품 A", [_offer_li("쿠팡", "20,000", "TP40F")]),
-        "2": _danawa_html("테스트 상품 B", [_offer_li("쿠팡", "10,000", "TP40F")]),
+        "1": _danawa_html("테스트 상품 A", [_offer_li("옥션", "20,000", "EE715")]),
+        "2": _danawa_html("테스트 상품 B", [_offer_li("옥션", "10,000", "EE715")]),
     }
 
     async def _fake_fetch(url):
@@ -1012,7 +1065,7 @@ def test_decide_danawa_only_stream_endpoint_returns_sse_events(monkeypatch):
     _forbid_llm_calls(monkeypatch)
     _patch_direct_danawa_search(monkeypatch, "1")
 
-    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "10,000", "TP40F")])
+    html = _danawa_html("테스트 상품", [_offer_li("옥션", "10,000", "EE715")])
 
     async def _fake_fetch(url):
         return parse_danawa_html(url, html)
