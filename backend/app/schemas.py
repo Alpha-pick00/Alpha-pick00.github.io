@@ -213,16 +213,6 @@ class ClarifyResponse(BaseModel):
     options: ClarifyOptions
 
 
-class ClarifyMatchRequest(BaseModel):
-    message: str
-    options: list[str]
-
-
-class ClarifyMatchResponse(BaseModel):
-    matched: str | None = None
-    reply: str
-
-
 class ClarifyAskRequest(BaseModel):
     query: str
     options: list[str]

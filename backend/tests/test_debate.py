@@ -1,6 +1,5 @@
 import asyncio
 
-from app.category import CategoryClassification
 from app.debate import (
     _FACET_ORDER_HINTS,
     _attach_facet_crossfilter,
@@ -12,10 +11,9 @@ from app.debate import (
     _filter_listing_pages,
     _is_ambiguous_facets,
     _resolved_facet_count,
-    _strip_category_irrelevant_options,
     _strip_resolved_facets,
 )
-from app.schemas import ClarifyFacet, ClarifyOptions, SearchResult
+from app.schemas import ClarifyFacet, SearchResult
 
 
 def _facet(label: str, options: list[str]) -> ClarifyFacet:
@@ -109,83 +107,6 @@ def test_filter_listing_pages_keeps_all_when_none_are_listings():
     ]
 
     assert _filter_listing_pages(results) == results
-
-
-def test_strip_category_irrelevant_options_removes_volume_but_keeps_quantity_for_fashion():
-    """패션의류는 mL/L/kg 같은 용량 스펙은 무의미하지만, '양말 3족'·'정장 2벌'처럼
-    수량(묶음 개수)은 여전히 실제 구매 기준으로 쓰인다 — 용량만 빼고 수량은
-    남긴다."""
-    options = ClarifyOptions(brands=["나이키"], volumes=["270mm"], quantities=["1족", "3족"])
-
-    stripped = _strip_category_irrelevant_options(
-        CategoryClassification(category="패션의류/잡화"), options
-    )
-
-    assert stripped.brands == ["나이키"]
-    assert stripped.volumes == []
-    assert stripped.quantities == ["1족", "3족"]
-
-
-def test_strip_category_irrelevant_options_keeps_quantity_for_books():
-    """도서는 '권'이 개수 단위 패턴에 포함돼 있을 만큼 수량이 실제 구매
-    기준이다 — 용량 축만 없을 뿐 수량은 남아야 한다."""
-    options = ClarifyOptions(brands=[], volumes=["500ml"], quantities=["1권", "10권"])
-
-    stripped = _strip_category_irrelevant_options(
-        CategoryClassification(category="도서/음반/DVD"), options
-    )
-
-    assert stripped.volumes == []
-    assert stripped.quantities == ["1권", "10권"]
-
-
-def test_strip_category_irrelevant_options_removes_both_for_travel():
-    """여행 상품은 숙박/인원 단위라 용량·수량 4축 어디에도 안 걸린다 — 유일하게
-    수량 축까지 통째로 빠지는 카테고리."""
-    options = ClarifyOptions(brands=["하나투어"], volumes=["500ml"], quantities=["2개"])
-
-    stripped = _strip_category_irrelevant_options(
-        CategoryClassification(category="국내여행/해외여행"), options
-    )
-
-    assert stripped.volumes == []
-    assert stripped.quantities == []
-
-
-def test_strip_category_irrelevant_options_keeps_volume_for_beverage():
-    options = ClarifyOptions(brands=["삼다수"], volumes=["500ml", "2L"], quantities=["6개", "12개"])
-
-    stripped = _strip_category_irrelevant_options(
-        CategoryClassification(category="식품", is_beverage=True), options
-    )
-
-    assert stripped.volumes == ["500ml", "2L"]
-    assert stripped.quantities == ["6개", "12개"]
-
-
-def test_strip_category_irrelevant_options_removes_volume_but_keeps_quantity_for_non_beverage_food():
-    """식품 중에서도 음료가 아니면(정육·과자·조미료 등) 용량 축은 무의미하다 —
-    수량(묶음 개수)은 음료가 아닌 식품에도 여전히 의미 있는 축이라 그대로 둔다."""
-    options = ClarifyOptions(brands=["오뚜기"], volumes=["500g", "1kg"], quantities=["1개", "3개"])
-
-    stripped = _strip_category_irrelevant_options(
-        CategoryClassification(category="식품", is_beverage=False), options
-    )
-
-    assert stripped.volumes == []
-    assert stripped.quantities == ["1개", "3개"]
-
-
-def test_strip_category_irrelevant_options_keeps_all_when_classification_failed():
-    """Gemini 분류 자체가 실패하면(category=None) 어느 카테고리인지 모르니
-    안전하게 기존 동작대로 축을 그대로 둔다 — 잘못 숨기는 것보다 한 번 더
-    물어보는 편이 낫다."""
-    options = ClarifyOptions(brands=["나이키"], volumes=["270mm"], quantities=["1개"])
-
-    stripped = _strip_category_irrelevant_options(CategoryClassification(), options)
-
-    assert stripped.volumes == ["270mm"]
-    assert stripped.quantities == ["1개"]
 
 
 # --- _extract_clarify_options (2026-08-16부터 facet 기반, check_clarify_facets와

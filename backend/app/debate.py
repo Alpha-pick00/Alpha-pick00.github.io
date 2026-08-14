@@ -10,16 +10,9 @@ from . import price_table as price_table_module
 from . import search as search_module
 from .agents import deepseek, gemini, gpt, judge
 from .agents.base import NO_CANDIDATE_ERROR, is_generic_listing_url
-from .category import (
-    QUANTITY_RELEVANT_CATEGORIES,
-    VOLUME_RELEVANT_CATEGORIES,
-    VOLUME_REQUIRES_BEVERAGE_CHECK,
-    CategoryClassification,
-)
 from .config import settings
 from .intent import is_bulk_query, is_non_product_chitchat, needs_clarification
 from .schemas import (
-    AgentCandidates,
     BrandOption,
     BrandPriceResponse,
     BulkDecideResponse,
@@ -31,7 +24,6 @@ from .schemas import (
     Decision,
     DecideResponse,
     PriceRange,
-    Proposal,
     SearchResult,
 )
 
@@ -110,129 +102,6 @@ _MAX_CLARIFY_ROUNDS = 2
 # 경우가 있는데, 이걸 그대로 다 물어보면 사용자는 몇 라운드나 답했는데도 계속 새
 # 선택 화면이 뜨는 것처럼 느껴진다 — 남은 후보를 좁히는 건 그 시점부턴 judge가
 # 근거(그라운딩/검증)로 판단하게 맡긴다.
-
-
-def _strip_category_irrelevant_options(
-    classification: CategoryClassification, options: ClarifyOptions
-) -> ClarifyOptions:
-    """PRESERVED FROM seungmin/lsm - 고정 4축(브랜드/제품/용량/개수) 전용
-    카테고리 필터였다. 2026-08-16 _extract_clarify_options가 facet 기반으로
-    통합되며 더 이상 호출되지 않는다(facet 추출 프롬프트 자체가 이미 검색
-    결과에 의미 있는 축만 뽑도록 유도해 대체로 불필요해졌다고 판단) - 라이브에서
-    무의미한 facet이 실제로 섞여 나오는 게 확인되면 라벨 패턴 매칭으로 같은
-    역할을 facet에 대해 다시 구현할 근거 코드로 남겨둔다.
-
-    분류된 카테고리에서 용량/수량 축이 무의미하면 그 옵션은 clarify에서 아예
-    빼서, 사용자가 해당 없는 선택지 중 하나를 억지로 골라 상품 매핑이 틀어지는
-    걸 막는다. 용량과 수량은 서로 다른 카테고리 집합에 걸리는 독립된 축이라
-    각각 따로 판단한다(예: 도서는 수량('권')은 의미 있어도 용량은 없음). 분류
-    자체가 실패했으면(category=None) 안전하게 기존 동작대로 축을 그대로 둔다.
-
-    '식품'은 그 안에서도 편차가 커서 대분류만으로는 부족하다 — 음료(생수/커피·차
-    등)만 용량이 핵심 스펙이고, 정육·과자·조미료 같은 나머지 식품은 용량 축
-    자체가 무의미하다. 그래서 식품이면서 음료가 아닌 경우에는 용량만 추가로
-    빼고 수량은 그대로 둔다(수량은 음료가 아닌 식품에도 여전히 의미 있는 축)."""
-    category = classification.category
-    if category is None:
-        return options
-
-    volume_relevant = category in VOLUME_RELEVANT_CATEGORIES
-    if category in VOLUME_REQUIRES_BEVERAGE_CHECK and not classification.is_beverage:
-        volume_relevant = False
-    quantity_relevant = category in QUANTITY_RELEVANT_CATEGORIES
-
-    return ClarifyOptions(
-        brands=options.brands,
-        products=options.products,
-        volumes=options.volumes if volume_relevant else [],
-        quantities=options.quantities if quantity_relevant else [],
-    )
-
-
-def _format_price_krw(price_krw: int | None) -> str:
-    return f"{price_krw:,}원" if price_krw is not None else ""
-
-
-def _top_proposal(agent_candidates: AgentCandidates) -> Proposal:
-    """에이전트가 배열로 낸 후보 중 1순위(선호도 최상위) 하나만 골라 기존
-    Proposal 형태로 맞춘다 — 프론트엔드가 에이전트당 정확히 1행을 기대하므로
-    응답 스키마는 그대로 두고, 병합 전 전체 배열은 fusion 모듈에서만 쓴다."""
-    if agent_candidates.error is not None:
-        return Proposal(agent=agent_candidates.agent, error=agent_candidates.error)
-    if not agent_candidates.candidates:
-        return Proposal(agent=agent_candidates.agent, error=NO_CANDIDATE_ERROR)
-    top = agent_candidates.candidates[0]
-    return Proposal(
-        agent=agent_candidates.agent,
-        product_name=top.product_name,
-        price=_format_price_krw(top.price_krw),
-        retailer=top.retailer,
-        url=top.url,
-        reasoning=top.reasoning,
-    )
-
-
-async def run_single_debate_price_table_variant(query: str) -> DecideResponse:
-    """PRESERVED FROM seungmin/lsm, NOT currently wired into run_debate() —
-    run_debate()'s LLM path calls the ADK-orchestrated run_single_debate()
-    (adk_pipeline.py: refine/challenge/extract_pages/judge) instead, per the
-    2026-08 통합 decision to keep that as the canonical 'AI 오케스트레이션'.
-    This direct asyncio.gather implementation is kept callable and fully
-    tested because it exercises the same price_table_module functions
-    (build_danawa_candidates/pick_primary/enrich_decision/
-    exclude_price_comparison_site_as_final_pick below) that adk_pipeline's
-    _DanawaFetchNode/_finalize_with_danawa now also use (ported 2026-08-16) -
-    this variant predates that port and is kept only because it still tests
-    a distinct code path (direct per-module .propose() calls instead of ADK
-    LlmAgent nodes).
-    """
-    try:
-        results = await search_module.search(query)
-    except Exception:
-        results = []
-
-    # 다나와 페치는 LLM 3개와 asyncio.gather로 동시 실행한다 - 순차로 붙이면
-    # 그만큼 응답이 느려진다. price_table_module.fetch_price_tables는 무슨
-    # 일이 있어도 예외를 던지지 않고 실패 시 빈 리스트를 반환하므로, 이
-    # gather 자체가 실패해서 본 파이프라인이 막히는 일은 없다.
-    gpt_result, gemini_result, deepseek_result, danawa_tables = await asyncio.gather(
-        gpt.propose(query, results),
-        gemini.propose(query, results),
-        deepseek.propose(query, results),
-        price_table_module.fetch_price_tables(query, results),
-    )
-    agent_candidates: list[AgentCandidates] = [gpt_result, gemini_result, deepseek_result]
-    logger.info(
-        "candidate pool sizes for %r: %s",
-        query,
-        {ac.agent: len(ac.candidates) for ac in agent_candidates},
-    )
-    proposals = [_top_proposal(ac) for ac in agent_candidates]
-
-    # PART 4-2: 다나와 A등급 최저가 후보를 judge의 선택지 풀에 직접 추가한다
-    # (판매처+가격 매칭에 의존하지 않는 경로 - LLM이 고른 상품과 다나와 페이지가
-    # 애초에 다른 상품이라 매칭이 실패하는 절반가량의 쿼리에서도 다나와 데이터가
-    # 후보로는 정상적으로 노출된다). DecideResponse.proposals(응답에 노출되는
-    # 필드)에는 넣지 않는다 - 프론트엔드가 "에이전트 3개" 레이아웃을 가정할 수
-    # 있어, judge에게 넘기는 후보 풀만 넓히고 노출 스키마는 그대로 둔다.
-    danawa_proposals = await price_table_module.build_danawa_candidates(danawa_tables, agent_candidates)
-
-    decision = await judge.decide(query, proposals + danawa_proposals)
-    if decision.chosen_agent == "danawa":
-        decision.price_source = "danawa_offer"
-
-    primary = price_table_module.pick_primary(danawa_tables)
-    price_table = None
-    if primary is not None:
-        table, raw_result = primary
-        price_table = table
-        decision = await price_table_module.enrich_decision(decision, raw_result)
-
-    decision = await price_table_module.exclude_price_comparison_site_as_final_pick(
-        decision, proposals, danawa_tables
-    )
-
-    return DecideResponse(query=query, proposals=proposals, decision=decision, price_table=price_table)
 
 
 async def _search_danawa_urls_with_fallback(
@@ -765,11 +634,11 @@ async def _extract_clarify_options(query: str, results: list[SearchResult]) -> C
     않는다(이미 검색 결과를 들고 있어서 네트워크 호출을 하나 더 늘릴 이유가
     없다).
 
-    카테고리 기반 축 관련성 필터링(_strip_category_irrelevant_options)은 이번
-    통합에서 안 옮겼다 - facet 추출 프롬프트(build_facet_clarify_prompt) 자체가
-    이미 검색 결과에 실제로 의미 있는 축만 뽑도록 유도해서, 무의미한 facet이
-    거의 안 생길 가능성이 높다. 실제로 문제가 확인되면 라벨 패턴 매칭으로
-    후속 추가한다."""
+    카테고리 기반 축 관련성 필터링은 이번 통합에서 안 옮겼다 - facet 추출
+    프롬프트(build_facet_clarify_prompt) 자체가 이미 검색 결과에 실제로 의미
+    있는 축만 뽑도록 유도해서, 무의미한 facet이 거의 안 생길 가능성이 높다.
+    실제로 문제가 확인되면 라벨 패턴 매칭으로 후속 추가한다(고정 4축 전용이던
+    예전 구현은 죽은 코드 정리 과정에서 제거했다)."""
     filtered_results = _filter_listing_pages(results)
     names = [r.title for r in filtered_results]
     facets = await _extract_facets(query, names)

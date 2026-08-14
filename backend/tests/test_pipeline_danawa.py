@@ -8,18 +8,13 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.debate import (
-    run_danawa_only_debate,
-    run_danawa_only_debate_stream,
-    run_single_debate_price_table_variant,
-)
+from app.debate import run_danawa_only_debate, run_danawa_only_debate_stream
 from app.main import app
 from app.price_table import (
     MAX_DANAWA_URLS,
     _extract_quantity_tokens,
     _is_single_product_family,
     _query_param,
-    build_danawa_candidates,
     build_price_table,
     cheapest_linkable_raw_offer,
     enrich_decision,
@@ -27,8 +22,8 @@ from app.price_table import (
     fetch_price_tables,
     select_danawa_urls,
 )
-from app.schemas import AgentCandidate, AgentCandidates, Decision, Proposal, SearchResult
-from fetchers.danawa import parse_danawa_html, with_total_mall_count
+from app.schemas import Decision, Proposal, SearchResult
+from fetchers.danawa import parse_danawa_html
 
 client = TestClient(app)
 
@@ -54,50 +49,6 @@ def _danawa_html(product_name: str, offers_html: list[str]) -> str:
     """
 
 
-def _fake_agent(agent: str, product_name="테스트 상품", price_krw=23000, retailer="쿠팡", url="https://www.coupang.com/vp/products/1"):
-    async def _propose(query, results):
-        return AgentCandidates(
-            agent=agent,
-            candidates=[
-                AgentCandidate(
-                    product_name=product_name, price_krw=price_krw, retailer=retailer, url=url, reasoning="테스트 근거"
-                )
-            ],
-        )
-
-    return _propose
-
-
-async def _fake_decide(query, proposals):
-    return Decision(
-        product_name="테스트 상품",
-        price="23,000원",
-        retailer="쿠팡",
-        url="https://www.coupang.com/vp/products/1",
-        reasoning="테스트 근거",
-        chosen_agent="gpt",
-    )
-
-
-def _patch_llm_layer(monkeypatch):
-    monkeypatch.setattr("app.agents.gpt.propose", _fake_agent("gpt"))
-    monkeypatch.setattr("app.agents.gemini.propose", _fake_agent("gemini"))
-    monkeypatch.setattr("app.agents.deepseek.propose", _fake_agent("deepseek"))
-    monkeypatch.setattr("app.agents.judge.decide", _fake_decide)
-    # 2026-08 통합 병합 이후 /decide(run_debate -> run_single_debate)는 ADK
-    # 파이프라인(adk_pipeline.run)을 타므로 이 4개 mock을 거치지 않는다 - 다나와
-    # price_table 주입 자체는 2026-08-16부터 adk_pipeline에도 포팅됐지만
-    # (adk_pipeline._DanawaFetchNode/_finalize_with_danawa, tests/test_adk_pipeline.py
-    # 참고), 거긴 gpt/gemini/deepseek이 LlmAgent(실제 모델 호출)라 이 파일의
-    # monkeypatch 방식으로는 못 막는다. 그래서 이 mock들을 실제로 쓰는 테스트는
-    # run_single_debate_price_table_variant를 직접 호출한다 - HTTP 엔드포인트
-    # (/decide)를 거치지 않는다.
-    monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: True)
-    # 실제 sqlite 자동완성 인덱스에 테스트 검색어가 쌓이지 않도록 무력화한다 -
-    # /decide의 BackgroundTasks가 record_terms를 실제로 실행하기 때문.
-    monkeypatch.setattr("app.autocomplete.record_terms", lambda terms: None)
-
-
 def _patch_search(monkeypatch, danawa_url: str | None):
     results = []
     if danawa_url:
@@ -116,42 +67,6 @@ def _patch_search(monkeypatch, danawa_url: str | None):
         return []
 
     monkeypatch.setattr("fetchers.danawa_search.search_danawa", _search_danawa)
-
-
-# -- 1. 다나와 페치 실패해도 200 -----------------------------------------------
-
-
-def test_decide_returns_200_when_danawa_fetch_fails(monkeypatch):
-    _patch_llm_layer(monkeypatch)
-    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
-
-    async def _boom(url):
-        raise RuntimeError("network exploded")
-
-    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _boom)
-
-    result = asyncio.run(run_single_debate_price_table_variant("테스트 상품"))
-    data = result.model_dump()
-    assert data["price_table"] is None
-    assert data["decision"]["price_source"] == "llm_guess"
-
-
-# -- 2. 다나와 페치 타임아웃돼도 LLM 결과만으로 정상 응답 ----------------------
-
-
-def test_decide_returns_llm_only_when_danawa_times_out(monkeypatch):
-    _patch_llm_layer(monkeypatch)
-    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
-
-    async def _timeout(url):
-        raise asyncio.TimeoutError()
-
-    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _timeout)
-
-    result = asyncio.run(run_single_debate_price_table_variant("테스트 상품"))
-    data = result.model_dump()
-    assert data["price_table"] is None
-    assert data["decision"]["product_name"] == "테스트 상품"
 
 
 # -- 3. A등급이 하나도 없을 때 링크 없는 추천을 만들지 않는다 ------------------
@@ -269,60 +184,6 @@ def test_unknown_cmpnyc_domain_is_none_not_downgraded():
     assert offer.domain is None
     assert offer.trust is None
     assert offer.linkable is False
-
-
-# -- 6. 응답 URL은 bridge_url 자체다 (robots.txt 재확인 이후 방향이 바뀐 계약) ---
-
-
-def test_decide_response_url_is_the_danawa_bridge_url_itself(monkeypatch):
-    """(2026-08-12) prod.danawa.com/robots.txt의 `Disallow: /bridge/`를 발견해서
-    resolve_purchase_url()이 서버에서 /bridge/를 직접 페치해 최종 판매처 URL을
-    알아내던 방식(구 danawa.resolve_outlink())을 폐기했다 - 이제 bridge_url
-    문자열 자체를 그대로 돌려준다. 예전엔 정반대로 "bridge_url/loadingBridge/
-    cmpnyc/prod.danawa.com이 응답에 절대 안 나와야 한다"는 테스트였다 - 방향이
-    바뀐 것 자체가 회귀 방지 대상이라 이름과 내용을 새 계약에 맞게 다시 썼다."""
-    _patch_llm_layer(monkeypatch)
-    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
-
-    html = _danawa_html(
-        "테스트 상품",
-        [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="555"), _offer_li("옥션", "24,000", "EE715")],
-    )
-    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
-
-    async def _fake_fetch(url):
-        return result
-
-    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fake_fetch)
-
-    result = asyncio.run(run_single_debate_price_table_variant("테스트 상품"))
-    data = result.model_dump()
-
-    assert data["decision"]["price_source"] == "danawa_offer"
-    assert data["decision"]["url"] == (
-        "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=555"
-    )
-
-
-# -- 7. 기존 응답 필드가 전부 유지되는가 ----------------------------------------
-
-
-def test_existing_response_fields_are_preserved(monkeypatch):
-    _patch_llm_layer(monkeypatch)
-    _patch_search(monkeypatch, None)
-
-    result = asyncio.run(run_single_debate_price_table_variant("테스트 상품"))
-    data = result.model_dump()
-
-    assert data["mode"] == "single"
-    assert data["query"] == "테스트 상품"
-    assert isinstance(data["proposals"], list)
-    assert len(data["proposals"]) == 3
-    for field in ("product_name", "price", "retailer", "url", "reasoning", "chosen_agent"):
-        assert field in data["decision"]
-    # 새 필드는 추가됐지만 기존 필드는 하나도 사라지지 않았다.
-    assert "price_source" in data["decision"]
-    assert "price_table" in data
 
 
 # -- 8. 다나와 URL이 4개 이상일 때 3개로 잘리는가 -------------------------------
@@ -663,92 +524,6 @@ def test_select_danawa_urls_caps_at_max_danawa_urls():
     ]
 
 
-# -- PART 4-2: 다나와 후보를 judge 선택지 풀에 직접 추가 -----------------------
-
-
-def test_build_danawa_candidates_produces_agent_danawa_proposal():
-    html = _danawa_html("전혀 다른 상품명", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="1")])
-    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
-    table = build_price_table(result)
-
-    proposals = asyncio.run(build_danawa_candidates([(table, result)], agent_candidates=[]))
-
-    assert len(proposals) == 1
-    assert proposals[0].agent == "danawa"
-    assert proposals[0].product_name == "전혀 다른 상품명"
-    assert proposals[0].price == "23,000원"
-    assert proposals[0].retailer == "쿠팡"
-    assert proposals[0].url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=1"
-
-
-def test_build_danawa_candidates_skips_page_without_a_grade_offer(monkeypatch):
-    html = _danawa_html("B등급만 있는 상품", [_offer_li("호갱마켓", "20,000", "TW627F")])
-    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
-    table = build_price_table(result)
-
-    proposals = asyncio.run(build_danawa_candidates([(table, result)], agent_candidates=[]))
-
-    assert proposals == []
-
-
-def test_build_danawa_candidates_records_consensus_with_matching_llm_agent():
-    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="1")])
-    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
-    table = build_price_table(result)
-
-    gpt_candidates = AgentCandidates(
-        agent="gpt",
-        candidates=[
-            AgentCandidate(
-                product_name="테스트 상품", price_krw=23000, retailer="쿠팡",
-                url="https://www.coupang.com/vp/products/1", reasoning="gpt 근거",
-            )
-        ],
-    )
-
-    proposals = asyncio.run(build_danawa_candidates([(table, result)], agent_candidates=[gpt_candidates]))
-
-    assert len(proposals) == 1
-    assert "gpt" in proposals[0].reasoning
-    assert "합의" in proposals[0].reasoning
-
-
-def test_judge_choosing_danawa_sets_price_source_and_real_url(monkeypatch):
-    _patch_llm_layer(monkeypatch)
-    _patch_search(monkeypatch, "https://prod.danawa.com/info?pcode=1")
-
-    html = _danawa_html("테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="1")])
-    result = parse_danawa_html("https://prod.danawa.com/info?pcode=1", html)
-
-    async def _fake_fetch(url):
-        return result
-
-    async def _judge_picks_danawa(query, proposals):
-        danawa_pick = next(p for p in proposals if p.agent == "danawa")
-        return Decision(
-            product_name=danawa_pick.product_name,
-            price=danawa_pick.price,
-            retailer=danawa_pick.retailer,
-            url=danawa_pick.url,
-            reasoning="다나와 실측가가 가장 신뢰도 높음",
-            chosen_agent="danawa",
-        )
-
-    monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fake_fetch)
-    monkeypatch.setattr("app.agents.judge.decide", _judge_picks_danawa)
-
-    result = asyncio.run(run_single_debate_price_table_variant("테스트 상품"))
-    data = result.model_dump()
-
-    assert data["decision"]["chosen_agent"] == "danawa"
-    assert data["decision"]["price_source"] == "danawa_offer"
-    assert data["decision"]["url"] == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=1"
-    # 노출 스키마의 proposals는 LLM 3개 그대로 - 다나와 후보는 judge 선택지
-    # 풀에만 들어가고 응답 구조 자체는 안 바뀐다.
-    assert len(data["proposals"]) == 3
-    assert all(p["agent"] != "danawa" for p in data["proposals"])
-
-
 # -- B-3a/B-3b: "N몰" 표기와 상세페이지 10개 offer 사이의 정직한 표기 --------------
 
 
@@ -771,31 +546,12 @@ def test_parse_danawa_html_defaults_total_mall_count_to_none():
     assert result["is_partial"] is False
 
 
-def test_with_total_mall_count_marks_partial_when_total_exceeds_shown():
-    result = _three_offer_result()
-    merged = with_total_mall_count(result, 150)
-    assert merged["total_mall_count"] == 150
-    assert merged["is_partial"] is True
-    # 원본은 그대로다 - 순수 함수(새 dict 반환)여야 한다
-    assert result["total_mall_count"] is None
-
-
-def test_with_total_mall_count_not_partial_when_total_equals_shown():
-    result = _three_offer_result()
-    merged = with_total_mall_count(result, 3)
-    assert merged["is_partial"] is False
-
-
-def test_with_total_mall_count_none_stays_not_partial():
-    result = _three_offer_result()
-    merged = with_total_mall_count(result, None)
-    assert merged["total_mall_count"] is None
-    assert merged["is_partial"] is False
-
-
 def test_build_price_table_exposes_partial_coverage_fields():
+    # total_mall_count/is_partial을 검색 단계 값으로 채우는 경로는 아직 없다
+    # (fetchers/danawa.py 참고) - build_price_table 자체의 계산 로직만
+    # 여기서는 dict를 직접 조작해 검증한다.
     result = _three_offer_result()
-    merged = with_total_mall_count(result, 150)
+    merged = {**result, "total_mall_count": 150, "is_partial": True}
 
     table = build_price_table(merged)
 
@@ -890,7 +646,7 @@ def test_fetch_price_tables_caps_total_urls_at_max_danawa_urls(monkeypatch):
     monkeypatch.setattr("fetchers.danawa.fetch_danawa_offers", _fetch_returning({}, fetched_urls))
 
     results = [SearchResult(title="다나와", url="https://prod.danawa.com/info?pcode=1", snippet="", score=0.9)]
-    tables = asyncio.run(fetch_price_tables("테스트 쿼리", results))
+    asyncio.run(fetch_price_tables("테스트 쿼리", results))
 
     assert len(fetched_urls) == MAX_DANAWA_URLS == 5
     assert {_query_param(u, "pcode") for u in fetched_urls} == {"1", "10", "11", "12", "13"}
@@ -900,16 +656,18 @@ def test_fetch_price_tables_caps_total_urls_at_max_danawa_urls(monkeypatch):
 
 
 def _forbid_llm_calls(monkeypatch):
-    """gpt/gemini/deepseek/judge 중 하나라도 불리면 테스트가 즉시 실패하게 만든다 -
-    "LLM 호출 0번"이라는 계약을 실제로 검증하기 위함."""
+    """gpt/gemini/deepseek/judge 중 하나라도 LLM 클라이언트를 만들면 테스트가
+    즉시 실패하게 만든다 - "LLM 호출 0번"이라는 계약을 실제로 검증하기 위함.
+    개별 함수(propose 등) 대신 각 모듈의 _client()를 막는다 - 그 안의 모든
+    LLM 호출이 결국 _client()를 거치므로, 어떤 함수가 호출되든 빠짐없이 잡는다."""
 
-    async def _boom(*args, **kwargs):
+    def _boom():
         raise AssertionError("LLM이 호출됐다 - run_danawa_only_debate는 LLM을 절대 부르면 안 된다")
 
-    monkeypatch.setattr("app.agents.gpt.propose", _boom)
-    monkeypatch.setattr("app.agents.gemini.propose", _boom)
-    monkeypatch.setattr("app.agents.deepseek.propose", _boom)
-    monkeypatch.setattr("app.agents.judge.decide", _boom)
+    monkeypatch.setattr("app.agents.gpt._client", _boom)
+    monkeypatch.setattr("app.agents.gemini._client", _boom)
+    monkeypatch.setattr("app.agents.deepseek._client", _boom)
+    monkeypatch.setattr("app.agents.judge._client", _boom)
 
 
 def _patch_direct_danawa_search(monkeypatch, pcode: str | None):
@@ -1052,10 +810,9 @@ def test_decide_danawa_only_endpoint_returns_200_with_no_proposals(monkeypatch):
 
 
 def test_decide_auto_routes_to_danawa_only_when_no_llm_key_configured(monkeypatch):
-    # 일부러 _patch_llm_layer를 안 쓴다 - gpt/gemini/deepseek/judge를 mock하지
-    # 않은 채로도(=진짜로 안 불려야) 200이 나와야 라우팅이 제대로 됐다는 뜻이다.
-    # 잘못 라우팅되면 mock 안 된 진짜 LLM 호출이 conftest의 네트워크 차단에
-    # 걸려 502가 난다.
+    # 일부러 gpt/gemini/deepseek/judge를 mock하지 않는다 - 그 상태로도(=진짜로
+    # 안 불려야) 200이 나와야 라우팅이 제대로 됐다는 뜻이다. 잘못 라우팅되면
+    # mock 안 된 진짜 LLM 호출이 conftest의 네트워크 차단에 걸려 502가 난다.
     monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: False)
     monkeypatch.setattr("app.autocomplete.record_terms", lambda terms: None)
     _patch_direct_danawa_search(monkeypatch, "1")
