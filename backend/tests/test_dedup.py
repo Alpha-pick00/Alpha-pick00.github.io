@@ -107,6 +107,37 @@ def test_empty_entries_returns_empty_list():
     assert merge_candidates([]) == []
 
 
+def test_different_iphone_model_cases_stay_separate_despite_high_name_similarity():
+    """사용자 리포트(2026-08-14: "핸드폰 케이스" 검색에서 옛날 모델이 섞여 나옴) -
+    "아이폰6 케이스"와 "아이폰15 케이스"는 공통 토큰("아이폰","케이스")이 많아
+    token_set_ratio가 NAME_SIMILARITY_THRESHOLD를 넘지만, 모델 토큰(6 vs 15)이
+    충돌하므로 병합되면 안 된다 - 병합되면 그룹 대표가 최저가 멤버로 뽑혀
+    구형 모델이 최신 모델 제안을 밀어낼 수 있다."""
+    entries = [
+        ("gpt", _candidate("아이폰15 케이스 투명 젤리", price_krw=9900, retailer="쿠팡", url="https://coupang.com/vp/products/1")),
+        ("gemini", _candidate("아이폰6 케이스 투명 젤리", price_krw=1900, retailer="11번가", url="https://11st.co.kr/products/2")),
+    ]
+
+    merged = merge_candidates(entries)
+
+    assert len(merged) == 2
+
+
+def test_purchase_type_conflict_keeps_new_and_used_case_separate():
+    """구매유형(정품/중고 등)이 배타 토큰이라 이름 유사도가 높아도 병합하면
+    안 된다 - app.exclusive_tokens.EXCLUSIVE_GROUPS의 {"정품","리퍼","중고","전시품"}
+    가드가 fusion.dedup 병합에도 적용돼야 한다(기존엔 app.price_table의 다나와
+    매칭에만 적용돼 있었다)."""
+    entries = [
+        ("gpt", _candidate("갤럭시S25 정품 케이스", price_krw=15000, retailer="쿠팡", url="https://coupang.com/vp/products/1")),
+        ("gemini", _candidate("갤럭시S25 중고 케이스", price_krw=3000, retailer="11번가", url="https://11st.co.kr/products/2")),
+    ]
+
+    merged = merge_candidates(entries)
+
+    assert len(merged) == 2
+
+
 def test_same_product_different_retailers_picks_cheapest_price_and_matching_url():
     """이름 유사도로 묶인(= URL도 판매처도 다른) 동일 상품 후보들 중, 최종적으로
     보여줄 가격은 최저가여야 하고 그 URL/판매처는 실제로 그 최저가를 파는

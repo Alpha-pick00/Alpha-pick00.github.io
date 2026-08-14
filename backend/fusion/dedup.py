@@ -7,6 +7,11 @@
 2. (판매처, 가격) 완전 일치 — 단, 상품명이 아예 무관하지 않을 때만 병합한다.
    (같은 판매처에서 우연히 같은 가격인 다른 상품이 섞이는 걸 막는다)
 3. 상품명 유사도(rapidfuzz token_set_ratio >= NAME_SIMILARITY_THRESHOLD)
+
+2·3번(상품명 유사도 기반 병합)은 유사도 임계값을 넘어도 모델/규격/수량/구매유형
+토큰이 충돌하면(_different_product) 병합하지 않는다 - "아이폰6 케이스"와
+"아이폰15 케이스"처럼 공통 토큰이 많아 유사도 점수만으로는 다른 상품임을 못
+가리는 경우를 막는다(app.price_table의 다나와 매칭에 이미 있던 가드와 동일).
 """
 
 from __future__ import annotations
@@ -16,7 +21,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from rapidfuzz import fuzz
 
+from app.exclusive_tokens import exclusive_tokens_conflict
 from app.schemas import AgentCandidate
+from app.spec_match import model_or_quantity_conflict
 
 # utm_*만 순수 광고 추적용으로 보고 제거한다. spec·itemId처럼 상품/옵션 자체를
 # 가리키는 파라미터까지 지우면 서로 다른 상품이 같은 URL로 오인 합쳐질 수 있어
@@ -30,6 +37,21 @@ SELLER_PRICE_NAME_GUARD = 60
 # 쿠폰/배송비 정도의 차이만 허용한다. 이보다 크게 벌어지면 같은 URL이라도
 # 다른 상품으로 취급한다.
 PRICE_COMPAT_TOLERANCE = 0.05
+
+
+def _different_product(name_a: str, name_b: str) -> bool:
+    """상품명 유사도만으로 병합할 때, 모델·규격·수량·구매유형(정품/리퍼/중고 등)
+    토큰이 충돌하면 유사도 점수와 무관하게 다른 상품으로 취급한다(app.price_table의
+    다나와 실측가 매칭에 이미 있던 가드를 여기로도 적용 - 사용자 리포트,
+    2026-08-14: "핸드폰 케이스" 검색에서 옛날 모델이 섞여 나옴. "아이폰6 케이스"
+    vs "아이폰15 케이스"는 공통 토큰("아이폰","케이스")이 많아 token_set_ratio가
+    임계값을 넘어 같은 그룹으로 합쳐지고, 그 그룹의 대표는 최저가 멤버라 구형
+    모델이 대표로 뽑힐 수 있었다)."""
+    if model_or_quantity_conflict(name_a, name_b):
+        return True
+    if exclusive_tokens_conflict(name_a, name_b):
+        return True
+    return False
 
 
 def normalize_url(url: str | None) -> str:
@@ -95,12 +117,14 @@ class _Group:
                 and (candidate.retailer or "") == (member.retailer or "")
                 and fuzz.token_set_ratio(candidate.product_name, member.product_name)
                 >= SELLER_PRICE_NAME_GUARD
+                and not _different_product(candidate.product_name, member.product_name)
             ):
                 return True
         for _, member in self.members:
             if (
                 fuzz.token_set_ratio(candidate.product_name, member.product_name)
                 >= NAME_SIMILARITY_THRESHOLD
+                and not _different_product(candidate.product_name, member.product_name)
             ):
                 return True
         return False

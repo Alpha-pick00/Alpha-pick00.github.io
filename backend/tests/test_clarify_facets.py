@@ -327,6 +327,378 @@ def test_extract_facets_from_names_drops_container_form_facet_when_only_purchase
     assert labels == {"브랜드"}
 
 
+def test_extract_facets_from_names_strips_non_purchase_type_values(monkeypatch):
+    """사용자 리포트(2026-08-14: "핸드폰 케이스" 검색에서 구매유형으로 "해외"/
+    "중고"가 뜸 - 상품명에 그런 단어가 없는데도 DeepSeek이 스마트폰 시장 통념을
+    끌어와 만들어냄) - "구매유형" 라벨의 값 중 알려진 구매유형 어휘가 아닌 값은
+    코드에서 걸러내야 한다(용기형태와 반대로 화이트리스트 방식)."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = '{"facets": {"구매유형": ["정품", "리퍼", "해외", "아이폰15"]}}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    names = ["아이폰15 케이스 정품", "아이폰15 케이스 리퍼"]
+    facets = asyncio.run(deepseek.extract_facets_from_names("핸드폰 케이스", names))
+
+    assert len(facets) == 1
+    assert facets[0].label == "구매유형"
+    assert "해외" not in facets[0].options
+    assert "아이폰15" not in facets[0].options
+    assert set(facets[0].options) == {"정품", "리퍼"}
+
+
+def test_extract_facets_from_names_drops_purchase_type_facet_when_no_known_terms(monkeypatch):
+    """구매유형으로 뽑힌 값 전부가 알려진 구매유형 어휘가 아니면(필터 후 0개면),
+    값이 하나뿐인 기준과 동일하게 그 facet 자체를 버려야 한다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = '{"facets": {"구매유형": ["아이폰6", "아이폰15"], "브랜드": ["APPLE", "삼성전자"]}}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    facets = asyncio.run(
+        deepseek.extract_facets_from_names("핸드폰 케이스", ["APPLE 아이폰6 케이스", "삼성전자 케이스"])
+    )
+
+    labels = {f.label for f in facets}
+    assert labels == {"브랜드"}
+
+
+def test_extract_facets_from_names_drops_value_that_is_substring_of_another_in_same_facet(monkeypatch):
+    """실측 사례(2026-08-14: "핸드폰 케이스" 검색에서 "부가기능" 기준에 "생활방수"와
+    별개로 "방수"만 단독으로도 뜸) - 한 값이 같은 기준의 다른 값에 이미 완전히
+    포함되는 부분 문자열이면 독자적인 선택지가 아니므로 버려야 한다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = '{"facets": {"부가기능": ["생활방수", "방수", "카드수납"]}}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    names = ["삼성전자 케이스 생활방수", "삼성전자 케이스 카드수납"]
+    facets = asyncio.run(deepseek.extract_facets_from_names("핸드폰 케이스", names))
+
+    assert len(facets) == 1
+    assert "방수" not in facets[0].options
+    assert set(facets[0].options) == {"생활방수", "카드수납"}
+
+
+def test_extract_facets_from_names_filters_out_phone_models_older_than_2020(monkeypatch):
+    """사용자 요청(2026-08-14: "2020년 이후 모델로만 보이게 하는 방법 없어?
+    아이폰 12부터라던지") - 아이폰/갤럭시S/갤럭시노트는 세대 번호가 출시
+    연도와 거의 그대로 대응하므로(아이폰12=2020, 갤럭시S20=2020,
+    갤럭시노트20=2020) 그보다 이전 세대는 '핸드폰 기종'에서 빼야 한다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = (
+            '{"facets": {"핸드폰 기종": '
+            '["아이폰17", "아이폰11", "갤럭시S25", "갤럭시S10", "갤럭시노트20", "갤럭시노트9"]}}'
+        )
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    names = [
+        "아이폰17 케이스", "아이폰11 케이스",
+        "갤럭시S25 케이스", "갤럭시S10 케이스",
+        "갤럭시노트20 케이스", "갤럭시노트9 케이스",
+    ]
+    facets = asyncio.run(deepseek.extract_facets_from_names("핸드폰 케이스", names))
+
+    by_label = {f.label: f for f in facets}
+    options = set(by_label["핸드폰 기종"].options)
+    assert options == {"아이폰17", "갤럭시S25", "갤럭시노트20"}
+    assert "아이폰11" not in options
+    assert "갤럭시S10" not in options
+    assert "갤럭시노트9" not in options
+
+
+def test_extract_facets_from_names_does_not_recency_filter_families_without_a_reliable_rule(monkeypatch):
+    """갤럭시Z(폴드/플립)·갤럭시A·아이패드는 세대 번호가 연식과 느슨하게만
+    대응해 안전한 컷오프 규칙이 없다 - 걸러야 할 값을 놓치더라도 최신 값을
+    잘못 지우지 않도록, 이 계열은 연식 필터를 적용하지 않는다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = '{"facets": {"핸드폰 기종": ["갤럭시A10", "갤럭시Z 폴드2", "아이패드 프로"]}}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    names = ["갤럭시A10 케이스", "갤럭시Z 폴드2 케이스", "아이패드 프로 케이스"]
+    facets = asyncio.run(deepseek.extract_facets_from_names("핸드폰 케이스", names))
+
+    by_label = {f.label: f for f in facets}
+    assert set(by_label["핸드폰 기종"].options) == {"갤럭시A10", "갤럭시Z 폴드2", "아이패드 프로"}
+
+
+def test_extract_facets_from_names_keeps_value_only_in_first_facet_that_claims_it(monkeypatch):
+    """실측 사례(2026-08-14: "핸드폰 케이스" 검색에서 "맥세이프"가 "기종"에도
+    "특징"에도 동시에 뜸) - 같은 값이 여러 기준에 동시에 뜨면 먼저 나온 기준이
+    차지하고 이후 기준에서는 빠져야 한다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = (
+            '{"facets": {'
+            '"기종": ["맥세이프", "마그네틱", "갤럭시S25", "갤럭시S26"], '
+            '"특징": ["맥세이프", "방수", "충격방지"]'
+            "}}"
+        )
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    names = [
+        "맥세이프 마그네틱 갤럭시S25 케이스",
+        "마그네틱 갤럭시S26 케이스",
+        "맥세이프 방수 충격방지 케이스",
+    ]
+    facets = asyncio.run(deepseek.extract_facets_from_names("핸드폰 케이스", names))
+
+    by_label = {f.label: f for f in facets}
+    assert set(by_label["핸드폰 기종"].options) == {"갤럭시S25", "갤럭시S26"}
+    assert "맥세이프" in by_label["기종"].options
+    assert "맥세이프" not in by_label["특징"].options
+    assert set(by_label["특징"].options) == {"방수", "충격방지"}
+
+
+def test_extract_facets_from_names_consolidates_all_device_brands_into_single_phone_model_facet(monkeypatch):
+    """사용자 요청(2026-08-14: "갤럭시 전용 이렇게 없애고, 핸드폰 기종별로
+    선택할 수 있게") - 갤럭시/아이폰 모델명이 어느 라벨에 담겨 왔든 기기
+    브랜드로 나누지 않고 '핸드폰 기종' 기준 하나로 합쳐야 한다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = (
+            '{"facets": {'
+            '"카테고리": ["케이스", "스탠드", "갤럭시S25 울트라", "아이폰17", "아이폰17 프로"], '
+            '"특징": ["마그넷", "방수", "갤럭시Z 폴드8"]'
+            "}}"
+        )
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    names = [
+        "갤럭시S25 울트라 케이스 마그넷",
+        "갤럭시Z 폴드8 스탠드 방수",
+        "아이폰17 케이스",
+        "아이폰17 프로 케이스",
+    ]
+    facets = asyncio.run(deepseek.extract_facets_from_names("핸드폰 케이스", names))
+
+    by_label = {f.label: f for f in facets}
+    assert set(by_label.keys()) == {"핸드폰 기종", "카테고리", "특징"}
+    assert set(by_label["핸드폰 기종"].options) == {
+        "갤럭시S25 울트라",
+        "아이폰17",
+        "아이폰17 프로",
+        "갤럭시Z 폴드8",
+    }
+    assert set(by_label["카테고리"].options) == {"케이스", "스탠드"}
+    assert set(by_label["특징"].options) == {"마그넷", "방수"}
+
+
+def test_extract_facets_from_names_keeps_brand_facet_alongside_phone_model_facet(monkeypatch):
+    """사용자 요청(2026-08-14: "제조사는 그대로 넣어도 될 것 같아 다시 살려줘" -
+    바로 앞서 "제조사는 필요없을 것 같고"라며 뺐던 걸 되돌림) - '핸드폰 기종'
+    기준이 있어도 '브랜드'/'제조사' 기준을 지우지 않고 그대로 둬야 한다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = (
+            '{"facets": {'
+            '"브랜드": ["삼성전자", "신지모루", "슈피겐"], '
+            '"핸드폰 기종": ["갤럭시S25", "갤럭시S26"]'
+            "}}"
+        )
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    names = ["삼성전자 갤럭시S25 케이스", "신지모루 갤럭시S26 케이스", "슈피겐 갤럭시S25 케이스"]
+    facets = asyncio.run(deepseek.extract_facets_from_names("핸드폰 케이스", names))
+
+    by_label = {f.label: f for f in facets}
+    assert set(by_label.keys()) == {"브랜드", "핸드폰 기종"}
+    assert set(by_label["브랜드"].options) == {"삼성전자", "신지모루", "슈피겐"}
+    assert set(by_label["핸드폰 기종"].options) == {"갤럭시S25", "갤럭시S26"}
+
+
+def test_extract_facets_from_names_balances_phone_model_options_across_brand_ecosystems(monkeypatch):
+    """사용자 리포트(2026-08-14: "선택지에는 너무 갤럭시만 모여서 보여주는
+    경향이있어" - 아이폰14를 고르려 해도 목록에 없어서 직접 입력해야 함) -
+    표본에 갤럭시 매물이 압도적으로 많으면(20종, 각 3회 등장) 아이폰(2종, 각
+    1회 등장)은 순수 인기순 정렬로는 상한(15개) 안에 전혀 못 들어간다 - 브랜드
+    facet 쏠림을 브랜드별 재추출로 푼 것과 같은 원리로, '핸드폰 기종'은 계열별
+    라운드로빈으로 뽑아 아이폰도 최소한 일부는 포함되게 해야 한다."""
+    from app.agents import deepseek
+
+    galaxy_models = [f"갤럭시S25 {i}" for i in range(20)]
+    iphone_models = ["아이폰17", "아이폰17 프로"]
+
+    class _FakeMessage:
+        content = f'{{"facets": {{"핸드폰 기종": {galaxy_models + iphone_models!r}}}}}'.replace("'", '"')
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    # 갤럭시 모델은 각 3회, 아이폰 모델은 각 1회만 등장 - 순수 인기순 정렬이면
+    # 갤럭시(count=3)가 전부 아이폰(count=1)보다 위로 가 상한 15개를 다 차지한다.
+    names = [f"{m} 케이스" for m in galaxy_models for _ in range(3)] + [f"{m} 케이스" for m in iphone_models]
+
+    facets = asyncio.run(deepseek.extract_facets_from_names("핸드폰 케이스", names))
+
+    by_label = {f.label: f for f in facets}
+    options = by_label["핸드폰 기종"].options
+    assert len(options) == 15  # MAX_BRAND_OPTIONS 상한 그대로 채워짐
+    assert "아이폰17" in options
+    assert "아이폰17 프로" in options
+
+
 def test_check_clarify_facets_attaches_facet_crossfilter_symmetrically(monkeypatch):
     """사용자 요청(2026-08-13: "삼성전자를 누르면은 시리즈에 삼성전자에 관한것만
     APPLE을 누르면 시리즈에 아이폰만" -> 2026-08-14: "시리즈에 초코파이 바나나를
@@ -424,6 +796,30 @@ def test_check_clarify_facets_orders_facets_from_macro_to_micro(monkeypatch):
     result = asyncio.run(check_clarify_facets("초코파이"))
 
     assert [f.label for f in result.options.facets] == ["브랜드", "용량", "특징"]
+
+
+def test_check_clarify_facets_orders_phone_model_facet_first(monkeypatch):
+    """사용자 요청(2026-08-14: "검색 순서에서 핸드폰 기종이 가장 먼저 위로
+    올라가야할 것 같은데") - '핸드폰 기종' 기준은 카테고리/브랜드보다도 먼저
+    와야 한다."""
+
+    async def _fake_search_danawa(query, limit=3):
+        return [{"pcode": "1", "product_name": "삼성전자 갤럭시S25 케이스", "total_mall_count": None}]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+
+    async def _fake_extract_facets(query, names, required_labels=None):
+        return [
+            ClarifyFacet(label="브랜드", options=["삼성전자", "신지모루"]),
+            ClarifyFacet(label="특징", options=["방수", "충격방지"]),
+            ClarifyFacet(label="핸드폰 기종", options=["갤럭시S25", "갤럭시S26"]),
+        ]
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
+
+    result = asyncio.run(check_clarify_facets("핸드폰 케이스"))
+
+    assert result.options.facets[0].label == "핸드폰 기종"
 
 
 def test_extract_facets_from_names_returns_empty_on_no_product_names():
@@ -589,6 +985,68 @@ def test_check_clarify_facets_enriches_minority_brand_series_via_per_brand_extra
     assert "아이폰17" in by_label["시리즈"].options
     assert by_label["시리즈"].options_by_selection is not None
     assert by_label["시리즈"].options_by_selection["APPLE"] == ["아이폰17"]
+
+
+def test_check_clarify_facets_enriches_minority_ecosystem_device_models_via_ecosystem_extraction(monkeypatch):
+    """사용자 리포트(2026-08-14: "갤럭시랑 아이폰이랑 비슷한 비율로 기종이 뜨게
+    하고 싶었어" -> "검색어 자체에 문제인거야..?") - 실측 결과 다나와 "핸드폰
+    케이스" 검색 자체가 40개 중 갤럭시 36개/아이폰 1개로 쏠려 있었다. 표본
+    안에서 아무리 잘 나눠도 원본에 아이폰 매물이 거의 없으면 소용없으므로,
+    아이폰 표본이 부족하면(<3개) "아이폰 핸드폰 케이스"로 다나와에 보충 검색을
+    한 번 더 돌려 진짜 아이폰 매물을 가져와야 한다."""
+    base_items = [
+        {"pcode": "1", "product_name": "갤럭시S26 케이스", "total_mall_count": None},
+        {"pcode": "2", "product_name": "갤럭시Z 폴드8 케이스", "total_mall_count": None},
+        {"pcode": "3", "product_name": "갤럭시S25 울트라 케이스", "total_mall_count": None},
+        {"pcode": "4", "product_name": "아이폰17 케이스", "total_mall_count": None},
+    ]
+    # 보충 검색("아이폰 핸드폰 케이스")은 실제 다나와라면 아이폰 매물만 돌려준다
+    # (갤럭시가 안 섞임) - 원래 검색(갤럭시 위주)과 구분해서 흉내낸다.
+    iphone_supplement_items = [
+        {"pcode": "5", "product_name": "아이폰17 케이스", "total_mall_count": None},
+        {"pcode": "6", "product_name": "아이폰17 프로 케이스", "total_mall_count": None},
+    ]
+
+    async def _fake_search_danawa(query, limit=3):
+        if "아이폰" in query:
+            return iphone_supplement_items
+        return base_items
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+
+    async def _fake_extract_facets(query, names, required_labels=None):
+        has_iphone = any("아이폰" in n for n in names)
+        has_galaxy = any("갤럭시" in n for n in names)
+        if required_labels:
+            # 기종 생태계별 재추출 - required_labels(그대로 재사용해야 하는 라벨)를 지킨다.
+            if has_iphone and not has_galaxy:
+                models = ["아이폰17"]
+                if any("프로" in n for n in names):
+                    models.append("아이폰17 프로")
+                return [ClarifyFacet(label=required_labels[0], options=models)]
+            if has_galaxy:
+                return [
+                    ClarifyFacet(
+                        label=required_labels[0],
+                        options=["갤럭시S26", "갤럭시Z 폴드8", "갤럭시S25 울트라"],
+                    )
+                ]
+            return []
+        # 결합 호출은 갤럭시 매물이 많아 갤럭시만 뽑는다(원래 버그 재현) - 아이폰17은 못 뽑음.
+        return [ClarifyFacet(label="핸드폰 기종", options=["갤럭시S26", "갤럭시Z 폴드8", "갤럭시S25 울트라"])]
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
+
+    result = asyncio.run(check_clarify_facets("핸드폰 케이스"))
+
+    by_label = {f.label: f for f in result.options.facets}
+    options = by_label["핸드폰 기종"].options
+    # 원래 결합 호출(전체 상품명, 갤럭시 우세)로는 "아이폰17"이 안 나왔어야 하지만,
+    # 보충 검색으로 찾은 "아이폰17 프로"까지 병합돼 있어야 한다(원래 표본엔
+    # 아이폰17만 있었으므로, "아이폰17 프로"가 있다는 건 보충 검색이 실제로
+    # 새 데이터를 가져왔다는 증거다).
+    assert "아이폰17" in options
+    assert "아이폰17 프로" in options
 
 
 def test_check_clarify_facets_falls_back_to_unfiltered_when_too_few_matches(monkeypatch):

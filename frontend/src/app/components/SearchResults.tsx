@@ -241,24 +241,16 @@ export const SearchResults = ({
   onSelectClarifyOption,
   onReset,
 }: Props) => {
-  // AI 상세검색: facet마다 하나씩 고르고, 화면에 떠 있는 기준을 전부 고른
-  // 순간에만 검색이 실행된다(사용자 요청, 2026-08-13: "상세검색에서 고를때마다
-  // 검색하는걸로 바꿧어 다시 다 고르면 검색되는걸로 바꿔" - 브랜드 하나만 눌러도
-  // 바로 다음 턴으로 넘어가던 걸 되돌린 것). 선택 상태는 로컬로 들고 있다가,
-  // 모든 facet이 채워지는 순간 useEffect가 자동으로 onConfirmFacets를 부른다
-  // (버튼은 없다 - "검색하기 버튼 없어도 될거같아"). facets는 mode==='clarify'
-  // 일 때만 존재하지만 Hooks는 조건부로 못 부르니 다른 모드에서는 빈 배열로 둔다.
+  // AI 상세검색: facet마다 하나씩 고른다. 예전엔 화면에 떠 있는 기준을 전부
+  // 골라야만 검색이 실행됐는데(2026-08-13: "상세검색에서 고를때마다 검색하는걸로
+  // 바꿧어 다시 다 고르면 검색되는걸로 바꿔"), 사용자가 원하는 값이 목록에
+  // 없거나 모든 기준을 다 정하고 싶지 않을 수도 있어서(2026-08-14: "일부분만
+  // 선택해도 넘어갈 수 있게") 지금은 "검색하기" 버튼을 눌러야 그 시점까지 고른
+  // 값(일부만 골랐어도 그대로)으로 진행한다. facets는 mode==='clarify'일 때만
+  // 존재하지만 Hooks는 조건부로 못 부르니 다른 모드에서는 빈 배열로 둔다.
   const [selectedFacets, setSelectedFacets] = useState<Record<string, string>>({});
   const [facetQuery, setFacetQuery] = useState<Record<string, string>>({});
   const facets = result.mode === 'clarify' ? result.options.facets : [];
-
-  useEffect(() => {
-    if (facets.length === 0 || !facets.every((f) => selectedFacets[f.label])) return;
-    onConfirmFacets(selectedFacets);
-    // facets/onConfirmFacets는 매 렌더 새 참조라 deps에 넣으면 무한 루프가 된다 -
-    // "선택 상태가 바뀔 때"만 완주 여부를 재확인하면 충분하다.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFacets]);
 
   if (result.mode === 'clarify') {
     const { brands, products, volumes, quantities } = result.options;
@@ -397,6 +389,17 @@ export const SearchResults = ({
             </div>
           );
         })}
+        {facets.length > 0 && (
+          <div className="mb-4 last:mb-0 flex justify-end">
+            <button
+              onClick={() => onConfirmFacets(selectedFacets)}
+              disabled={Object.keys(selectedFacets).length === 0}
+              className="px-5 py-2.5 rounded-full bg-[#4ADE80] text-neutral-950 text-sm font-medium disabled:opacity-30 disabled:cursor-not-allowed hover:bg-[#3EBD6E] transition-all"
+            >
+              검색하기
+            </button>
+          </div>
+        )}
         {step && (
           <div className="mb-4 last:mb-0">
             <FixedAxisClarifyCard
