@@ -62,6 +62,13 @@ MAX_OPTIONS_PER_FACET = 6
 # 낮게 둘 이유가 없다.
 MAX_BRAND_OPTIONS = 15
 _BRAND_LABEL_PATTERN = re.compile(r"브랜드|제조사")
+_CONTAINER_FORM_LABEL_PATTERN = re.compile(r"용기\s*형태")
+# "용기형태"는 페트/캔/유리병 같은 물리적 용기 형태만 가리켜야 하는데, LLM이
+# 상품명 속 구매유형 수식어를 용기형태로 잘못 묶어 넣는 경우가 있었다(사용자
+# 리포트, 2026-08-14: 음료 검색에서 용기형태 선택지로 "업소용"이 나옴 - 페트/캔이
+# 나와야 정상). 프롬프트를 명확히 했지만(build_facet_clarify_prompt), 코드에서도
+# 한 번 더 걸러낸다.
+_NON_CONTAINER_FORM_TERMS = {"업소용", "가정용", "업소", "가정", "벌크", "낱개", "묶음", "세트", "단품"}
 
 
 def _normalize(text: str) -> str:
@@ -119,6 +126,8 @@ async def extract_facets_from_names(
             if not isinstance(options, list):
                 continue
             cleaned = [str(o).strip() for o in options if str(o).strip()]
+            if _CONTAINER_FORM_LABEL_PATTERN.search(str(label)):
+                cleaned = [c for c in cleaned if c not in _NON_CONTAINER_FORM_TERMS]
             if not cleaned:
                 continue
             if allowed_labels is None and len(set(cleaned)) < 2:

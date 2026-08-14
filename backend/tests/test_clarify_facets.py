@@ -259,6 +259,74 @@ def test_extract_facets_from_names_drops_facets_with_only_one_distinct_option(mo
     assert labels == {"브랜드"}
 
 
+def test_extract_facets_from_names_strips_purchase_type_terms_from_container_form(monkeypatch):
+    """사용자 리포트(2026-08-14: 음료 검색에서 용기형태 선택지로 "업소용"이
+    나옴 - 페트/캔이 나와야 정상) - LLM이 구매유형 수식어를 용기형태로 잘못
+    묶어 보내도, "업소용" 같은 알려진 비-용기형태 값은 코드에서 걸러내야 한다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = '{"facets": {"용기형태": ["업소용", "페트", "캔"]}}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    names = ["코카콜라 업소용 페트 1.5L", "코카콜라 캔 250ml"]
+    facets = asyncio.run(deepseek.extract_facets_from_names("콜라", names))
+
+    assert len(facets) == 1
+    assert facets[0].label == "용기형태"
+    assert "업소용" not in facets[0].options
+    assert set(facets[0].options) == {"페트", "캔"}
+
+
+def test_extract_facets_from_names_drops_container_form_facet_when_only_purchase_type_terms(monkeypatch):
+    """용기형태로 뽑힌 값 전부가 알려진 비-용기형태 값이면(필터 후 1개 이하만
+    남으면), 애초에 값이 하나뿐인 기준과 동일하게 그 facet 자체를 버려야 한다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = '{"facets": {"용기형태": ["업소용", "가정용"], "브랜드": ["코카콜라", "펩시"]}}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    facets = asyncio.run(deepseek.extract_facets_from_names("콜라", ["코카콜라 업소용", "펩시 가정용"]))
+
+    labels = {f.label for f in facets}
+    assert labels == {"브랜드"}
+
+
 def test_check_clarify_facets_attaches_facet_crossfilter_symmetrically(monkeypatch):
     """사용자 요청(2026-08-13: "삼성전자를 누르면은 시리즈에 삼성전자에 관한것만
     APPLE을 누르면 시리즈에 아이폰만" -> 2026-08-14: "시리즈에 초코파이 바나나를
