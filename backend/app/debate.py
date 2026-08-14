@@ -519,6 +519,23 @@ async def _enrich_facets_per_brand(
     return enriched
 
 
+def _build_facet_value_incidence(facets: list[ClarifyFacet], names: list[str]) -> dict[str, set[int]]:
+    """상품명 하나는 브랜드·시리즈·용량 등 여러 facet 값을 동시에 잇는
+    하이퍼엣지다 - 이 dict(facet 값(정규화) -> 그 값이 등장하는 상품명 인덱스
+    집합)가 곧 그 (facet 값 정점) x (상품 하이퍼엣지) incidence 구조다.
+    _attach_facet_crossfilter/_facet_centrality가 공유하는 빌더 - 두 값이
+    같은 상품에 같이 등장하는지(=incidence 집합의 교집합이 있는지) 판정하는
+    데 쓰인다."""
+    normalized_names = [_normalize_for_match(name) for name in names]
+    incidence: dict[str, set[int]] = {}
+    for facet in facets:
+        for option in facet.options:
+            key = _normalize_for_match(option)
+            if key not in incidence:
+                incidence[key] = {i for i, n in enumerate(normalized_names) if key in n}
+    return incidence
+
+
 def _attach_facet_crossfilter(facets: list[ClarifyFacet], names: list[str]) -> list[ClarifyFacet]:
     """facet 쌍 전부(브랜드 한정이 아니다) 사이의 연관을 상품명에서 직접 계산해
     붙인다(사용자 요청, 2026-08-13: "삼성전자를 누르면 시리즈에 삼성전자에 관한것만"
@@ -528,18 +545,27 @@ def _attach_facet_crossfilter(facets: list[ClarifyFacet], names: list[str]) -> l
     상품명에 같이 등장하는가"를 모든 (선택 가능한 facet, 대상 facet) 쌍에 대해
     계산한다 - 그래서 프론트가 어느 facet에서든 값을 고르는 순간(그 자체로는
     아직 검색을 트리거하지 않는다) 아직 안 고른 다른 facet들의 보이는 옵션만
-    즉시 좁혀 보여줄 수 있다(여러 개를 고르면 교집합은 프론트가 계산한다)."""
+    즉시 좁혀 보여줄 수 있다(여러 개를 고르면 교집합은 프론트가 계산한다).
+
+    2026-08-16, 하이퍼그래프 incidence 구조로 재구성 - "같은 상품명에 같이
+    등장하는가"를 매번 전체 상품명을 재스캔해 판정하는 대신(브루트포스
+    O(facet² x 선택지 x 선택지 x 상품명)), _build_facet_value_incidence로
+    한 번만 만든 값→상품 인덱스 집합의 교집합 유무로 판정한다 - 두 판정은
+    수학적으로 동치(어떤 상품명 i가 두 값을 모두 포함 ⇔ 두 값의 incidence
+    집합이 겹침)라 결과는 그대로다."""
     if len(facets) < 2:
         return facets
 
-    normalized_names = [_normalize_for_match(name) for name in names]
+    incidence = _build_facet_value_incidence(facets, names)
 
     def _relevant(selector_value: str, target_options: list[str]) -> list[str]:
-        nv = _normalize_for_match(selector_value)
+        selector_idx = incidence.get(_normalize_for_match(selector_value), set())
+        if not selector_idx:
+            return []
         return [
             option
             for option in target_options
-            if any(nv in name and _normalize_for_match(option) in name for name in normalized_names)
+            if incidence.get(_normalize_for_match(option), set()) & selector_idx
         ]
 
     updated = []
@@ -562,9 +588,10 @@ def _attach_facet_crossfilter(facets: list[ClarifyFacet], names: list[str]) -> l
 # 상세검색 facet을 넓은(거시적) 기준부터 좁은(미시적) 기준 순서로 보여주기 위한
 # 우선순위 힌트(사용자 요청, 2026-08-14: "거시적인 선택에서 미시적인 선택으로
 # 점차 줄여나가게"). 라벨에 이 키워드가 포함되면 그 순번을 쓴다 - 못 찾은
-# 라벨은 맨 뒤로(기존 순서 유지, 정렬은 stable). 실제 좁히기 자체는
-# _attach_facet_crossfilter가 순서와 무관하게 다 계산해두므로, 이건 어떤 순서로
-# "물어보면" 자연스러운지에 대한 화면 표시 순서일 뿐이다.
+# 라벨은 _facet_sort_key가 incidence 기반 중심성으로 다시 정렬한다(아래).
+# 실제 좁히기 자체는 _attach_facet_crossfilter가 순서와 무관하게 다
+# 계산해두므로, 이건 어떤 순서로 "물어보면" 자연스러운지에 대한 화면 표시
+# 순서일 뿐이다.
 _FACET_ORDER_HINTS = [
     "카테고리", "브랜드", "제조사", "시리즈", "모델", "타입", "종류",
     "용량", "무게", "사이즈", "용기형태", "구매유형", "특징", "색상",
@@ -576,6 +603,28 @@ def _facet_display_order(facet: ClarifyFacet) -> int:
         if hint in facet.label:
             return i
     return len(_FACET_ORDER_HINTS)
+
+
+def _facet_centrality(facet: ClarifyFacet, incidence: dict[str, set[int]]) -> float:
+    """이 facet의 선택지들이 다른 상품들과 평균적으로 얼마나 폭넓게
+    공존하는가(incidence 그래프에서의 평균 degree) - 넓은(거시적) 축일수록
+    선택지 하나하나가 더 많은 상품에 걸쳐 등장하는 경향이 있다는 근사다.
+    _facet_sort_key가 _FACET_ORDER_HINTS로 못 잡은 facet들 사이의
+    타이브레이커로만 쓴다."""
+    if not facet.options:
+        return 0.0
+    return sum(len(incidence.get(_normalize_for_match(o), set())) for o in facet.options) / len(facet.options)
+
+
+def _facet_sort_key(facet: ClarifyFacet, incidence: dict[str, set[int]]) -> tuple[int, float]:
+    """_facet_display_order(힌트 기반)가 우선이고, 힌트가 못 잡은 facet들
+    사이에서만 incidence 중심성(내림차순)으로 다시 가른다 - 힌트가 이미
+    잡은 facet은 중심성을 아예 안 보므로(표본이 작을 때 중심성 신호가
+    약해지는 문제로부터 안전) 기존 정렬 결과가 그대로 보존된다."""
+    order = _facet_display_order(facet)
+    if order != len(_FACET_ORDER_HINTS):
+        return (order, 0.0)
+    return (order, -_facet_centrality(facet, incidence))
 
 
 def _apply_persona_ordering(facets: list[ClarifyFacet], persona: dict[str, str]) -> list[ClarifyFacet]:
@@ -612,7 +661,8 @@ async def _extract_facets(
     facets = await deepseek.extract_facets_from_names(query, names)
     facets = await _enrich_facets_per_brand(facets, names, query)
     facets = _attach_facet_crossfilter(facets, names)
-    facets = sorted(facets, key=_facet_display_order)
+    incidence = _build_facet_value_incidence(facets, names)
+    facets = sorted(facets, key=lambda f: _facet_sort_key(f, incidence))
     facets = _apply_persona_ordering(facets, persona or {})
     return facets
 

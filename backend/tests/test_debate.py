@@ -2,8 +2,13 @@ import asyncio
 
 from app.category import CategoryClassification
 from app.debate import (
+    _FACET_ORDER_HINTS,
+    _attach_facet_crossfilter,
+    _build_facet_value_incidence,
     _extract_clarify_options,
+    _facet_centrality,
     _facet_resolved,
+    _facet_sort_key,
     _filter_listing_pages,
     _is_ambiguous_facets,
     _resolved_facet_count,
@@ -228,3 +233,100 @@ def test_extract_clarify_options_returns_none_when_facet_already_resolved_in_que
     results = [_search_result("생수 500ml", "https://prod.danawa.com/info?pcode=1")]
 
     assert asyncio.run(_extract_clarify_options("생수 500ml", results)) is None
+
+
+# --- 하이퍼그래프 incidence 기반 facet 크로스필터/정렬(2026-08-16) -----------
+# _attach_facet_crossfilter가 상품명을 매번 재스캔하는 브루트포스 대신
+# _build_facet_value_incidence(facet 값 -> 등장하는 상품 인덱스 집합)의 교집합
+# 판정으로 재구성됐다 - 아래는 그 판정이 기존과 동일한 결과를 내는지, 그리고
+# incidence 기반 중심성이 _FACET_ORDER_HINTS를 안 건드리고 그 바깥에서만
+# 타이브레이커로 쓰이는지 확인한다.
+
+
+def test_build_facet_value_incidence_maps_values_to_matching_name_indices():
+    facets = [_facet("브랜드", ["삼성전자", "APPLE"]), _facet("시리즈", ["갤럭시S25", "아이폰17"])]
+    names = ["삼성전자 갤럭시S25 256GB", "APPLE 아이폰17 256GB"]
+
+    incidence = _build_facet_value_incidence(facets, names)
+
+    assert incidence["삼성전자"] == {0}
+    assert incidence["apple"] == {1}
+    assert incidence["갤럭시s25"] == {0}
+    assert incidence["아이폰17"] == {1}
+
+
+def test_build_facet_value_incidence_empty_set_for_value_with_no_match():
+    facets = [_facet("브랜드", ["LG전자"])]
+    names = ["삼성전자 갤럭시S25 256GB"]
+
+    incidence = _build_facet_value_incidence(facets, names)
+
+    assert incidence["lg전자"] == set()
+
+
+def test_attach_facet_crossfilter_matches_existing_symmetric_scenario():
+    """tests/test_clarify_facets.py의
+    test_check_clarify_facets_attaches_facet_crossfilter_symmetrically와 같은
+    시나리오를 check_clarify_facets 전체를 안 거치고 직접 검증 - incidence
+    재구성이 기존 결과를 그대로 재현하는지 확인하는 더 빠른 회귀망."""
+    facets = [
+        _facet("브랜드", ["삼성전자", "APPLE"]),
+        _facet("시리즈", ["갤럭시S25", "갤럭시Z 폴드8", "아이폰17", "아이폰17 프로"]),
+    ]
+    names = [
+        "삼성전자 갤럭시S25 256GB",
+        "삼성전자 갤럭시Z 폴드8 512GB",
+        "APPLE 아이폰17 256GB",
+        "APPLE 아이폰17 프로 512GB",
+    ]
+
+    updated = _attach_facet_crossfilter(facets, names)
+
+    by_label = {f.label: f for f in updated}
+    assert by_label["브랜드"].options_by_selection == {
+        "갤럭시S25": ["삼성전자"],
+        "갤럭시Z 폴드8": ["삼성전자"],
+        "아이폰17": ["APPLE"],
+        "아이폰17 프로": ["APPLE"],
+    }
+    assert by_label["시리즈"].options_by_selection == {
+        "삼성전자": ["갤럭시S25", "갤럭시Z 폴드8"],
+        "APPLE": ["아이폰17", "아이폰17 프로"],
+    }
+
+
+def test_facet_centrality_averages_option_degrees():
+    incidence = {"삼성전자": {0, 1, 2}, "apple": {3}}
+    facet = _facet("브랜드", ["삼성전자", "APPLE"])
+
+    assert _facet_centrality(facet, incidence) == 2.0  # (3 + 1) / 2
+
+
+def test_facet_centrality_zero_for_no_options():
+    assert _facet_centrality(_facet("빈축", []), {}) == 0.0
+
+
+def test_facet_sort_key_ignores_centrality_for_hint_matched_facet():
+    """힌트가 잡는 facet("브랜드")은 incidence 내용과 무관하게 중심성을
+    아예 안 본다 - 표본이 작을 때 중심성 신호가 불안정해질 위험으로부터
+    안전해야 하는 케이스."""
+    incidence = {"삼성전자": set(range(100)), "lg전자": set()}
+    high_degree = _facet("브랜드", ["삼성전자"])
+    low_degree = _facet("브랜드", ["LG전자"])
+
+    assert _facet_sort_key(high_degree, incidence) == _facet_sort_key(low_degree, incidence)
+    assert _facet_sort_key(high_degree, incidence)[1] == 0.0
+
+
+def test_facet_sort_key_orders_hint_unmatched_facets_by_descending_centrality():
+    """힌트가 못 잡는 facet들끼리는 incidence 중심성(평균 degree) 내림차순으로
+    정렬돼야 한다 - LLM이 낸 임의 순서 대신."""
+    incidence = {"넓은값": set(range(10)), "좁은값": {0}}
+    broad = _facet("아무거나축", ["넓은값"])
+    narrow = _facet("다른아무거나축", ["좁은값"])
+
+    broad_key = _facet_sort_key(broad, incidence)
+    narrow_key = _facet_sort_key(narrow, incidence)
+
+    assert broad_key[0] == narrow_key[0] == len(_FACET_ORDER_HINTS)
+    assert broad_key < narrow_key  # 중심성이 높을수록(더 넓은 축일수록) 먼저 온다
