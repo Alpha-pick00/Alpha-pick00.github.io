@@ -1,7 +1,7 @@
 from openai import AsyncOpenAI
 
 from ..config import settings
-from ..schemas import BulkDecision, BulkProposal, Decision, JudgeVerdict, Proposal
+from ..schemas import BulkDecision, BulkProposal, JudgeVerdict, Proposal
 from .base import parse_json_object
 
 # judge 슬롯은 2026-08-16부터 Claude가 아니라 Groq(openai/gpt-oss-120b)가
@@ -41,27 +41,6 @@ JUDGE_INSTRUCTIONS = (
     '{"product_name": "...", "price": "...", "retailer": "...", "url": "...", "reasoning": "..."}'
 )
 
-# PRESERVED FROM seungmin/lsm - decide()/LEGACY_JUDGE_INSTRUCTIONS는
-# run_single_debate_price_table_variant(app.debate)에서만 쓰인다. 이 경로는
-# chosen_agent를 LLM에게 직접 고르게 한다(위 JUDGE_INSTRUCTIONS/adk_pipeline
-# 경로와 다른 설계 - url 역매칭이 아니라 여기서는 애초에 danawa 후보까지
-# 한 번에 넘기므로 LLM이 그 자리에서 고르는 편이 더 단순하다). 두 경로를
-# 섞지 않도록 상수 이름을 분리했다.
-LEGACY_JUDGE_INSTRUCTIONS = (
-    "당신은 여러 쇼핑 에이전트가 제안한 후보 중 하나를 최종 선택하는 Judge입니다. "
-    "아래 제안들을 비교해 사용자에게 가장 적합한 상품 하나를 선택하고, "
-    "다나와 같은 가격비교 사이트는 실제 판매처가 아니므로 "
-    "retailer나 url로 최종 선택하지 마세요 - 그 사이트가 비교해서 보여주는 "
-    "실제 판매처(쿠팡, 11번가 등)를 골라야 합니다. "
-    "제안 중 agent가 'danawa'로 표시된 것은 여러 판매처의 실제 가격을 비교한 "
-    "가격비교 데이터에서 나온 후보입니다 - retailer와 price가 실측 확인된 값이라 "
-    "다른 제안보다 가격 신뢰도가 높으니 우선 고려하세요(단, 이 경우에도 retailer와 "
-    "url 자체는 이미 실제 판매처를 가리키므로 그대로 최종 선택해도 됩니다). "
-    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
-    '{"product_name": "...", "price": "...", "retailer": "...", "url": "...", '
-    '"reasoning": "...", "chosen_agent": "gpt|gemini|deepseek|danawa"}'
-)
-
 ORGANIZE_INSTRUCTIONS = (
     "당신은 여러 쇼핑 에이전트가 제안한 브랜드별 후보를 정리하는 Judge입니다. "
     "아래 제안들을 모두 모아 같은 브랜드(표기가 달라도 같은 브랜드면 하나로 합침)는 "
@@ -88,35 +67,6 @@ def build_judge_prompt(query: str, proposals: list[Proposal]) -> str:
         for i, p in enumerate(proposals, start=1)
     )
     return f"{JUDGE_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n후보들:\n{proposals_block}"
-
-
-async def decide(query: str, proposals: list[Proposal]) -> Decision:
-    """PRESERVED FROM seungmin/lsm - run_single_debate_price_table_variant 전용.
-    LEGACY_JUDGE_INSTRUCTIONS 참고."""
-    valid = [p for p in proposals if p.error is None]
-    if not valid:
-        raise RuntimeError("No successful proposals to judge")
-
-    proposals_block = "\n\n".join(
-        f"[{p.agent}]\n상품: {p.product_name}\n가격: {p.price}\n판매처: {p.retailer}\n"
-        f"URL: {p.url}\n근거: {p.reasoning}"
-        for p in valid
-    )
-
-    client = _client()
-    response = await client.chat.completions.create(
-        model=settings.groq_judge_model,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f"{LEGACY_JUDGE_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n제안들:\n{proposals_block}"
-                ),
-            }
-        ],
-    )
-    data = parse_json_object(response.choices[0].message.content or "")
-    return Decision(**data)
 
 
 async def organize_options(query: str, proposals: list[BulkProposal]) -> BulkDecision:

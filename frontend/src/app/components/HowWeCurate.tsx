@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { motion, useInView } from 'motion/react';
+import { motion } from 'motion/react';
 import { Sparkles, Search, Users, ShieldCheck, Scale, CheckCircle2 } from 'lucide-react';
 
 const steps = [
@@ -37,7 +37,6 @@ const steps = [
 
 export const HowWeCurate = () => {
   const containerRef = useRef(null);
-  const isInView = useInView(containerRef, { once: true, margin: '-100px' });
 
   return (
     <section ref={containerRef} id="how-we-curate" className="py-32 relative bg-white overflow-hidden">

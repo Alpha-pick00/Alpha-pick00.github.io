@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { motion, useScroll, useTransform, useInView } from 'motion/react';
+import { motion, useScroll, useTransform } from 'motion/react';
 import weCraftImage from '../../assets/about/we-craft.jpg';
 
 import danawaLogo from '../../assets/about/logos/danawa.webp';
@@ -26,8 +26,7 @@ const poweredByClients = [
 
 export const About = () => {
   const containerRef = useRef(null);
-  const isInView = useInView(containerRef, { once: true, margin: "-100px" });
-  
+
   const { scrollYProgress } = useScroll({
     target: containerRef,
     offset: ["start end", "end start"]

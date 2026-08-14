@@ -10,7 +10,6 @@ import { Footer } from './components/Footer';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 import { Work } from './components/Work';
-import { GradientChatInputDemo } from './components/GradientChatInputDemo';
 import { AuthProvider } from './context/AuthContext';
 import { SearchProvider, useSearch } from './context/SearchContext';
 import { SidebarProvider, useSidebar } from './context/SidebarContext';
@@ -127,7 +126,6 @@ const AppShell = () => {
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/work" element={<Work />} />
-              <Route path="/demo/gradient-chat-input" element={<GradientChatInputDemo />} />
             </Routes>
           </div>
         </div>

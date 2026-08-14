@@ -230,7 +230,6 @@ interface Props {
   // 계정/세션 페르소나에 기록할 수 없다.
   onConfirmFacets: (selected: Record<string, string>) => void;
   onSelectClarifyOption: (step: Exclude<ClarifyStep, 'brand'>, value: string) => void;
-  onReset?: () => void;
 }
 
 export const SearchResults = ({
@@ -239,7 +238,6 @@ export const SearchResults = ({
   onSelectBrand,
   onConfirmFacets,
   onSelectClarifyOption,
-  onReset,
 }: Props) => {
   // AI 상세검색: facet마다 하나씩 고르고, 화면에 떠 있는 기준을 전부 고른
   // 순간에만 검색이 실행된다(사용자 요청, 2026-08-13: "상세검색에서 고를때마다
@@ -406,14 +404,13 @@ export const SearchResults = ({
             />
           </div>
         )}
-        {onReset && <ResetLink onReset={onReset} />}
       </Card>
     );
   }
 
   if (result.mode === 'brand_price') {
     if (result.error || !result.option) {
-      return <ErrorCard message={result.error || '해당 브랜드 상품을 찾지 못했습니다.'} onReset={onReset} />;
+      return <ErrorCard message={result.error || '해당 브랜드 상품을 찾지 못했습니다.'} />;
     }
     return (
       <Card>
@@ -421,7 +418,6 @@ export const SearchResults = ({
           {result.brand} 최저가
         </span>
         <BrandOptionRow option={result.option} />
-        {onReset && <ResetLink onReset={onReset} />}
       </Card>
     );
   }
@@ -446,7 +442,6 @@ export const SearchResults = ({
             <BrandOptionRow key={option.brand} option={option} />
           ))}
         </div>
-        {onReset && <ResetLink onReset={onReset} />}
       </Card>
     );
   }
@@ -499,7 +494,6 @@ export const SearchResults = ({
           </div>
         ))}
       </div>
-      {onReset && <ResetLink onReset={onReset} />}
     </Card>
   );
 };

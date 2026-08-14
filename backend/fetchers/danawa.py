@@ -89,12 +89,12 @@ class DanawaResult(TypedDict):
     parse_status: str  # "ok" | "expired" | "partial" | "failed"
     # B-3a에서 fixture로 실측: 상세페이지(prod.danawa.com/info)는 어디에도
     # "총 등록 판매처 수"를 노출하지 않는다 - 검색결과 페이지(search.danawa.com)의
-    # "N몰" 표기(정품 카테고리 한정)에서만 얻을 수 있다. 그래서 이 필드는 여기서는
-    # 항상 None으로 시작하고, with_total_mall_count()로 검색 단계 값을 나중에
-    # 주입해야만 채워진다. 실측 사례(pcode 59537216): 상세페이지 offer는 10개인데
-    # 검색결과의 "정품" 카테고리는 150몰 - 다나와 자신도 두 화면에서 다른 최저가를
-    # 보여준다(231,950원 vs 232,000원). 지금 어댑터의 "최저가"는 다나와가 아는
-    # 전부가 아니라 1차 노출 10개 중 최저가라는 뜻이다.
+    # "N몰" 표기(정품 카테고리 한정)에서만 얻을 수 있다. 그래서 이 필드는 항상
+    # None이다(검색 단계 값을 병합하는 경로가 아직 없다). 실측 사례(pcode
+    # 59537216): 상세페이지 offer는 10개인데 검색결과의 "정품" 카테고리는
+    # 150몰 - 다나와 자신도 두 화면에서 다른 최저가를 보여준다(231,950원 vs
+    # 232,000원). 지금 어댑터의 "최저가"는 다나와가 아는 전부가 아니라 1차
+    # 노출 10개 중 최저가라는 뜻이다.
     total_mall_count: int | None
     offers_shown: int
     is_partial: bool  # total_mall_count is not None and total_mall_count > offers_shown
@@ -265,17 +265,6 @@ def _failed_result(source_url: str) -> DanawaResult:
         "offers_shown": 0,
         "is_partial": False,
     }
-
-
-def with_total_mall_count(result: DanawaResult, total_mall_count: int | None) -> DanawaResult:
-    """search_danawa()가 검색결과 페이지에서 읽은 "N몰"(정품 카테고리) 총
-    등록 판매처 수를 상세페이지 파싱 결과에 병합한 새 dict를 반환한다.
-    순수 함수 - 네트워크 없음. total_mall_count가 offers_shown보다 크면
-    "다나와가 아는 판매처 중 일부만 노출됐다"는 뜻이라 is_partial=True가 된다."""
-    merged: DanawaResult = dict(result)  # type: ignore[assignment]
-    merged["total_mall_count"] = total_mall_count
-    merged["is_partial"] = total_mall_count is not None and total_mall_count > result["offers_shown"]
-    return merged
 
 
 # ---------------------------------------------------------------------------

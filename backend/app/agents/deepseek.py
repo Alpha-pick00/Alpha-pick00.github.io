@@ -3,14 +3,12 @@ import re
 from openai import AsyncOpenAI
 
 from ..config import settings
-from ..schemas import AgentCandidate, AgentCandidates, BulkProposal, ClarifyFacet, SearchResult
+from ..schemas import BulkProposal, ClarifyFacet, SearchResult
 from .base import (
     build_bulk_prompt,
     build_facet_clarify_prompt,
     build_facet_clarify_prompt_for_labels,
-    build_prompt,
     filter_bulk_options,
-    filter_candidates,
     parse_json_array,
     parse_json_object,
 )
@@ -21,23 +19,6 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 def _client() -> AsyncOpenAI:
     return AsyncOpenAI(api_key=settings.deepseek_api_key, base_url=DEEPSEEK_BASE_URL)
-
-
-async def propose(query: str, search_results: list[SearchResult]) -> AgentCandidates:
-    """PRESERVED FROM seungmin/lsm - run_single_debate_price_table_variant
-    (app.debate)에서만 쓰인다. run_debate()의 실제 LLM 경로는 adk_pipeline이
-    담당하며 거기서는 propose 단계가 LlmAgent로 이미 구현돼 있다."""
-    try:
-        client = _client()
-        response = await client.chat.completions.create(
-            model=settings.deepseek_model,
-            messages=[{"role": "user", "content": build_prompt(query, search_results)}],
-        )
-        items = parse_json_array(response.choices[0].message.content or "")
-        items = filter_candidates(items)
-        return AgentCandidates(agent="deepseek", candidates=[AgentCandidate(**i) for i in items])
-    except Exception as exc:
-        return AgentCandidates(agent="deepseek", error=str(exc))
 
 
 async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkProposal:

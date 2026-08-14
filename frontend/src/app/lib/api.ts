@@ -126,70 +126,6 @@ export interface OcrExtractResponse {
 
 export class ApiError extends Error {}
 
-export interface DanawaStreamCandidate {
-  type: 'candidate';
-  product_name: string | null;
-  price: string | null;
-  retailer: string | null;
-  url: string | null;
-}
-
-export interface DanawaStreamFinal {
-  type: 'final';
-  result: DecideResult;
-}
-
-export interface DanawaStreamError {
-  type: 'error';
-  message: string;
-}
-
-export type DanawaStreamEvent = DanawaStreamCandidate | DanawaStreamFinal | DanawaStreamError;
-
-// /decide/danawa-only/stream(SSE) - 사용자 요청(2026-08-11: "1개 서치 완료되면
-// 1개 올려줘 먼저"): 후보가 끝나는 대로 하나씩 onEvent로 넘긴다. EventSource는
-// GET 전용이라 못 쓰고(이 엔드포인트는 POST + JSON body) fetch + ReadableStream을
-// 직접 읽어 "data: {...}\n\n" 프레임을 파싱한다.
-// baseQuery(2026-08-14, "이런식으로 가격 정보를 찾지 못하는 결과는 없어야해") -
-// AI 상세검색으로 facet을 여러 개 이어붙인 아주 구체적인 검색어는 다나와
-// 검색엔진에서 결과가 아예 안 나올 수 있다(실제 상품이 없어서가 아니라
-// 검색어 자체의 문제). 그 조합의 맨 처음 검색어를 실어 보내면, 백엔드가 정확한
-// 검색이 빈손일 때 이걸로 한 번 더 시도해 진짜 "못 찾았다" 화면을 최대한 줄인다.
-export async function decideDanawaOnlyStream(
-  query: string,
-  onEvent: (event: DanawaStreamEvent) => void,
-  baseQuery?: string
-): Promise<void> {
-  const response = await fetch(`${API_URL}/decide/danawa-only/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(baseQuery ? { query, base_query: baseQuery } : { query }),
-  });
-
-  if (!response.ok || !response.body) {
-    const body = await response.json().catch(() => null);
-    throw new ApiError(body?.detail || `요청이 실패했습니다 (${response.status})`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const frames = buffer.split('\n\n');
-    buffer = frames.pop() ?? '';
-    for (const frame of frames) {
-      const line = frame.trim();
-      if (!line.startsWith('data: ')) continue;
-      onEvent(JSON.parse(line.slice('data: '.length)) as DanawaStreamEvent);
-    }
-  }
-}
-
 // AI 상세검색(2026-08-12) - "음료수"처럼 짧고 애매한 검색어를 다나와 검색 결과에
 // 근거해 DeepSeek이 카테고리/브랜드/용량 같은 기준(facet)으로 좁혀나가도록 제안한다.
 // 백엔드가 needs_clarification()으로 한 번 더 걸러서, 명확한 검색어면 검색/LLM
@@ -351,34 +287,6 @@ export async function extractOcr(file: File): Promise<OcrExtractResponse> {
   }
 
   return response.json();
-}
-
-export interface ClarifyMatchResult {
-  matched: string | null;
-  /** LLM이 그때그때 생성한 자연어 답장 — 고정 문구가 아니라 실제 대화처럼
-   * 매번 다르게 표현된다. 호출 자체가 실패해도 안내용 기본 문구가 채워져 있어
-   * 항상 채팅에 뭔가 보여줄 수 있다. */
-  reply: string;
-}
-
-const FALLBACK_CLARIFY_REPLY = '지금은 답장을 만들지 못했어요 — 아래 선택지 중에서 골라주시겠어요?';
-
-/** clarify 화면에서 사용자가 버튼을 클릭하거나 채팅으로 타이핑했을 때, 그
- * 입력이 현재 옵션 중 뭘 가리키는지와 자연스러운 답장을 함께 서버(GPT)에
- * 물어본다. 실패/불확실하면 matched가 null — 호출부는 버튼이 항상 그대로
- * 남아있으므로 이 경우 채팅에 안내만 띄우면 된다. */
-export async function matchClarifyOption(message: string, options: string[]): Promise<ClarifyMatchResult> {
-  try {
-    const response = await fetch(`${API_URL}/clarify/match`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, options }),
-    });
-    if (!response.ok) return { matched: null, reply: FALLBACK_CLARIFY_REPLY };
-    return await response.json();
-  } catch {
-    return { matched: null, reply: FALLBACK_CLARIFY_REPLY };
-  }
 }
 
 const FALLBACK_CLARIFY_QUESTION = '몇 가지 후보를 찾았어요 — 아래에서 골라주시겠어요?';

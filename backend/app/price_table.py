@@ -57,12 +57,10 @@ from rapidfuzz import fuzz
 
 from fetchers import danawa, danawa_search
 from fetchers.danawa_mall_map import CMPNYC_MAP, TRUST_TIER
-from fusion.dedup import NAME_SIMILARITY_THRESHOLD, merge_candidates
+from fusion.dedup import NAME_SIMILARITY_THRESHOLD
 
 from .exclusive_tokens import exclusive_tokens_conflict
 from .schemas import (
-    AgentCandidate,
-    AgentCandidates,
     BrandOption,
     Decision,
     PriceTable,
@@ -465,72 +463,6 @@ async def resolve_purchase_url(offer: danawa.DanawaOffer) -> str | None:
     return None
 
 
-async def build_danawa_candidates(
-    tables: list[tuple[PriceTable, danawa.DanawaResult]],
-    agent_candidates: list[AgentCandidates],
-) -> list[Proposal]:
-    """PART 4-2 - 다나와 페이지를 매칭 대기 상태로 두지 않고 후보 풀에 직접
-    추가한다. enrich_decision()/exclude_price_comparison_site_as_final_pick()과는 별개
-    경로다: 저건 judge가 이미 고른 LLM 후보를 사후에 검증/치환하고, 이건
-    judge가 고르기 *전에* judge의 선택지 자체를 넓힌다. LLM이 고른 상품과
-    Tavily가 물어온 다나와 페이지가 애초에 다른 상품이라 매칭이 실패하는
-    경우(100개 배치 기준 58%)에도, 다나와 후보 자체는 judge 앞에 정상적으로
-    놓인다.
-
-    A등급(linkable) offer가 없는 페이지는 후보로 올리지 않는다 - 링크 없는
-    추천을 만들지 않는다는 원칙은 여기도 동일하다. url은 항상 완전히 해석된
-    실판매처 URL이거나(resolve_purchase_url 성공), 그 다나와 페이지 자체를
-    후보에서 제외한다 - danawa.com이 이 함수가 만든 Proposal.url에 담기는
-    경로는 없다.
-
-    dedup(fusion.dedup.merge_candidates)에도 태워서, 같은 상품을 LLM
-    에이전트가 이미 제안했으면 그 사실(합의)을 reasoning에 남긴다 - judge
-    프롬프트에 별도 신호로 노출된다."""
-    proposals: list[Proposal] = []
-    for table, raw_result in tables:
-        if not table.product_name:
-            continue
-        offer = cheapest_linkable_raw_offer(raw_result)
-        if offer is None:
-            continue
-        resolved_url = await resolve_purchase_url(offer)
-        if resolved_url is None:
-            continue
-
-        danawa_candidate = AgentCandidate(
-            product_name=table.product_name,
-            price_krw=offer["price_krw"],
-            retailer=offer["seller"],
-            url=resolved_url,
-        )
-        entries: list[tuple[str, AgentCandidate]] = [("danawa", danawa_candidate)]
-        for ac in agent_candidates:
-            entries.extend((ac.agent, c) for c in ac.candidates)
-
-        consensus_agents: list[str] = []
-        for group in merge_candidates(entries):
-            if "danawa" in group["proposed_by"]:
-                consensus_agents = [a for a in group["proposed_by"] if a != "danawa"]
-                break
-
-        reasoning = "가격비교 데이터에서 확인된 실측 최저가(A등급, 구매 링크 검증됨)"
-        if consensus_agents:
-            joined = ", ".join(sorted(set(consensus_agents)))
-            reasoning += f" - {joined}도 같은 상품을 제안함(합의 신호)"
-
-        proposals.append(
-            Proposal(
-                agent="danawa",
-                product_name=table.product_name,
-                price=f"{offer['price_krw']:,}원",
-                retailer=offer["seller"],
-                url=resolved_url,
-                reasoning=reasoning,
-            )
-        )
-    return proposals
-
-
 # 영숫자 혼합 토큰(SM-R630N, 16Z90U-KU7BK, V8 ...) - 하이픈으로 이어진 것도
 # 하나의 토큰으로 묶는다.
 _MODEL_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
@@ -767,6 +699,4 @@ async def exclude_price_comparison_site_as_final_pick(
         "final decision still points at a price-comparison site and no fallback exists "
         "(url=%s) - exposing it to the user is unavoidable here", decision.url
     )
-    return decision
-
     return decision

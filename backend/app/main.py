@@ -36,8 +36,6 @@ from .schemas import (
     BulkDecideResponse,
     ClarifyAskRequest,
     ClarifyAskResponse,
-    ClarifyMatchRequest,
-    ClarifyMatchResponse,
     ClarifyResponse,
     DecideRequest,
     DecideResponse,
@@ -173,17 +171,6 @@ def health() -> dict[str, str]:
 @app.get("/autocomplete", response_model=list[str])
 async def get_autocomplete(q: str, limit: int = 8) -> list[str]:
     return await autocomplete.suggest_merged(q, limit)
-
-
-@app.post("/clarify/match", response_model=ClarifyMatchResponse)
-async def clarify_match(request: ClarifyMatchRequest) -> ClarifyMatchResponse:
-    """대화형 HITL — 사용자가 clarify 선택지를 버튼 대신 채팅으로 타이핑했을 때,
-    그 문장이 현재 옵션 중 뭘 가리키는지 해석하고 자연스러운 답장(reply)도 함께
-    받는다 — 봇의 응답이 고정 문구가 아니라 실제 LLM이 생성한 문장이 되도록.
-    matched가 실패/불확실하면 None — 프론트는 버튼이 항상 그대로 남아있으므로
-    이 경우 다시 물어보면 된다."""
-    matched, reply = await gpt_agent.match_clarify_reply(request.message, request.options)
-    return ClarifyMatchResponse(matched=matched, reply=reply)
 
 
 @app.post("/clarify/ask", response_model=ClarifyAskResponse)
