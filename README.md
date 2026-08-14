@@ -14,9 +14,10 @@ https://alpha-pick00.github.io/
 
 > 2026-08 통합 병합 이후 구조. 프론트는 GPT가 실시간으로 응답을 생성하는 대화형 멀티턴
 > UI(`ChatTurn`)로, 백엔드는 ADK 기반 멀티에이전트 오케스트레이션과 다나와 실측 가격
-> 연동을 함께 갖췄다. Human-in-the-loop도 두 갈래(카테고리 기반 고정 축 + AI 상세검색
-> facet)를 상황에 따라 병행한다. 자세한 배경은 [주요 의사결정 사항](#주요-의사결정-사항)
-> 참고.
+> 연동을 함께 갖췄다. Human-in-the-loop 백엔드 추출 로직은 facet 기반 파이프라인
+> 하나로 통합돼 있다(`/decide/clarify`·ADK 내부 안전망 공유). 그라운딩은 다나와
+> 실측가 + 쿠팡 교차 확인 신호로 이중화돼 있다. 자세한 배경은
+> [주요 의사결정 사항](#주요-의사결정-사항) 참고.
 
 ```mermaid
 flowchart LR
@@ -30,7 +31,7 @@ flowchart LR
         DECIDE["POST /decide/stream<br/>(AI 오케스트레이션)"]
         CLARIFYF["POST /decide/clarify<br/>(AI 상세검색 · facet)"]
         DANAWAONLY["POST /decide/danawa-only[/stream]<br/>(LLM 미사용 실험 경로)"]
-        CHAT["POST /clarify/ask · /clarify/match<br/>(대화형 봇 질문/답장)"]
+        CHAT["POST /clarify/ask<br/>(대화형 봇 질문 생성)"]
         OCR["POST /ocr/extract"]
         AUTH["/auth/*"]
         HIST["/history"]
@@ -45,6 +46,8 @@ flowchart LR
             GPT["Qwen"]
             GEMINI["Groq"]
             DEEPSEEK["DeepSeek"]
+            DANAWAP["다나와 실측가<br/>(A등급 최저가)"]
+            COUPANGP["쿠팡 교차확인<br/>(후보 아님 · 참고 신호만)"]
         end
         MERGE["병합 · 중복 제거<br/>(최저가 매물 기준 통합)"]
         CHALLENGE["교차 검증<br/>(DeepSeek)"]
@@ -81,7 +84,8 @@ flowchart LR
     CAT -- "축 관련성 판정<br/>(용량/개수는 카테고리별로 다름)" --> SEARCH
     SEARCH -- "브랜드/제품/용량/개수 모호<br/>(skip_clarify 없으면)" --> DECIDE
     SEARCH --> PROPOSE
-    GPT & GEMINI & DEEPSEEK --> MERGE --> CHALLENGE --> JUDGE
+    GPT & GEMINI & DEEPSEEK & DANAWAP --> MERGE --> CHALLENGE --> JUDGE
+    COUPANGP -.->|참고 신호| CHALLENGE
     JUDGE -- 최종 추천 --> DECIDE
 
     CLARIFYF --> DSEARCH --> DANAWA
@@ -105,7 +109,7 @@ flowchart LR
 | AI / 제안 · 검증 · 심사 | Qwen(DashScope) · Groq(Llama) · DeepSeek — 병렬 제안(모델별 최선 1개) / DeepSeek — 교차 검증(challenge) / Groq(GPT-OSS) — 최종 심사(judge) |
 | 검색 | Tavily Search API (다나와로 도메인 한정) + 임베딩 기반 의미 유사도 검색 캐시 |
 | 다나와 실측 가격 연동 | 다나와 직접 검색/상세페이지 페치(`httpx` + `BeautifulSoup4`/`lxml`), 내부 AJAX 엔드포인트를 통한 최저가 판매처 브릿지 URL 해석 |
-| Human-in-the-loop | ① 카테고리 기반 고정 축(브랜드·제품·용량·개수, Groq 16종 분류 연동) ② AI 상세검색 facet(DeepSeek, 상호 교차 필터링) — 상황에 따라 병행, 대화형 질문/답장은 Qwen이 실시간 생성 |
+| Human-in-the-loop | DeepSeek가 상품명 목록에서 facet(라벨 자유, 상호 교차 필터링)을 추출 — `/decide/clarify`(다나와 직접 검색)와 ADK 파이프라인 내부 안전망(Tavily 결과) 두 진입점이 하나의 공유 추출 파이프라인을 씀. 되묻는 질문 문장은 Qwen이 실시간 생성(`/clarify/ask`) |
 | 이미지 인식 | Google Cloud Vision (텍스트 추출) → Groq (정제 · 검색어 추출) |
 | 인증 | Google / Kakao / Naver OAuth2 + JWT 기반 세션 |
 | 저장소 | SQLite (검색 기록 · 자동완성 인덱스 · 검색 캐시) |
@@ -206,7 +210,8 @@ sequenceDiagram
     participant B as 백엔드(ADK 파이프라인)
     participant Cache as 검색 캐시(의미 기반)
     participant T as Tavily
-    participant P as 제안 에이전트(Qwen·Groq·DeepSeek)
+    participant P as 제안 에이전트(Qwen·Groq·DeepSeek·다나와실측)
+    participant CP as 쿠팡(교차확인 · 참고신호)
     participant D as DeepSeek(교차 검증)
     participant J as Groq(심사)
     participant DW as 다나와(브릿지 URL 해석)
@@ -228,9 +233,11 @@ sequenceDiagram
         Note over B: skip_clarify=true → 내부 애매함 판정을 건너뛰고<br/>바로 제안 단계로 진행(재질문 방지)
     end
     B->>P: 검색 결과 + 질의 전달 (병렬, 모델별 최선 1개)
-    P-->>B: 상품 후보 제안 (근거 포함)
+    P-->>B: 상품 후보 제안 (근거 포함, 다나와는 실측가)
+    B->>CP: 병렬로 쿠팡 한정 검색(후보 아님)
+    CP-->>B: 참고용 검색 결과
     B->>B: 후보 병합 · 중복 제거(최저가 매물 기준)
-    B->>D: 병합된 후보 교차 검증 요청
+    B->>D: 병합된 후보 + 쿠팡 참고 결과로 교차 검증 요청
     D-->>B: 검증 결과(verified 여부 · note)
     B->>J: 검증된 후보 심사 요청
     J-->>B: 최종 추천 + 선정 근거
