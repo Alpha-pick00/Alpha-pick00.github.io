@@ -8,7 +8,6 @@ from app.adk_pipeline import (
     _danawa_tables_from_state,
     _finalize_with_danawa,
     _format_price_krw,
-    _is_ambiguous,
     _is_danawa_product_url,
     _judge_eligible_proposals,
     _merge_proposals,
@@ -16,7 +15,7 @@ from app.adk_pipeline import (
 )
 from app.category import CategoryClassification
 from app.price_table import build_price_table
-from app.schemas import ChallengeResult, ChallengeVerdict, ClarifyOptions, Decision, Proposal
+from app.schemas import ChallengeResult, ChallengeVerdict, Decision, Proposal
 from fetchers.danawa import parse_danawa_html
 
 COUPANG_URL = "https://coupang.com/vp/products/1"
@@ -259,50 +258,6 @@ def test_build_decision_returns_none_without_raw_decision():
 
 def test_build_decision_returns_none_without_proposals():
     assert _build_decision({"raw_decision": {"url": COUPANG_URL}}, []) is None
-
-
-# --- _is_ambiguous (Human-in-the-loop 트리거 기준) ------------------------
-
-
-def test_is_ambiguous_false_when_nothing_found():
-    assert _is_ambiguous("메로나", ClarifyOptions(brands=[], volumes=[], quantities=[])) is False
-
-
-def test_is_ambiguous_false_when_single_option_each():
-    options = ClarifyOptions(brands=["다이슨"], volumes=["500ml"], quantities=["1개"])
-    assert _is_ambiguous("다이슨 청소기", options) is False
-
-
-def test_is_ambiguous_true_when_multiple_brands_not_yet_in_query():
-    options = ClarifyOptions(brands=["다이슨", "삼성"], volumes=[], quantities=[])
-    assert _is_ambiguous("무선청소기", options) is True
-
-
-def test_is_ambiguous_true_when_multiple_volumes_not_yet_in_query():
-    options = ClarifyOptions(brands=["다이슨"], volumes=["64GB", "256GB"], quantities=[])
-    assert _is_ambiguous("아이패드", options) is True
-
-
-def test_is_ambiguous_true_when_multiple_quantities_not_yet_in_query():
-    options = ClarifyOptions(brands=[], volumes=[], quantities=["1개", "6개"])
-    assert _is_ambiguous("생수", options) is True
-
-
-def test_is_ambiguous_false_when_brand_already_chosen_in_query():
-    """사용자가 이미 브랜드를 골라 검색어에 반영했으면(예: HITL 재검색), 검색
-    결과가 여전히 여러 브랜드를 섞어 보여줘도 다시 묻지 않는다."""
-    options = ClarifyOptions(brands=["다이슨", "삼성"], volumes=[], quantities=[])
-    assert _is_ambiguous("무선청소기 다이슨", options) is False
-
-
-def test_is_ambiguous_false_when_volume_already_specified_in_query():
-    options = ClarifyOptions(brands=[], volumes=["500ml", "1L"], quantities=[])
-    assert _is_ambiguous("생수 500ml", options) is False
-
-
-def test_is_ambiguous_false_when_quantity_already_specified_in_query():
-    options = ClarifyOptions(brands=[], volumes=[], quantities=["10개", "30개"])
-    assert _is_ambiguous("메로나 빙그레 70mL 10개", options) is False
 
 
 # --- _augment_search_query (검색 단계 카테고리 가중치) ----------------------

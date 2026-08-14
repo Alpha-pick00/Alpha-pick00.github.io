@@ -6,7 +6,6 @@ from ..schemas import (
     AgentCandidates,
     BrandOption,
     BulkProposal,
-    ClarifyOptions,
     JudgeVerdict,
     SearchResult,
 )
@@ -15,7 +14,6 @@ from .base import (
     build_bulk_prompt,
     build_clarify_ask_prompt,
     build_clarify_match_prompt,
-    build_clarify_prompt,
     build_prompt,
     build_relaxed_pick_prompt,
     filter_bulk_options,
@@ -71,20 +69,6 @@ async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkPr
         return BulkProposal(agent="gpt", options=options)
     except Exception as exc:
         return BulkProposal(agent="gpt", error=str(exc))
-
-
-async def extract_options(query: str, search_results: list[SearchResult]) -> ClarifyOptions:
-    try:
-        client = _client()
-        response = await client.chat.completions.create(
-            model=settings.qwen_model,
-            messages=[{"role": "user", "content": build_clarify_prompt(query, search_results)}],
-            response_format={"type": "json_object"},
-        )
-        data = parse_json_object(response.choices[0].message.content or "")
-        return ClarifyOptions(**data)
-    except Exception:
-        return ClarifyOptions()
 
 
 _CLARIFY_MATCH_FALLBACK_REPLY = "지금은 답장을 만들지 못했어요 — 아래 선택지 중에서 골라주시겠어요?"
