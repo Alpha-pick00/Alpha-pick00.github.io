@@ -626,14 +626,16 @@ def test_run_danawa_only_debate_stream_never_calls_deepseek_facets_even_for_shor
 def test_run_debate_routes_to_danawa_only_when_no_llm_key_even_for_short_query(monkeypatch):
     """2026-08-12에 needs_clarification()을 넓히면서 드러난 순서 버그의 회귀
     테스트 - LLM 키가 하나도 없으면(_any_llm_key_configured False) "테스트 상품"
-    처럼 이제 clarify로도 보이는 짧은 검색어라도 run_clarify(GPT 호출)로 새지
-    않고 그대로 run_danawa_only_debate로 가야 한다."""
+    처럼 이제 clarify로도 보이는 짧은 검색어라도 run_clarify(facet 추출 호출)로
+    새지 않고 그대로 run_danawa_only_debate로 가야 한다. run_clarify는
+    _extract_clarify_options를 거쳐 2026-08-16부터 deepseek.extract_facets_from_names를
+    부른다(예전엔 gpt.extract_options였음 - facet 통합으로 대상이 바뀜)."""
     monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: False)
 
-    async def _boom_gpt(query, results):
-        raise AssertionError("LLM 키가 없는데 gpt.extract_options이 호출됐다")
+    async def _boom_facets(query, product_names, required_labels=None):
+        raise AssertionError("LLM 키가 없는데 deepseek.extract_facets_from_names이 호출됐다")
 
-    monkeypatch.setattr("app.agents.gpt.extract_options", _boom_gpt)
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _boom_facets)
 
     async def _search_danawa(query, limit=3):
         return []

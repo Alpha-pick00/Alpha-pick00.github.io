@@ -36,7 +36,7 @@ from . import search as search_module
 from .agents import gpt as gpt_module
 from .agents import judge as judge_module
 from .category import CategoryClassification, classify_category
-from .intent import has_count_spec, has_volume_spec, needs_clarification
+from .intent import needs_clarification
 from .agents.base import (
     NO_CANDIDATE_ERROR,
     build_challenge_prompt,
@@ -51,7 +51,6 @@ from .schemas import (
     AgentCandidate,
     ChallengeResult,
     ChallengeVerdict,
-    ClarifyOptions,
     ClarifyResponse,
     DecideResponse,
     Decision,
@@ -719,28 +718,6 @@ async def _finalize_with_danawa(
     return decision, price_table
 
 
-def _is_ambiguous(query: str, options: ClarifyOptions) -> bool:
-    """브랜드/제품/용량/개수 중 하나라도 2개 이상이면 사용자에게 물어볼 만큼
-    애매하다고 본다 — 0~1개뿐이면 고를 게 없으니 그대로 진행.
-
-    단, 검색 결과가 완전히 못 걸러내더라도(예: "70mL 10개"로 좁혔는데도 검색
-    결과에 30개입 페이지가 섞여 나옴) 사용자가 Human-in-the-loop으로 이미 답한
-    기준은 다시 안 묻는다 — 질의 텍스트에 이미 용량/개수 스펙이 있으면 그
-    차원은 애매함 판정에서 제외한다. 브랜드·제품도 후보 중 하나가 이미 질의에
-    문자 그대로 들어있으면 같은 이유로 제외한다."""
-    brand_resolved = any(b.casefold() in query.casefold() for b in options.brands)
-    product_resolved = any(p.casefold() in query.casefold() for p in options.products)
-    volume_resolved = has_volume_spec(query)
-    quantity_resolved = has_count_spec(query)
-
-    return (
-        (len(options.brands) > 1 and not brand_resolved)
-        or (len(options.products) > 1 and not product_resolved)
-        or (len(options.volumes) > 1 and not volume_resolved)
-        or (len(options.quantities) > 1 and not quantity_resolved)
-    )
-
-
 async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[dict[str, Any]]:
     """run()과 같은 결과를 만들지만, 단계마다 NDJSON 이벤트를 흘려보낸다 —
     debate.py::run_single_debate_stream이 그대로 재노출.
@@ -748,12 +725,13 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
     skip_clarify(2026-08 통합 병합) - 프론트의 SearchContext.runTurn이 이미
     브랜드/facet/고정축 선택으로 한 라운드를 좁혀온 후속 턴이면 True로 넘어온다
     (main.py의 DecideRequest.skip_intent_check). 이게 없으면 검색 직후
-    _is_ambiguous()가 이번 라운드에도 남아있는 다른 축(예: 브랜드는 답했는데
-    용량이 여러 개)을 또 clarify로 멈춰세워, 사용자가 이미 몇 라운드나 답했는데도
-    계속 새 선택 화면이 뜨는 재질문 버그가 생긴다 - True면 이 조기 종료를 건너뛰고
-    바로 propose/challenge/judge까지 진행한다(완전히 후보가 0개면 아래의
-    안전망 clarify는 skip_clarify와 무관하게 그대로 동작한다)."""
-    from .debate import _extract_clarify_options  # 지연 임포트 — 순환 참조 방지
+    debate._is_ambiguous_facets()가 이번 라운드에도 남아있는 다른 facet(예:
+    브랜드는 답했는데 용량이 여러 개)을 또 clarify로 멈춰세워, 사용자가 이미
+    몇 라운드나 답했는데도 계속 새 선택 화면이 뜨는 재질문 버그가 생긴다 -
+    True면 이 조기 종료를 건너뛰고 바로 propose/challenge/judge까지 진행한다
+    (완전히 후보가 0개면 아래의 안전망 clarify는 skip_clarify와 무관하게
+    그대로 동작한다)."""
+    from .debate import _extract_clarify_options, _is_ambiguous_facets  # 지연 임포트 — 순환 참조 방지
 
     runner = _get_runner()
     session_id = str(uuid.uuid4())
@@ -780,7 +758,11 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
                     SearchResult(**r) for r in event.actions.state_delta.get("search_results") or []
                 ]
                 clarify = await _extract_clarify_options(query, search_results)
-                if clarify is not None and not skip_clarify and _is_ambiguous(query, clarify.options):
+                if (
+                    clarify is not None
+                    and not skip_clarify
+                    and _is_ambiguous_facets(query, clarify.options.facets)
+                ):
                     await gen.aclose()
                     yield {"type": "final", "result": clarify.model_dump()}
                     return

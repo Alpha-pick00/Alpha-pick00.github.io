@@ -128,30 +128,6 @@ def build_bulk_prompt(query: str, search_results: list[SearchResult], max_option
     return f"{instructions}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
 
 
-CLARIFY_INSTRUCTIONS = (
-    "당신은 검색 결과에서 실제 판매 중인 상품의 옵션을 추출하는 에이전트입니다. "
-    "아래 검색 결과에 등장하는 서로 다른 브랜드, 제품/모델명, 용량(ml/L 등), "
-    "판매 단위(묶음 개수)를 각각 목록으로 뽑아주세요. "
-    "products는 브랜드가 아니라 그 브랜드 안에서, 사용자가 질의한 상품과 같은 "
-    "종류의 서로 다른 제품 라인/모델명입니다 (예: 질의가 '빙그레 아이스크림'이면 "
-    "브랜드 '빙그레' 안에 '메로나', '비비빅', '투게더'처럼 서로 다른 아이스크림이 "
-    "섞여 있는 경우). 검색 결과 페이지에 사이드바 추천/함께 본 상품처럼 질의와 "
-    "다른 종류의 상품(예: 이어폰을 찾는데 냉장고·모니터·시계가 섞여 있는 경우)이 "
-    "함께 나오더라도, 그런 무관한 카테고리 상품은 products에 절대 넣지 마세요 — "
-    "질의와 같은 종류의 상품만 뽑으세요. 한 브랜드에 제품이 하나뿐이면 products는 "
-    "빈 배열로 두세요 — 브랜드명과 똑같은 값을 억지로 넣지 마세요. "
-    "실제로 검색 결과에 나온 값만 사용하고 지어내지 마세요. "
-    "찾을 수 없으면 해당 목록을 빈 배열로 두세요. "
-    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
-    '{"brands": ["..."], "products": ["..."], "volumes": ["..."], "quantities": ["..."]}'
-)
-
-
-def build_clarify_prompt(query: str, search_results: list[SearchResult]) -> str:
-    results_block = format_results_block(search_results)
-    return f"{CLARIFY_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
-
-
 CLARIFY_MATCH_INSTRUCTIONS = (
     "당신은 쇼핑 검색을 도와주는 챗봇입니다. 사용자가 채팅창에 자유롭게 입력한 "
     "문장이 아래 선택지 중 어떤 것을 가리키는지 판단하고, 그 결과를 사용자에게 "
@@ -263,8 +239,8 @@ def build_brand_price_prompt(query: str, brand: str, search_results: list[Search
 
 # 완전 일치 후보가 하나도 없을 때의 폴백 경로(2026-08-15, "적절한 상품 후보를
 # 찾지 못하면 다시 fallback해서 feedback 구조로 돌아가서 가장 관련성 높은
-# 상품을 추천해주는 시스템") - PROPOSAL_INSTRUCTIONS/CLARIFY_INSTRUCTIONS는
-# 브랜드/스펙이 정확히 일치하지 않으면 후보를 아예 비워서 반환하도록 요구한다
+# 상품을 추천해주는 시스템") - PROPOSAL_INSTRUCTIONS는 브랜드/스펙이 정확히
+# 일치하지 않으면 후보를 아예 비워서 반환하도록 요구한다
 # (그라운딩 - 존재하지 않는 상품을 지어내지 않기 위함). 이 프롬프트는 딱 그
 # 엄격함만 완화해 "정확히 일치하진 않아도 검색 결과 중 가장 관련성 높은 것
 # 하나"를 고르게 한다 - 여전히 실제로 검색 결과에 있는 상품만 골라야 하고
