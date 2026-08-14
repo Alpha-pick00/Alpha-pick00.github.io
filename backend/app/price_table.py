@@ -48,8 +48,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-from collections import defaultdict
 from typing import AsyncIterator
 from urllib.parse import parse_qsl, urlsplit
 
@@ -60,6 +58,7 @@ from fetchers.danawa_mall_map import CMPNYC_MAP, TRUST_TIER
 from fusion.dedup import NAME_SIMILARITY_THRESHOLD
 
 from .exclusive_tokens import exclusive_tokens_conflict
+from .spec_match import model_or_quantity_conflict
 from .schemas import (
     BrandOption,
     Decision,
@@ -94,13 +93,16 @@ DANAWA_ONLY_SEARCH_LIMIT = 3
 # search_danawa - limit은 이미 받아온 HTML에서 몇 개까지 파싱할지일 뿐, 네트워크
 # 요청을 추가로 만들지 않는다) 크게 늘려도 10초 Crawl-delay 외의 비용이 없다.
 #
-# 30 -> 60(2026-08-13: "APLLE 을 선택했을때 시리즈 후보가 너무 적어"). 브랜드별
-# 다양성은 표본 수에 직접 달려있다 - "핸드폰"처럼 다나와 검색 결과가 특정 제조사
-# 쪽으로 치우친 카테고리는 30개 표본으로는 비주류 브랜드 상품이 1~2개만 걸릴 수
-# 있다. search_danawa()가 이제 항상 페이지당 최대 90개까지 파싱해 캐시해두므로
-# (fetchers/danawa_search.py::SEARCH_PAGE_PARSE_LIMIT), 60으로 늘려도 추가
-# 네트워크 요청은 없다 - 이미 캐시된 걸 더 많이 슬라이스해서 쓰는 것뿐이다.
-CLARIFY_SEARCH_LIMIT = 60
+# 30 -> 60(2026-08-13: "APLLE 을 선택했을때 시리즈 후보가 너무 적어") -> 90
+# (2026-08-14: "보여주는 기종 수가 너무 적은데" - "핸드폰 케이스" 검색에서
+# 다나와 실제 174개 갤럭시 호환 매물에 비해 표본이 너무 좁아 "핸드폰 기종"
+# facet 다양성이 부족했다). 브랜드/기종별 다양성은 표본 수에 직접 달려있다 -
+# "핸드폰"처럼 다나와 검색 결과가 특정 제조사 쪽으로 치우친 카테고리는 표본이
+# 좁을수록 비주류 브랜드/기종 상품이 1~2개만 걸릴 수 있다. search_danawa()가
+# 이제 항상 페이지당 최대 90개까지 파싱해 캐시해두므로(fetchers/danawa_search.py
+# ::SEARCH_PAGE_PARSE_LIMIT), 90(=파싱 상한 그대로)으로 늘려도 추가 네트워크
+# 요청은 없다 - 이미 캐시된 걸 전부 슬라이스해서 쓰는 것뿐이다.
+CLARIFY_SEARCH_LIMIT = 90
 
 
 def _query_param(url: str | None, name: str) -> str | None:
@@ -463,106 +465,10 @@ async def resolve_purchase_url(offer: danawa.DanawaOffer) -> str | None:
     return None
 
 
-# 영숫자 혼합 토큰(SM-R630N, 16Z90U-KU7BK, V8 ...) - 하이픈으로 이어진 것도
-# 하나의 토큰으로 묶는다.
-_MODEL_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
-
-# 수량/용량 토큰. "무이자 12개월"의 "12개"를 오탐하지 않도록 "개" 뒤에 "입"도
-# "월"도 오지 않을 때만 수량으로 본다 - scripts/verify_product_identity.py에서
-# 이 정확한 버그를 한 번 잡았던 걸 그대로 반영한다.
-_QUANTITY_TOKEN_PATTERNS = [
-    re.compile(r"\d+\s*개입"),
-    re.compile(r"\d+\s*개(?!입)(?!월)"),
-    re.compile(r"\d+\s*(?:GB|TB)", re.IGNORECASE),
-    re.compile(r"\d+\s*(?:g|kg|ml|L)\b"),
-]
-
-
-_YEAR_MIN, _YEAR_MAX = 1990, 2035
-
-
-def _is_year_token(token: str) -> bool:
-    return len(token) == 4 and token.isdigit() and _YEAR_MIN <= int(token) <= _YEAR_MAX
-
-
-def _extract_spec_tokens(text: str) -> set[str]:
-    """영숫자 혼합 토큰(SM-R630N, M2, 128GB)과 4자리 연식(1990~2035)을 뽑는다.
-    "1000mAh"처럼 단위가 붙은 4자리는 연식 판정(순수 숫자만) 대상이 아니라
-    이미 영숫자 혼합 토큰 규칙으로 잡힌다 - 별도 처리 불필요."""
-    tokens = set()
-    for match in _MODEL_TOKEN_PATTERN.finditer(text):
-        token = match.group(0)
-        has_digit = any(c.isdigit() for c in token)
-        has_alpha = any(c.isalpha() for c in token)
-        if (has_digit and has_alpha) or _is_year_token(token):
-            tokens.add(token.upper())
-    return tokens
-
-
-def _token_family(token: str) -> str:
-    """숫자 런(연속된 숫자열)을 #로 치환해 "같은 종류의 스펙"인지 판별하는
-    키를 만든다. M2/M3 -> M#, 2024/2025 -> #, SM-R630N/SM-R631N -> SM-R#N.
-
-    자릿수가 다른 숫자는 한 글자씩 치환하면(M2->M#, 하지만 V8->V#, V15->V##)
-    같은 계열인데 family가 갈라져 충돌을 놓친다 - 실제로 "다이슨 V8" vs
-    "다이슨 V15"가 이 방식으로는 안 걸렸다(자릿수 1개 vs 2개). 숫자 런
-    전체를 한 번에 치환해야 64GB/128GB, V8/V15처럼 자릿수가 다른 값도
-    같은 family로 묶여서 비교된다.
-
-    PART 4-1: 기존의 "완전히 disjoint일 때만 충돌" 판정은 {M2,128GB} vs
-    {M3,128GB}처럼 토큰 하나(128GB)만 겹쳐도 나머지(M2 vs M3)를 그냥
-    통과시켰다(실측: iPad Air M2/M3, iPad Pro M4/M5가 그렇게 새어나갔다).
-    family 단위로 쪼개면 "같은 종류인데 값이 다른" 경우를 개별적으로 잡는다."""
-    return re.sub(r"\d+", "#", token)
-
-
-def _spec_tokens_conflict(tokens_a: set[str], tokens_b: set[str]) -> bool:
-    """양쪽에 같은 family가 모두 있는데 값 집합이 다르면 충돌. 한쪽에만 있는
-    family는 무시한다(모델명/수량 가드와 같은 논리).
-
-    값 집합이 완전히 같으면(예: "램12GB,256GB"처럼 RAM·저장용량이 둘 다
-    #GB family로 묶여도 양쪽 다 {12GB,256GB}로 동일) 충돌이 아니다 - 이걸
-    먼저 확인하지 않고 "한쪽에 값이 2개 이상이면 무조건 충돌"로 처리했더니
-    같은 문자열을 자기 자신과 비교해도 실패하는 버그가 실측(100개 배치
-    재판정)에서 나왔다. "M2와 M4가 한 이름에 같이 있는" 것처럼 진짜
-    모호한 경우는 값 집합이 다를 때만 문제이므로, 값 집합 비교 하나로
-    충분하다 - 값이 다르면(한쪽이 모호한 다중값이든 아니든) 보수적으로
-    충돌 처리된다."""
-    by_family_a: dict[str, set[str]] = defaultdict(set)
-    for token in tokens_a:
-        by_family_a[_token_family(token)].add(token)
-    by_family_b: dict[str, set[str]] = defaultdict(set)
-    for token in tokens_b:
-        by_family_b[_token_family(token)].add(token)
-
-    for family in set(by_family_a) & set(by_family_b):
-        if by_family_a[family] != by_family_b[family]:
-            return True
-    return False
-
-
-def _extract_quantity_tokens(text: str) -> set[str]:
-    tokens = set()
-    for pattern in _QUANTITY_TOKEN_PATTERNS:
-        for match in pattern.finditer(text):
-            tokens.add(re.sub(r"\s+", "", match.group(0)).upper())
-    return tokens
-
-
-def _tokens_conflict(tokens_a: set[str], tokens_b: set[str]) -> bool:
-    """양쪽 다 토큰이 있는데 겹치는 게 하나도 없으면 충돌(다른 모델/다른
-    수량)로 본다. 한쪽만 토큰이 있으면(그 정보를 안 적었을 뿐) 무시한다."""
-    if not tokens_a or not tokens_b:
-        return False
-    return tokens_a.isdisjoint(tokens_b)
-
-
 def _product_name_matches(decision_name: str, danawa_name: str) -> bool:
     if fuzz.token_set_ratio(decision_name, danawa_name) < NAME_SIMILARITY_THRESHOLD:
         return False
-    if _spec_tokens_conflict(_extract_spec_tokens(decision_name), _extract_spec_tokens(danawa_name)):
-        return False
-    if _tokens_conflict(_extract_quantity_tokens(decision_name), _extract_quantity_tokens(danawa_name)):
+    if model_or_quantity_conflict(decision_name, danawa_name):
         return False
     # 백미/발아현미처럼 순한글 단어 하나가 결정적 차이인 경우 - token_set_ratio는
     # 공통 토큰이 많으면 이런 차이를 그냥 덮어버린다(실측 93.0점, 85 통과).

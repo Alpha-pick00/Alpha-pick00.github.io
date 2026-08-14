@@ -12,7 +12,6 @@ from app.debate import run_danawa_only_debate, run_danawa_only_debate_stream
 from app.main import app
 from app.price_table import (
     MAX_DANAWA_URLS,
-    _extract_quantity_tokens,
     _is_single_product_family,
     _query_param,
     build_price_table,
@@ -23,6 +22,7 @@ from app.price_table import (
     select_danawa_urls,
 )
 from app.schemas import Decision, Proposal, SearchResult
+from app.spec_match import extract_quantity_tokens as _extract_quantity_tokens
 from fetchers.danawa import parse_danawa_html
 
 client = TestClient(app)

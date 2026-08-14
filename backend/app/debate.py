@@ -388,6 +388,103 @@ async def _enrich_facets_per_brand(
     return enriched
 
 
+_DEVICE_ECOSYSTEM_TERMS = ["갤럭시", "아이폰"]
+# 이보다 표본이 적으면 그 생태계는 다나와 보충 검색을 한 번 더 돌린다(아래
+# _ecosystem_name_pool) - 실측(2026-08-14, 사용자 리포트 "갤럭시랑 아이폰이랑
+# 비슷한 비율로 기종이 뜨게 하고 싶었어" 조사 중 발견): "핸드폰 케이스" 다나와
+# 검색 결과 40개 중 갤럭시가 36개, 아이폰이 1개뿐이었다 - facet 추출/균형
+# 로직이 완벽해도 원본 표본에 아이폰 매물 자체가 거의 없으면 소용없다.
+_DEVICE_ECOSYSTEM_SUPPLEMENT_MIN_ITEMS = 3
+
+
+def _items_for_substring(term: str, names: list[str]) -> list[str]:
+    nt = _normalize_for_match(term)
+    return [name for name in names if nt in _normalize_for_match(name)]
+
+
+async def _ecosystem_name_pool(eco: str, names: list[str], query: str) -> list[str]:
+    """이 생태계(갤럭시/아이폰) 상품명이 기존 표본에 부족하면, 그 생태계 이름을
+    검색어 앞에 붙여 다나와에 보충 검색을 한 번 더 돌려 실제 매물을 채운다.
+    이미 충분하면(>= _DEVICE_ECOSYSTEM_SUPPLEMENT_MIN_ITEMS) 추가 네트워크
+    요청 없이 기존 표본만 쓴다 - 매번 보충 검색을 돌리면 다나와 Crawl-delay
+    비용이 그 생태계가 이미 충분한 흔한 경우에도 매번 붙는다. 다나와 검색
+    자체가 실패해도(네트워크 오류 등) 기존 표본만으로 계속 진행한다."""
+    pool = _items_for_substring(eco, names)
+    if len(pool) >= _DEVICE_ECOSYSTEM_SUPPLEMENT_MIN_ITEMS:
+        return pool
+    try:
+        items = await price_table_module._search_danawa_items(
+            f"{eco} {query}", limit=price_table_module.CLARIFY_SEARCH_LIMIT
+        )
+    except Exception:
+        logger.exception("check_clarify_facets: %s 보충 검색 실패, 기존 표본만 사용", eco)
+        return pool
+    seen = {_normalize_for_match(n) for n in pool}
+    merged = list(pool)
+    for item in items:
+        name = item["product_name"]
+        key = _normalize_for_match(name)
+        if key not in seen:
+            seen.add(key)
+            merged.append(name)
+    return merged
+
+
+async def _enrich_device_models_by_ecosystem(
+    facets: list[ClarifyFacet], names: list[str], query: str
+) -> list[ClarifyFacet]:
+    """'핸드폰 기종' facet이 특정 기기 브랜드로 쏠리는 문제(사용자 리포트,
+    2026-08-14: "갤럭시랑 아이폰이랑 비슷한 비율로 기종이 뜨게 하고 싶었어") -
+    _enrich_facets_per_brand는 "케이스" 브랜드(신지모루/슈피겐 등)별로 예산을
+    나눠주는데, 그 케이스 브랜드 자체가 갤럭시 위주로 팔면 소용이 없다(케이스
+    브랜드 축과 기기 브랜드 축은 서로 다른 문제). 기기 생태계(갤럭시/아이폰)
+    문자열로 상품명 표본을 나누고(부족하면 보충 검색까지 돌려) 각자 자기 몫의
+    예산으로 다시 '핸드폰 기종'만 추출한 뒤, 새로 찾은 값을 합쳐
+    deepseek._balance_device_models_by_ecosystem로 다시 균형 있게 자른다."""
+    device_facet = next((f for f in facets if f.label == deepseek._DEVICE_MODEL_LABEL), None)
+    if device_facet is None:
+        return facets
+
+    try:
+        ecosystem_pools = await asyncio.gather(
+            *(_ecosystem_name_pool(eco, names, query) for eco in _DEVICE_ECOSYSTEM_TERMS)
+        )
+        per_ecosystem = await asyncio.gather(
+            *(
+                deepseek.extract_facets_from_names(
+                    query, pool, required_labels=[deepseek._DEVICE_MODEL_LABEL]
+                )
+                for pool in ecosystem_pools
+            )
+        )
+    except Exception:
+        logger.exception("check_clarify_facets: 기종 생태계별 facet 보강 실패, 원래 결과 그대로 사용")
+        return facets
+
+    merged_options = list(device_facet.options)
+    seen = {_normalize_for_match(o) for o in merged_options}
+    for eco_facets in per_ecosystem:
+        match = next((f for f in eco_facets if f.label == deepseek._DEVICE_MODEL_LABEL), None)
+        if match is None:
+            continue
+        for option in match.options:
+            key = _normalize_for_match(option)
+            if key not in seen:
+                seen.add(key)
+                merged_options.append(option)
+
+    if merged_options == device_facet.options:
+        return facets
+
+    # 인기순 집계도 보충 검색으로 늘어난 표본을 반영해야, 보충 검색으로 새로
+    # 찾은 기종이 전부 count=0으로 묶여 정렬이 무의미해지지 않는다.
+    popularity_pool = names + [n for pool in ecosystem_pools for n in pool]
+    balanced = deepseek._balance_device_models_by_ecosystem(
+        merged_options, popularity_pool, deepseek.MAX_BRAND_OPTIONS
+    )
+    return [f.model_copy(update={"options": balanced}) if f is device_facet else f for f in facets]
+
+
 def _build_facet_value_incidence(facets: list[ClarifyFacet], names: list[str]) -> dict[str, set[int]]:
     """상품명 하나는 브랜드·시리즈·용량 등 여러 facet 값을 동시에 잇는
     하이퍼엣지다 - 이 dict(facet 값(정규화) -> 그 값이 등장하는 상품명 인덱스
@@ -462,6 +559,11 @@ def _attach_facet_crossfilter(facets: list[ClarifyFacet], names: list[str]) -> l
 # 계산해두므로, 이건 어떤 순서로 "물어보면" 자연스러운지에 대한 화면 표시
 # 순서일 뿐이다.
 _FACET_ORDER_HINTS = [
+    # "기종"(핸드폰 기종/호환기종)이 맨 앞 - 사용자 요청(2026-08-14: "검색
+    # 순서에서 핸드폰 기종이 가장 먼저 위로 올라가야할 것 같은데"). 액세서리
+    # 검색에서는 "내 기기에 맞는지"가 카테고리·브랜드보다 더 먼저 정해야 하는
+    # 기준이라는 판단.
+    "기종",
     "카테고리", "브랜드", "제조사", "시리즈", "모델", "타입", "종류",
     "용량", "무게", "사이즈", "용기형태", "구매유형", "특징", "색상",
 ]
@@ -529,6 +631,7 @@ async def _extract_facets(
     완전히 지원해서 별도 UI 변경 없이 하나로 합칠 수 있었다."""
     facets = await deepseek.extract_facets_from_names(query, names)
     facets = await _enrich_facets_per_brand(facets, names, query)
+    facets = await _enrich_device_models_by_ecosystem(facets, names, query)
     facets = _attach_facet_crossfilter(facets, names)
     incidence = _build_facet_value_incidence(facets, names)
     facets = sorted(facets, key=lambda f: _facet_sort_key(f, incidence))
