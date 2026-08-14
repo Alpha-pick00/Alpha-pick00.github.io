@@ -44,6 +44,19 @@ def test_extract_pcode_returns_none_for_non_product_page():
     assert _extract_pcode("https://www.coupang.com/vp/products/123") is None
 
 
+def test_extract_pcode_returns_none_for_already_resolved_bridge_url():
+    """회귀 테스트(2026-08-16, 사용자 리포트 "구매링크를 안띄워주는거야") -
+    /bridge/loadingBridge.html은 pipeline이 이미 A등급 판매처로 확정한 구매
+    링크인데, pcode 쿼리 파라미터를 그대로 갖고 있어서(전) 이 함수가 "아직 안
+    풀린 비교 페이지"로 착각해 재해석 대상으로 삼았다 - resolve_lowest_price가
+    그 결과로 CMPNYC_MAP의 A등급 판정과 무관하게 danawa 자신의 "객관적
+    최저가"(구매 링크가 깨져 있어도 상관없음)로 이미 올바른 링크를 덮어쓰는
+    버그로 이어졌다."""
+    assert _extract_pcode(
+        "https://prod.danawa.com/bridge/loadingBridge.html?pcode=59541506&cmpnyc=TH201"
+    ) is None
+
+
 def test_parse_lowest_price_link_finds_bridge_url_and_retailer():
     result = _parse_lowest_price_link(_SAMPLE_PRICE_LIST_HTML)
 
