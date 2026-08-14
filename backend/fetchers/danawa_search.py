@@ -72,8 +72,8 @@ class DanawaSearchBlocked(RuntimeError):
 class DanawaSearchItem(TypedDict):
     pcode: str
     product_name: str
-    # "정품" 카테고리 행의 "N몰" 숫자(등록된 판매처 수 집계). 못 찾으면 None -
-    # fetchers.danawa.with_total_mall_count()가 상세페이지 결과에 병합할 때 쓴다.
+    # "정품" 카테고리 행의 "N몰" 숫자(등록된 판매처 수 집계). 못 찾으면 None.
+    # 상세페이지 결과(fetchers.danawa.DanawaResult)에 병합하는 경로는 아직 없다.
     total_mall_count: int | None
 
 

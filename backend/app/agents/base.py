@@ -128,28 +128,6 @@ def build_bulk_prompt(query: str, search_results: list[SearchResult], max_option
     return f"{instructions}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
 
 
-CLARIFY_MATCH_INSTRUCTIONS = (
-    "당신은 쇼핑 검색을 도와주는 챗봇입니다. 사용자가 채팅창에 자유롭게 입력한 "
-    "문장이 아래 선택지 중 어떤 것을 가리키는지 판단하고, 그 결과를 사용자에게 "
-    "짧고 자연스러운 한국어로 답장하세요. "
-    "matched는 선택지 목록에 있는 문자열과 정확히 동일한 값이거나 null입니다. "
-    "\"제일 싼 걸로\", \"그거 말고 다른 거\" 같은 간접적인 표현이어도 의미상 가장 "
-    "맞는 선택지를 고르세요. 여러 개와 애매하게 겹치거나 선택지와 전혀 무관한 "
-    "말이면 matched를 null로 두세요. 목록에 없는 새 값을 만들어내지 마세요. "
-    "reply는 실제 챗봇과 대화하듯 한두 문장으로 쓰세요 — matched를 찾았으면 "
-    "그 선택을 자연스럽게 확인하는 말을, null이면 다시 골라달라고 선택지를 "
-    "참고해 부드럽게 안내하는 말을 쓰세요. 매번 같은 문구를 기계적으로 반복하지 "
-    "말고 사용자가 입력한 표현에 맞춰 조금씩 다르게 표현하세요. "
-    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
-    '{"matched": "..." 또는 null, "reply": "..."}'
-)
-
-
-def build_clarify_match_prompt(message: str, options: list[str]) -> str:
-    options_block = "\n".join(f"- {o}" for o in options)
-    return f"{CLARIFY_MATCH_INSTRUCTIONS}\n\n사용자 입력: {message}\n\n선택지:\n{options_block}"
-
-
 CLARIFY_ASK_INSTRUCTIONS = (
     "당신은 쇼핑을 도와주는 챗봇입니다. 사용자가 검색한 상품 중 아래 후보들 중 "
     "어떤 걸 찾는지 확인이 필요합니다. 후보 목록을 그대로 나열하거나 \"~를 "
@@ -363,6 +341,12 @@ CHALLENGE_INSTRUCTIONS = (
     "일부 후보에는 '실제 페이지 재조회 원문'이 함께 제공됩니다 — 이는 검색 당시 "
     "잘린 스니펫보다 더 최신이고 완전한 정보이므로, 스니펫과 내용이 다르면 "
     "재조회 원문을 우선 신뢰해 판단하세요. "
+    "일부 경우에는 '쿠팡 교차 확인 검색 결과'가 추가로 제공됩니다 — 검색 결과와는 "
+    "별도로 쿠팡에서 같은 상품을 검색한 참고 자료입니다. 후보와 일치하는 상품이 "
+    "쿠팡에서도 보이면 그라운딩 신뢰도가 더 높다는 뜻으로 참고하세요. 쿠팡에 "
+    "없다고 해서 곧바로 false로 판단하지 마세요(품절·검색 누락일 수 있음) — "
+    "원 검색 결과나 재조회 원문과 명백히 모순될 때만 이 신호를 근거로 우려를 "
+    "표시하세요. "
     "반드시 입력된 후보와 같은 개수, 같은 순서로 아래 JSON 배열 형식으로만 답하세요. "
     "다른 텍스트나 코드펜스를 덧붙이지 마세요.\n\n"
     '[{"url": "...", "verified": true, "note": "..."}, ...]\n\n'
@@ -393,13 +377,17 @@ def build_challenge_prompt(
     candidates: list,
     search_results: list[SearchResult],
     candidate_pages: dict[str, str] | None = None,
+    coupang_results: list[SearchResult] | None = None,
 ) -> str:
     candidates_block = _format_candidates_block(candidates, candidate_pages)
     results_block = format_results_block(search_results)
-    return (
+    prompt = (
         f"{CHALLENGE_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n"
         f"검증할 후보:\n{candidates_block}\n\n검색 결과:\n{results_block}"
     )
+    if coupang_results:
+        prompt += f"\n\n쿠팡 교차 확인 검색 결과(참고용):\n{format_results_block(coupang_results)}"
+    return prompt
 
 
 def _normalize(text: str) -> str:

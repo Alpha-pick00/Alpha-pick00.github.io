@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { motion, useInView } from 'motion/react';
+import { motion } from 'motion/react';
 import { Bot, ScanLine, ShoppingBag, BadgeCheck } from 'lucide-react';
 
 const services = [
@@ -27,7 +27,6 @@ const services = [
 
 export const Services = () => {
   const containerRef = useRef(null);
-  const isInView = useInView(containerRef, { once: true, margin: "-100px" });
 
   return (
     <section ref={containerRef} id="services" className="py-32 px-6 bg-white relative overflow-hidden">

@@ -13,9 +13,10 @@ from app.adk_pipeline import (
     _merge_proposals,
     _urls_to_extract,
 )
+from app.agents.base import CHALLENGE_INSTRUCTIONS, build_challenge_prompt
 from app.category import CategoryClassification
 from app.price_table import build_price_table
-from app.schemas import ChallengeResult, ChallengeVerdict, Decision, Proposal
+from app.schemas import ChallengeResult, ChallengeVerdict, Decision, Proposal, SearchResult
 from fetchers.danawa import parse_danawa_html
 
 COUPANG_URL = "https://coupang.com/vp/products/1"
@@ -379,6 +380,32 @@ def test_apply_challenge_non_danawa_candidate_unaffected_by_danawa_override():
 
     assert proposals[0].verified is None
     assert proposals[0].challenge_note is None
+
+
+# --- 쿠팡 교차 확인(build_challenge_prompt, 2026-08-16) ----------------------
+
+
+def test_build_challenge_prompt_without_coupang_results_matches_prior_output():
+    without_coupang = build_challenge_prompt("무선 마우스", [], [])
+    with_empty_list = build_challenge_prompt("무선 마우스", [], [], None, [])
+
+    assert without_coupang == with_empty_list
+    # 결과 블록 자체는 안 붙지만, CHALLENGE_INSTRUCTIONS의 사용법 설명 문구는 항상 포함된다.
+    assert "쿠팡 교차 확인 검색 결과(참고용)" not in without_coupang
+
+
+def test_build_challenge_prompt_includes_coupang_block_when_provided():
+    coupang_results = [SearchResult(title="쿠팡 무선 마우스", url=COUPANG_URL, snippet="12,900원")]
+
+    prompt = build_challenge_prompt("무선 마우스", [], [], None, coupang_results)
+
+    assert "쿠팡 교차 확인 검색 결과(참고용)" in prompt
+    assert COUPANG_URL in prompt
+
+
+def test_challenge_instructions_treat_coupang_signal_as_soft():
+    assert "곧바로 false로 판단하지 마세요" in CHALLENGE_INSTRUCTIONS
+    assert "쿠팡" in CHALLENGE_INSTRUCTIONS
 
 
 def _offer_li(alt: str, price_text: str, cmpnyc: str, link_pcode: str = "999") -> str:
