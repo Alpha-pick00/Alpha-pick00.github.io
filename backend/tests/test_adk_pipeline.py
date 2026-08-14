@@ -1,17 +1,22 @@
+import asyncio
 import json
 
 from app.adk_pipeline import (
     _apply_challenge,
     _augment_search_query,
     _build_decision,
+    _danawa_tables_from_state,
+    _finalize_with_danawa,
     _format_price_krw,
-    _is_ambiguous,
+    _is_danawa_product_url,
     _judge_eligible_proposals,
     _merge_proposals,
     _urls_to_extract,
 )
 from app.category import CategoryClassification
-from app.schemas import ChallengeResult, ChallengeVerdict, ClarifyOptions, Proposal
+from app.price_table import build_price_table
+from app.schemas import ChallengeResult, ChallengeVerdict, Decision, Proposal
+from fetchers.danawa import parse_danawa_html
 
 COUPANG_URL = "https://coupang.com/vp/products/1"
 ELEVENST_URL = "https://11st.co.kr/products/2"
@@ -160,6 +165,44 @@ def test_apply_challenge_empty_candidates_returns_empty_list():
     assert _apply_challenge([], ChallengeResult(verdicts=[])) == []
 
 
+def test_apply_challenge_drops_expired_danawa_candidate_entirely():
+    """가격비교가 중지된(다나와가 서비스 종료로 표시하는) 페이지는 verified=False로
+    남기지 않고 결과에서 아예 빠져야 한다 — "가격미확인" 카드로 노출되면 안 된다."""
+    candidates = [
+        _merged_candidate(COUPANG_URL, ["gpt"], "상품A"),
+        _merged_candidate(ELEVENST_URL, ["gemini"], "상품B"),
+    ]
+
+    proposals = _apply_challenge(candidates, ChallengeResult(verdicts=[]), {ELEVENST_URL})
+
+    assert len(proposals) == 1
+    assert proposals[0].url == COUPANG_URL
+
+
+def test_apply_challenge_all_candidates_expired_returns_empty_list():
+    candidates = [_merged_candidate(COUPANG_URL, ["gpt"])]
+
+    proposals = _apply_challenge(candidates, ChallengeResult(verdicts=[]), {COUPANG_URL})
+
+    assert proposals == []
+
+
+# --- _is_danawa_product_url -------------------------------------------------
+
+
+def test_is_danawa_product_url_matches_prod_danawa():
+    assert _is_danawa_product_url("https://prod.danawa.com/info/?pcode=12345") is True
+
+
+def test_is_danawa_product_url_rejects_other_domains():
+    assert _is_danawa_product_url(COUPANG_URL) is False
+
+
+def test_is_danawa_product_url_rejects_none_and_empty():
+    assert _is_danawa_product_url(None) is False
+    assert _is_danawa_product_url("") is False
+
+
 # --- _build_decision (judge의 자유 텍스트보다 그라운딩된 후보 데이터를 우선) ---
 
 
@@ -215,50 +258,6 @@ def test_build_decision_returns_none_without_raw_decision():
 
 def test_build_decision_returns_none_without_proposals():
     assert _build_decision({"raw_decision": {"url": COUPANG_URL}}, []) is None
-
-
-# --- _is_ambiguous (Human-in-the-loop 트리거 기준) ------------------------
-
-
-def test_is_ambiguous_false_when_nothing_found():
-    assert _is_ambiguous("메로나", ClarifyOptions(brands=[], volumes=[], quantities=[])) is False
-
-
-def test_is_ambiguous_false_when_single_option_each():
-    options = ClarifyOptions(brands=["다이슨"], volumes=["500ml"], quantities=["1개"])
-    assert _is_ambiguous("다이슨 청소기", options) is False
-
-
-def test_is_ambiguous_true_when_multiple_brands_not_yet_in_query():
-    options = ClarifyOptions(brands=["다이슨", "삼성"], volumes=[], quantities=[])
-    assert _is_ambiguous("무선청소기", options) is True
-
-
-def test_is_ambiguous_true_when_multiple_volumes_not_yet_in_query():
-    options = ClarifyOptions(brands=["다이슨"], volumes=["64GB", "256GB"], quantities=[])
-    assert _is_ambiguous("아이패드", options) is True
-
-
-def test_is_ambiguous_true_when_multiple_quantities_not_yet_in_query():
-    options = ClarifyOptions(brands=[], volumes=[], quantities=["1개", "6개"])
-    assert _is_ambiguous("생수", options) is True
-
-
-def test_is_ambiguous_false_when_brand_already_chosen_in_query():
-    """사용자가 이미 브랜드를 골라 검색어에 반영했으면(예: HITL 재검색), 검색
-    결과가 여전히 여러 브랜드를 섞어 보여줘도 다시 묻지 않는다."""
-    options = ClarifyOptions(brands=["다이슨", "삼성"], volumes=[], quantities=[])
-    assert _is_ambiguous("무선청소기 다이슨", options) is False
-
-
-def test_is_ambiguous_false_when_volume_already_specified_in_query():
-    options = ClarifyOptions(brands=[], volumes=["500ml", "1L"], quantities=[])
-    assert _is_ambiguous("생수 500ml", options) is False
-
-
-def test_is_ambiguous_false_when_quantity_already_specified_in_query():
-    options = ClarifyOptions(brands=[], volumes=[], quantities=["10개", "30개"])
-    assert _is_ambiguous("메로나 빙그레 70mL 10개", options) is False
 
 
 # --- _augment_search_query (검색 단계 카테고리 가중치) ----------------------
@@ -328,3 +327,160 @@ def test_judge_eligible_proposals_falls_back_to_full_list_when_all_rejected():
     proposals = [_proposal(COUPANG_URL, False), _proposal(ELEVENST_URL, False)]
 
     assert _judge_eligible_proposals(proposals) == proposals
+
+
+# --- 다나와 실측가 주입(_DanawaFetchNode 포팅) ------------------------------
+# PRESERVED FROM seungmin/lsm의 run_single_debate_price_table_variant를
+# ADK 파이프라인으로 포팅(2026-08-16) - tests/test_pipeline_danawa.py의
+# _danawa_html/_offer_li와 같은 합성 HTML 픽스처 패턴을 그대로 쓴다.
+
+
+def test_merge_proposals_includes_danawa_agent():
+    raw_by_agent = {
+        "gpt": None,
+        "gemini": None,
+        "deepseek": None,
+        "danawa": json.dumps([_raw_candidate("무선 마우스", 12900, COUPANG_URL)]),
+    }
+
+    merged = _merge_proposals(raw_by_agent)
+
+    assert len(merged) == 1
+    assert merged[0]["proposed_by"] == ["danawa"]
+
+
+def test_apply_challenge_marks_danawa_sourced_candidate_verified_without_challenge_verdict():
+    """다나와 실측가는 이미 검증된 데이터라, DeepSeek 검증 결과가 하나도
+    없어도(verdicts=[]) verified=None(미검증)이 아니라 True로 강제돼야 한다."""
+    candidates = [_merged_candidate(COUPANG_URL, ["danawa"], "상품A")]
+
+    proposals = _apply_challenge(candidates, ChallengeResult(verdicts=[]))
+
+    assert proposals[0].verified is True
+    assert "다나와" in proposals[0].challenge_note
+
+
+def test_apply_challenge_danawa_consensus_candidate_ignores_deepseek_verdict():
+    """다른 에이전트와 합의(병합)돼도 proposed_by에 danawa가 있으면 verified=True다 -
+    DeepSeek이 그 URL을 우려로 표시했더라도 실측가가 있으면 덮어쓴다."""
+    candidates = [_merged_candidate(COUPANG_URL, ["gpt", "danawa"], "상품A")]
+    challenge = ChallengeResult(verdicts=[ChallengeVerdict(url=COUPANG_URL, verified=False, note="우려")])
+
+    proposals = _apply_challenge(candidates, challenge)
+
+    assert proposals[0].verified is True
+    assert proposals[0].challenge_note != "우려"
+
+
+def test_apply_challenge_non_danawa_candidate_unaffected_by_danawa_override():
+    candidates = [_merged_candidate(COUPANG_URL, ["gpt"], "상품A")]
+
+    proposals = _apply_challenge(candidates, ChallengeResult(verdicts=[]))
+
+    assert proposals[0].verified is None
+    assert proposals[0].challenge_note is None
+
+
+def _offer_li(alt: str, price_text: str, cmpnyc: str, link_pcode: str = "999") -> str:
+    return f"""
+    <li class="list-item">
+      <div class="box__logo"><img src="x.png" alt="{alt}"></div>
+      <div class="box__price"><div class="sell-price"><span class="text__num">{price_text}</span></div></div>
+      <div class="box__delivery">무료배송</div>
+      <a class="link__full-cover" href="https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc={cmpnyc}&link_pcode={link_pcode}"></a>
+    </li>
+    """
+
+
+def _danawa_html(product_name: str, offers_html: list[str]) -> str:
+    offers_block = "".join(offers_html)
+    return f"""
+    <html><body>
+    <img alt="{product_name}_이미지" src="x.png">
+    <ul class="list__mall-price">{offers_block}</ul>
+    </body></html>
+    """
+
+
+def _danawa_price_table_pair(product_name: str, offers_html: list[str], pcode: str = "1"):
+    html = _danawa_html(product_name, offers_html)
+    result = parse_danawa_html(f"https://prod.danawa.com/info?pcode={pcode}", html)
+    return build_price_table(result), result
+
+
+def test_danawa_tables_from_state_round_trips_price_table():
+    table, result = _danawa_price_table_pair(
+        "테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="1")]
+    )
+    state = {"danawa_tables": [[table.model_dump(), result]]}
+
+    restored = _danawa_tables_from_state(state)
+
+    assert len(restored) == 1
+    restored_table, restored_result = restored[0]
+    assert restored_table.product_name == "테스트 상품"
+    assert restored_result["product_name"] == "테스트 상품"
+
+
+def test_danawa_tables_from_state_empty_when_missing():
+    assert _danawa_tables_from_state({}) == []
+
+
+def test_finalize_with_danawa_sets_price_source_when_judge_chose_danawa():
+    table, result = _danawa_price_table_pair(
+        "테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="1")]
+    )
+    decision = Decision(
+        product_name="테스트 상품",
+        price="23,000원",
+        retailer="쿠팡",
+        url="https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=1",
+        reasoning="테스트",
+        chosen_agent="danawa",
+    )
+
+    updated, price_table = asyncio.run(_finalize_with_danawa(decision, [], [(table, result)]))
+
+    assert updated.price_source == "danawa_offer"
+    assert price_table is not None
+    assert price_table.product_name == "테스트 상품"
+
+
+def test_finalize_with_danawa_enriches_matching_llm_decision():
+    """judge가 이름이 일치하는 다나와 실측가를 고르지 않았어도(chosen_agent="gpt"),
+    상품명이 맞으면 enrich_decision이 가격/URL을 실측치로 덮어쓴다."""
+    table, result = _danawa_price_table_pair(
+        "테스트 상품", [_offer_li("쿠팡", "23,000", "TP40F", link_pcode="777")]
+    )
+    decision = Decision(
+        product_name="테스트 상품",
+        price="가격 정보 없음",
+        retailer="다나와",
+        url="https://example.com/guess",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    updated, price_table = asyncio.run(_finalize_with_danawa(decision, [], [(table, result)]))
+
+    assert updated.price_source == "danawa_offer"
+    assert updated.price == "23,000원"
+    assert updated.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=TP40F&link_pcode=777"
+    assert price_table is not None
+
+
+def test_finalize_with_danawa_leaves_decision_unchanged_when_no_tables():
+    decision = Decision(
+        product_name="테스트 상품",
+        price="10,000원",
+        retailer="쿠팡",
+        url="https://coupang.com/vp/products/1",
+        reasoning="테스트",
+        chosen_agent="gpt",
+    )
+
+    updated, price_table = asyncio.run(_finalize_with_danawa(decision, [], []))
+
+    assert updated.price_source == "llm_guess"
+    assert updated.url == "https://coupang.com/vp/products/1"
+    assert price_table is None

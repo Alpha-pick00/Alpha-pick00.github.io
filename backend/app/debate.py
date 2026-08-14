@@ -15,10 +15,9 @@ from .category import (
     VOLUME_RELEVANT_CATEGORIES,
     VOLUME_REQUIRES_BEVERAGE_CHECK,
     CategoryClassification,
-    classify_category,
 )
 from .config import settings
-from .intent import has_count_spec, has_volume_spec, is_bulk_query, needs_clarification
+from .intent import is_bulk_query, is_non_product_chitchat, needs_clarification
 from .schemas import (
     AgentCandidates,
     BrandOption,
@@ -52,15 +51,13 @@ def _compute_price_range(options: list[BrandOption]) -> PriceRange | None:
 
 
 def _any_llm_key_configured() -> bool:
-    return bool(
-        settings.openai_api_key
-        or settings.gemini_api_key
-        or settings.deepseek_api_key
-        or settings.anthropic_api_key
-    )
+    return bool(settings.qwen_api_key or settings.groq_api_key or settings.deepseek_api_key)
 
 
 async def run_debate(query: str) -> DecideResponse | BulkDecideResponse | ClarifyResponse:
+    if is_non_product_chitchat(query):
+        # 검색/LLM 호출을 아예 안 하고 즉시 실패한다 - is_non_product_chitchat 참고.
+        raise RuntimeError(NO_CANDIDATE_ERROR)
     if is_bulk_query(query):
         return await run_bulk_debate(query)
     if not _any_llm_key_configured():
@@ -82,6 +79,9 @@ async def run_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
     다르고(브랜드 목록 선택, 가격대별 정리) 단계를 쪼갤 만한 지점이 마땅치 않아,
     최종 결과 하나만 "final" 이벤트로 보낸다 — 프론트는 이벤트 타입 하나만 보고
     두 경우 다 처리하면 된다."""
+    if is_non_product_chitchat(query):
+        yield {"type": "error", "message": NO_CANDIDATE_ERROR}
+        return
     if is_bulk_query(query):
         yield {"type": "final", "result": (await run_bulk_debate(query)).model_dump()}
         return
@@ -103,65 +103,26 @@ async def run_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
         yield event
 
 
-def _dedupe_case_insensitive(items: list[str]) -> list[str]:
-    """검색 결과가 여러 판매처에서 오다 보니 같은 값이 대소문자만 다르게
-    뽑히는 경우가 있다("APPLE" vs "Apple") — 실제로는 같은 선택지인데
-    사용자에게 중복으로 보여주거나 애매함 판정을 오탐시키지 않도록 정리한다.
-    처음 나온 표기를 그대로 유지하고 순서도 보존한다."""
-    seen: set[str] = set()
-    deduped = []
-    for item in items:
-        key = item.casefold()
-        if key not in seen:
-            seen.add(key)
-            deduped.append(item)
-    return deduped
-
-
-def _strip_resolved_options(query: str, options: ClarifyOptions) -> ClarifyOptions:
-    """이미 질의 텍스트에 반영된 차원(브랜드/제품/용량/개수)은 옵션 목록에서
-    제거한다. 이걸 안 하면, 사용자가 브랜드를 골라 재검색해도 이번 라운드
-    검색 결과에서 브랜드가 다시 여러 개로 뽑힐 수 있어(옵션 추출은 매번 검색
-    결과를 새로 보고 하는 raw 추출이라 사용자가 이미 고른 값을 모름) 프론트가
-    "옵션이 2개 이상"이라는 이유만으로 이미 답한 선택 단계를 또 보여주게 된다.
-    다만 이건 텍스트 매칭 기반의 보조 방어선이고, 실제로 같은 단계가 다시
-    뜨지 않는다는 보장은 프론트의 resolvedSteps 추적(Hero.tsx)이 한다 — 여긴
-    라운드마다 프론트에 내려주는 옵션 자체를 최대한 깔끔하게 정리해두는 역할."""
-    brand_resolved = any(b.casefold() in query.casefold() for b in options.brands)
-    product_resolved = any(p.casefold() in query.casefold() for p in options.products)
-    return ClarifyOptions(
-        brands=[] if brand_resolved else options.brands,
-        products=[] if product_resolved else options.products,
-        volumes=[] if has_volume_spec(query) else options.volumes,
-        quantities=[] if has_count_spec(query) else options.quantities,
-    )
-
-
 _MAX_CLARIFY_ROUNDS = 2
-# 브랜드/제품/용량/개수 4축 중 2개가 이미 질의 텍스트에 반영됐으면(=사용자가
-# Human-in-the-loop을 2라운드 이상 거쳤으면) 더 묻지 않고 바로 propose/challenge/
-# judge 파이프라인으로 넘긴다. 라운드마다 검색 결과가 바뀌면서 이전엔 안 갈리던
-# 축(예: 브랜드+개수까지 정했는데 이번 라운드엔 제품 라인이 새로 갈림)이 뒤늦게
-# 애매해지는 경우가 있는데, 이걸 그대로 다 물어보면 사용자는 몇 라운드나 답했는데도
-# 계속 새 선택 화면이 뜨는 것처럼 느껴진다 — 남은 후보를 좁히는 건 그 시점부턴
-# judge가 근거(그라운딩/검증)로 판단하게 맡긴다.
-
-
-def _resolved_dimension_count(query: str, raw_options: ClarifyOptions) -> int:
-    """이번 라운드에 새로 뽑힌 옵션 중 이미 질의 텍스트에 반영된(=사용자가 이미
-    답한) 축이 몇 개인지 센다. _strip_resolved_options와 같은 텍스트 매칭 판정을
-    쓰되, 스트리핑 전에 호출해야 한다(스트리핑 후엔 이미 다 비워져 있어 셀 수 없음)."""
-    brand_resolved = any(b.casefold() in query.casefold() for b in raw_options.brands)
-    product_resolved = any(p.casefold() in query.casefold() for p in raw_options.products)
-    volume_resolved = has_volume_spec(query)
-    quantity_resolved = has_count_spec(query)
-    return sum([brand_resolved, product_resolved, volume_resolved, quantity_resolved])
+# facet 중 2개 이상이 이미 질의 텍스트에 반영됐으면(=사용자가 Human-in-the-loop을
+# 2라운드 이상 거쳤으면) 더 묻지 않고 바로 propose/challenge/judge 파이프라인으로
+# 넘긴다. 라운드마다 검색 결과가 바뀌면서 이전엔 안 갈리던 축이 뒤늦게 애매해지는
+# 경우가 있는데, 이걸 그대로 다 물어보면 사용자는 몇 라운드나 답했는데도 계속 새
+# 선택 화면이 뜨는 것처럼 느껴진다 — 남은 후보를 좁히는 건 그 시점부턴 judge가
+# 근거(그라운딩/검증)로 판단하게 맡긴다.
 
 
 def _strip_category_irrelevant_options(
     classification: CategoryClassification, options: ClarifyOptions
 ) -> ClarifyOptions:
-    """분류된 카테고리에서 용량/수량 축이 무의미하면 그 옵션은 clarify에서 아예
+    """PRESERVED FROM seungmin/lsm - 고정 4축(브랜드/제품/용량/개수) 전용
+    카테고리 필터였다. 2026-08-16 _extract_clarify_options가 facet 기반으로
+    통합되며 더 이상 호출되지 않는다(facet 추출 프롬프트 자체가 이미 검색
+    결과에 의미 있는 축만 뽑도록 유도해 대체로 불필요해졌다고 판단) - 라이브에서
+    무의미한 facet이 실제로 섞여 나오는 게 확인되면 라벨 패턴 매칭으로 같은
+    역할을 facet에 대해 다시 구현할 근거 코드로 남겨둔다.
+
+    분류된 카테고리에서 용량/수량 축이 무의미하면 그 옵션은 clarify에서 아예
     빼서, 사용자가 해당 없는 선택지 중 하나를 억지로 골라 상품 매핑이 틀어지는
     걸 막는다. 용량과 수량은 서로 다른 카테고리 집합에 걸리는 독립된 축이라
     각각 따로 판단한다(예: 도서는 수량('권')은 의미 있어도 용량은 없음). 분류
@@ -217,13 +178,13 @@ async def run_single_debate_price_table_variant(query: str) -> DecideResponse:
     (adk_pipeline.py: refine/challenge/extract_pages/judge) instead, per the
     2026-08 통합 decision to keep that as the canonical 'AI 오케스트레이션'.
     This direct asyncio.gather implementation is kept callable and fully
-    tested because its PART 4-2 behavior — injecting price_table_module's
-    danawa A등급 최저가 candidates directly into the judge's candidate pool
+    tested because it exercises the same price_table_module functions
     (build_danawa_candidates/pick_primary/enrich_decision/
-    exclude_price_comparison_site_as_final_pick below) — has NOT been ported
-    into adk_pipeline.py yet. TODO(follow-up PR): graft that same danawa
-    candidate injection into adk_pipeline.py's propose/judge stage, then
-    retire this function.
+    exclude_price_comparison_site_as_final_pick below) that adk_pipeline's
+    _DanawaFetchNode/_finalize_with_danawa now also use (ported 2026-08-16) -
+    this variant predates that port and is kept only because it still tests
+    a distinct code path (direct per-module .propose() calls instead of ADK
+    LlmAgent nodes).
     """
     try:
         results = await search_module.search(query)
@@ -490,13 +451,13 @@ def _filter_items_by_extra_terms(
     return filtered if len(filtered) >= MIN_FILTERED_CLARIFY_ITEMS else items
 
 
-def _items_for_brand(brand: str, items: list[danawa_search.DanawaSearchItem]) -> list[str]:
+def _items_for_brand(brand: str, names: list[str]) -> list[str]:
     nb = _normalize_for_match(brand)
-    return [item["product_name"] for item in items if nb in _normalize_for_match(item["product_name"])]
+    return [name for name in names if nb in _normalize_for_match(name)]
 
 
 async def _enrich_facets_per_brand(
-    facets: list[ClarifyFacet], items: list[danawa_search.DanawaSearchItem], query: str
+    facets: list[ClarifyFacet], names: list[str], query: str
 ) -> list[ClarifyFacet]:
     """브랜드가 여러 개 섞인 채로 한 번에 facet을 뽑으면, DeepSeek이 각 facet마다
     총 MAX_OPTIONS_PER_FACET(6)개 안에서 모든 브랜드가 경쟁한다 - 다나와 검색
@@ -510,7 +471,10 @@ async def _enrich_facets_per_brand(
     다르게 이름 붙어 병합이 안 되므로, required_labels로 원래 라벨을 그대로 쓰라고
     강제한다(deepseek.extract_facets_from_names 참고). 그래도 안 맞으면(모델이
     지시를 어기면) 그 라벨은 그냥 원래 결과 그대로 둔다 - 실패해도 기존 동작보다
-    나빠지지 않는다."""
+    나빠지지 않는다.
+
+    names는 상품명 문자열 목록이면 출처는 무관하다(2026-08-16, _extract_facets
+    통합 - 다나와 직접 검색 결과든 Tavily 검색 결과 제목이든 상관없음)."""
     brand_facet = next((f for f in facets if deepseek._BRAND_LABEL_PATTERN.search(f.label)), None)
     if brand_facet is None or len(brand_facet.options) < 2:
         return facets
@@ -523,7 +487,7 @@ async def _enrich_facets_per_brand(
         per_brand_facets = await asyncio.gather(
             *(
                 deepseek.extract_facets_from_names(
-                    query, _items_for_brand(brand, items), required_labels=other_labels
+                    query, _items_for_brand(brand, names), required_labels=other_labels
                 )
                 for brand in brand_facet.options
             )
@@ -555,29 +519,53 @@ async def _enrich_facets_per_brand(
     return enriched
 
 
-def _attach_facet_crossfilter(
-    facets: list[ClarifyFacet], items: list[danawa_search.DanawaSearchItem]
-) -> list[ClarifyFacet]:
+def _build_facet_value_incidence(facets: list[ClarifyFacet], names: list[str]) -> dict[str, set[int]]:
+    """상품명 하나는 브랜드·시리즈·용량 등 여러 facet 값을 동시에 잇는
+    하이퍼엣지다 - 이 dict(facet 값(정규화) -> 그 값이 등장하는 상품명 인덱스
+    집합)가 곧 그 (facet 값 정점) x (상품 하이퍼엣지) incidence 구조다.
+    _attach_facet_crossfilter/_facet_centrality가 공유하는 빌더 - 두 값이
+    같은 상품에 같이 등장하는지(=incidence 집합의 교집합이 있는지) 판정하는
+    데 쓰인다."""
+    normalized_names = [_normalize_for_match(name) for name in names]
+    incidence: dict[str, set[int]] = {}
+    for facet in facets:
+        for option in facet.options:
+            key = _normalize_for_match(option)
+            if key not in incidence:
+                incidence[key] = {i for i, n in enumerate(normalized_names) if key in n}
+    return incidence
+
+
+def _attach_facet_crossfilter(facets: list[ClarifyFacet], names: list[str]) -> list[ClarifyFacet]:
     """facet 쌍 전부(브랜드 한정이 아니다) 사이의 연관을 상품명에서 직접 계산해
     붙인다(사용자 요청, 2026-08-13: "삼성전자를 누르면 시리즈에 삼성전자에 관한것만"
     -> 2026-08-14: "시리즈에 초코파이 바나나를 골랐다면 용량에 없는것들은
     선택할수 없게" - 브랜드 특수 케이스였던 걸 모든 facet 쌍으로 일반화했다).
-    검색을 다시 하지 않고, 이미 받아온 items(상품명)만으로 "이 두 옵션이 같은
+    검색을 다시 하지 않고, 이미 받아온 names(상품명)만으로 "이 두 옵션이 같은
     상품명에 같이 등장하는가"를 모든 (선택 가능한 facet, 대상 facet) 쌍에 대해
     계산한다 - 그래서 프론트가 어느 facet에서든 값을 고르는 순간(그 자체로는
     아직 검색을 트리거하지 않는다) 아직 안 고른 다른 facet들의 보이는 옵션만
-    즉시 좁혀 보여줄 수 있다(여러 개를 고르면 교집합은 프론트가 계산한다)."""
+    즉시 좁혀 보여줄 수 있다(여러 개를 고르면 교집합은 프론트가 계산한다).
+
+    2026-08-16, 하이퍼그래프 incidence 구조로 재구성 - "같은 상품명에 같이
+    등장하는가"를 매번 전체 상품명을 재스캔해 판정하는 대신(브루트포스
+    O(facet² x 선택지 x 선택지 x 상품명)), _build_facet_value_incidence로
+    한 번만 만든 값→상품 인덱스 집합의 교집합 유무로 판정한다 - 두 판정은
+    수학적으로 동치(어떤 상품명 i가 두 값을 모두 포함 ⇔ 두 값의 incidence
+    집합이 겹침)라 결과는 그대로다."""
     if len(facets) < 2:
         return facets
 
-    normalized_names = [_normalize_for_match(item["product_name"]) for item in items]
+    incidence = _build_facet_value_incidence(facets, names)
 
     def _relevant(selector_value: str, target_options: list[str]) -> list[str]:
-        nv = _normalize_for_match(selector_value)
+        selector_idx = incidence.get(_normalize_for_match(selector_value), set())
+        if not selector_idx:
+            return []
         return [
             option
             for option in target_options
-            if any(nv in name and _normalize_for_match(option) in name for name in normalized_names)
+            if incidence.get(_normalize_for_match(option), set()) & selector_idx
         ]
 
     updated = []
@@ -600,9 +588,10 @@ def _attach_facet_crossfilter(
 # 상세검색 facet을 넓은(거시적) 기준부터 좁은(미시적) 기준 순서로 보여주기 위한
 # 우선순위 힌트(사용자 요청, 2026-08-14: "거시적인 선택에서 미시적인 선택으로
 # 점차 줄여나가게"). 라벨에 이 키워드가 포함되면 그 순번을 쓴다 - 못 찾은
-# 라벨은 맨 뒤로(기존 순서 유지, 정렬은 stable). 실제 좁히기 자체는
-# _attach_facet_crossfilter가 순서와 무관하게 다 계산해두므로, 이건 어떤 순서로
-# "물어보면" 자연스러운지에 대한 화면 표시 순서일 뿐이다.
+# 라벨은 _facet_sort_key가 incidence 기반 중심성으로 다시 정렬한다(아래).
+# 실제 좁히기 자체는 _attach_facet_crossfilter가 순서와 무관하게 다
+# 계산해두므로, 이건 어떤 순서로 "물어보면" 자연스러운지에 대한 화면 표시
+# 순서일 뿐이다.
 _FACET_ORDER_HINTS = [
     "카테고리", "브랜드", "제조사", "시리즈", "모델", "타입", "종류",
     "용량", "무게", "사이즈", "용기형태", "구매유형", "특징", "색상",
@@ -614,6 +603,28 @@ def _facet_display_order(facet: ClarifyFacet) -> int:
         if hint in facet.label:
             return i
     return len(_FACET_ORDER_HINTS)
+
+
+def _facet_centrality(facet: ClarifyFacet, incidence: dict[str, set[int]]) -> float:
+    """이 facet의 선택지들이 다른 상품들과 평균적으로 얼마나 폭넓게
+    공존하는가(incidence 그래프에서의 평균 degree) - 넓은(거시적) 축일수록
+    선택지 하나하나가 더 많은 상품에 걸쳐 등장하는 경향이 있다는 근사다.
+    _facet_sort_key가 _FACET_ORDER_HINTS로 못 잡은 facet들 사이의
+    타이브레이커로만 쓴다."""
+    if not facet.options:
+        return 0.0
+    return sum(len(incidence.get(_normalize_for_match(o), set())) for o in facet.options) / len(facet.options)
+
+
+def _facet_sort_key(facet: ClarifyFacet, incidence: dict[str, set[int]]) -> tuple[int, float]:
+    """_facet_display_order(힌트 기반)가 우선이고, 힌트가 못 잡은 facet들
+    사이에서만 incidence 중심성(내림차순)으로 다시 가른다 - 힌트가 이미
+    잡은 facet은 중심성을 아예 안 보므로(표본이 작을 때 중심성 신호가
+    약해지는 문제로부터 안전) 기존 정렬 결과가 그대로 보존된다."""
+    order = _facet_display_order(facet)
+    if order != len(_FACET_ORDER_HINTS):
+        return (order, 0.0)
+    return (order, -_facet_centrality(facet, incidence))
 
 
 def _apply_persona_ordering(facets: list[ClarifyFacet], persona: dict[str, str]) -> list[ClarifyFacet]:
@@ -638,6 +649,24 @@ def _apply_persona_ordering(facets: list[ClarifyFacet], persona: dict[str, str])
     return reordered
 
 
+async def _extract_facets(
+    query: str, names: list[str], persona: dict[str, str] | None = None
+) -> list[ClarifyFacet]:
+    """상품명 목록(다나와 직접 검색이든 Tavily 검색 결과 제목이든, 출처
+    무관)에서 facet을 뽑는 공유 파이프라인(2026-08-16, README "장기 과제"
+    후속) - check_clarify_facets(다나와 직접 검색)와 adk_pipeline의 내부
+    안전망(_extract_clarify_options, Tavily 결과)이 이전엔 서로 다른 추출
+    로직(동적 facet vs 고정 4축)을 썼는데, 프론트가 이미 facet 렌더링을
+    완전히 지원해서 별도 UI 변경 없이 하나로 합칠 수 있었다."""
+    facets = await deepseek.extract_facets_from_names(query, names)
+    facets = await _enrich_facets_per_brand(facets, names, query)
+    facets = _attach_facet_crossfilter(facets, names)
+    incidence = _build_facet_value_incidence(facets, names)
+    facets = sorted(facets, key=lambda f: _facet_sort_key(f, incidence))
+    facets = _apply_persona_ordering(facets, persona or {})
+    return facets
+
+
 async def check_clarify_facets(
     query: str, base_query: str | None = None, persona: dict[str, str] | None = None
 ) -> ClarifyResponse:
@@ -655,6 +684,13 @@ async def check_clarify_facets(
     대부분의(구체적인) 검색어는 이 함수를 호출해도 search.danawa.com 요청도,
     DeepSeek 호출도 전혀 없이 즉시 끝난다.
 
+    "하이"처럼 상품과 무관한 인사말/잡담도 같은 이유로 즉시 빈 결과를 반환한다
+    (사용자 요청, 2026-08-15: "상품으로 인식못하는 말을 들으면 처리해야하는
+    속도를 높여줘") - 이런 입력은 needs_clarification()이 짧은 검색어 휴리스틱에
+    걸려 True가 되므로, 이 가드가 없으면 search.danawa.com의 10초 Crawl-delay와
+    DeepSeek facet 추출까지 그대로 타 버린다(프론트가 /decide/stream보다 먼저
+    이 엔드포인트를 호출하므로 실제 체감 지연의 대부분이 여기서 생겼다).
+
     base_query(2026-08-13, 속도 개선) - 여러 라운드에 걸쳐 좁혀나갈 때(예: "핸드폰"
     -> "핸드폰 삼성전자" -> ...) 프론트가 그 드릴다운의 맨 처음 검색어를 실어 보낸다.
     query 대신 base_query로 검색하면 search.danawa.com의 1시간 캐시(fetchers.
@@ -662,7 +698,7 @@ async def check_clarify_facets(
     query에서 base_query에 없는 단어들로 로컬 필터링해 재사용한다 - 실제 최종
     가격 조회(run_danawa_only_debate*)는 이 캐시/필터링을 안 쓰고 항상 정확한
     검색을 새로 한다."""
-    if not needs_clarification(query):
+    if not needs_clarification(query) or is_non_product_chitchat(query):
         return ClarifyResponse(query=query, options=ClarifyOptions())
 
     search_query = base_query if base_query and base_query.strip() else query
@@ -672,12 +708,36 @@ async def check_clarify_facets(
     if base_query and base_query.strip() and base_query.strip() != query.strip():
         items = _filter_items_by_extra_terms(items, query, base_query)
     names = [item["product_name"] for item in items]
-    facets = await deepseek.extract_facets_from_names(query, names)
-    facets = await _enrich_facets_per_brand(facets, items, query)
-    facets = _attach_facet_crossfilter(facets, items)
-    facets = sorted(facets, key=_facet_display_order)
-    facets = _apply_persona_ordering(facets, persona or {})
+    facets = await _extract_facets(query, names, persona)
     return ClarifyResponse(query=query, options=ClarifyOptions(facets=facets))
+
+
+def _facet_resolved(query: str, facet: ClarifyFacet) -> bool:
+    """이 facet의 옵션 중 하나라도 이미 질의 텍스트에 그대로 들어있으면
+    (=사용자가 이미 답한 값이면) True - _strip_resolved_options가 브랜드/제품에
+    쓰던 텍스트 매칭 판정을 라벨이 고정되지 않은 facet에 대해 일반화한 것."""
+    return any(o.casefold() in query.casefold() for o in facet.options)
+
+
+def _resolved_facet_count(query: str, facets: list[ClarifyFacet]) -> int:
+    """_resolved_dimension_count의 facet 버전 - 이번 라운드에 새로 뽑힌 facet
+    중 이미 질의 텍스트에 반영된(=사용자가 이미 답한) 게 몇 개인지 센다.
+    스트리핑 전에 호출해야 한다(스트리핑 후엔 이미 다 비워져 있어 셀 수 없음)."""
+    return sum(1 for f in facets if _facet_resolved(query, f))
+
+
+def _strip_resolved_facets(query: str, facets: list[ClarifyFacet]) -> list[ClarifyFacet]:
+    """_strip_resolved_options의 facet 버전 - 이미 질의에 반영된 facet은
+    선택지 목록에서 아예 뺀다(같은 질문을 다시 보여주지 않기 위한 보조
+    방어선 - _strip_resolved_options 참고)."""
+    return [f for f in facets if not _facet_resolved(query, f)]
+
+
+def _is_ambiguous_facets(query: str, facets: list[ClarifyFacet]) -> bool:
+    """_is_ambiguous(adk_pipeline.py)의 facet 버전 - facet 중 하나라도 옵션이
+    2개 이상이고 아직 질의에 반영되지 않았으면 사용자에게 물어볼 만큼
+    애매하다고 본다."""
+    return any(len(f.options) > 1 and not _facet_resolved(query, f) for f in facets)
 
 
 def _filter_listing_pages(results: list[SearchResult]) -> list[SearchResult]:
@@ -692,29 +752,33 @@ def _filter_listing_pages(results: list[SearchResult]) -> list[SearchResult]:
 
 
 async def _extract_clarify_options(query: str, results: list[SearchResult]) -> ClarifyResponse | None:
-    """검색 결과에서 브랜드/제품/용량/수량을 뽑아본다. 아무것도 못 찾으면 None.
+    """검색 결과 제목에서 facet(임의 기준)을 뽑아본다. 아무것도 못 찾으면 None.
     이미 가져온 검색 결과를 그대로 받아 재검색하지 않는다 — run_single_debate가
     전체 실패했을 때 같은 결과로 이 함수를 다시 시도하는 용도로도 쓰인다.
-    카테고리 분류(Gemini)는 옵션 추출(GPT)과 동시에 실행해 지연 시간을 늘리지
-    않는다."""
+
+    2026-08-16부터 check_clarify_facets(다나와 직접 검색 기반)와 같은 facet
+    추출 파이프라인(_extract_facets)을 쓴다(README "장기 과제" 후속) - 이전엔
+    고정 4축(브랜드/제품/용량/개수)을 Qwen으로 따로 뽑았는데, 프론트가 이미
+    facet 렌더링을 완전히 지원해서(교차 필터링·검색창·페르소나 배지) 별도
+    UI 변경 없이 바로 통합할 수 있었다. 입력은 여기 있는 Tavily 검색 결과
+    제목을 그대로 쓴다 - check_clarify_facets처럼 다나와를 새로 검색하지
+    않는다(이미 검색 결과를 들고 있어서 네트워크 호출을 하나 더 늘릴 이유가
+    없다).
+
+    카테고리 기반 축 관련성 필터링(_strip_category_irrelevant_options)은 이번
+    통합에서 안 옮겼다 - facet 추출 프롬프트(build_facet_clarify_prompt) 자체가
+    이미 검색 결과에 실제로 의미 있는 축만 뽑도록 유도해서, 무의미한 facet이
+    거의 안 생길 가능성이 높다. 실제로 문제가 확인되면 라벨 패턴 매칭으로
+    후속 추가한다."""
     filtered_results = _filter_listing_pages(results)
-    raw, classification = await asyncio.gather(
-        gpt.extract_options(query, filtered_results),
-        classify_category(query, filtered_results),
-    )
-    options = ClarifyOptions(
-        brands=_dedupe_case_insensitive(raw.brands),
-        products=_dedupe_case_insensitive(raw.products),
-        volumes=_dedupe_case_insensitive(raw.volumes),
-        quantities=_dedupe_case_insensitive(raw.quantities),
-    )
-    if _resolved_dimension_count(query, options) >= _MAX_CLARIFY_ROUNDS:
+    names = [r.title for r in filtered_results]
+    facets = await _extract_facets(query, names)
+    if _resolved_facet_count(query, facets) >= _MAX_CLARIFY_ROUNDS:
         return None
-    options = _strip_resolved_options(query, options)
-    options = _strip_category_irrelevant_options(classification, options)
-    if not (options.brands or options.products or options.volumes or options.quantities):
+    facets = _strip_resolved_facets(query, facets)
+    if not facets:
         return None
-    return ClarifyResponse(query=query, options=options)
+    return ClarifyResponse(query=query, options=ClarifyOptions(facets=facets))
 
 
 async def run_single_debate(

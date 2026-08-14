@@ -2,7 +2,7 @@
 
 clarify(Human-in-the-loop) 단계에서 브랜드/제품/용량/수량 4축을 모든 카테고리에
 똑같이 물어보면, 그 카테고리엔 없는 축까지 선택지로 뜨는 문제가 있었다. 이
-모듈은 Gemini로 질의를 대분류 하나로 판별해, 용량·수량이 실제로 의미 있는
+모듈은 LLM(Groq)으로 질의를 대분류 하나로 판별해, 용량·수량이 실제로 의미 있는
 카테고리에서만 그 축을 clarify 옵션에 남기는 데 쓰인다.
 
 용량(mL/L/g/kg)과 수량(묶음 개수)은 서로 독립된 축이라 따로 판단한다 —
@@ -18,8 +18,7 @@ QUANTITY_RELEVANT_CATEGORIES를 별도 집합으로 둔다.
 is_beverage 여부를 함께 판별해 용량 축을 한 단계 더 좁힌다(수량은 음료가 아닌
 식품에도 여전히 의미 있는 축이라 그대로 둔다)."""
 
-from google import genai
-from google.genai import types
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from .agents.base import format_results_block, parse_json_object
@@ -86,9 +85,6 @@ CLASSIFY_INSTRUCTIONS = (
     f"카테고리 목록:\n{_CATEGORY_LIST_TEXT}"
 )
 
-JSON_CONFIG = types.GenerateContentConfig(response_mime_type="application/json")
-
-
 class CategoryClassification(BaseModel):
     category: str | None = None
     is_beverage: bool = False
@@ -105,13 +101,12 @@ async def classify_category(query: str, search_results: list[SearchResult]) -> C
     호출부는 이를 '분류 불확실 → 기존처럼 전 축 유지'로 안전하게 처리한다
     (용량/수량을 잘못 숨기는 것보다 안 물어볼 걸 한 번 더 묻는 게 낫다)."""
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=build_classify_prompt(query, search_results),
-            config=JSON_CONFIG,
+        client = AsyncOpenAI(api_key=settings.groq_api_key, base_url=settings.groq_api_base)
+        response = await client.chat.completions.create(
+            model=settings.groq_model,
+            messages=[{"role": "user", "content": build_classify_prompt(query, search_results)}],
         )
-        data = parse_json_object(response.text or "")
+        data = parse_json_object(response.choices[0].message.content or "")
         category = data.get("category")
         category = category if category in CATEGORIES else None
         is_beverage = bool(data.get("is_beverage")) if category == "식품" else False

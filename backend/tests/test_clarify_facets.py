@@ -9,8 +9,8 @@ import asyncio
 
 from fastapi.testclient import TestClient
 
-from app.debate import check_clarify_facets, run_danawa_only_debate_stream, run_debate
-from app.intent import needs_clarification
+from app.debate import check_clarify_facets, run_danawa_only_debate_stream, run_debate, run_debate_stream
+from app.intent import is_non_product_chitchat, needs_clarification
 from app.main import app
 from app.schemas import ClarifyFacet
 
@@ -45,6 +45,77 @@ def test_needs_clarification_false_for_bulk_spec_query():
 def test_needs_clarification_still_true_for_buy_intent_phrase():
     # 기존(2026-08-10 이전) 동작 - "사고싶다"류 문구는 길이/숫자와 무관하게 그대로 유지.
     assert needs_clarification("이거 진짜 사고 싶은데 뭐가 좋을까") is True
+
+
+# -- intent.is_non_product_chitchat: 인사말/잡담 즉시 감지(속도 개선) -------------
+
+
+def test_is_non_product_chitchat_true_for_bare_greeting():
+    assert is_non_product_chitchat("하이") is True
+    assert is_non_product_chitchat("안녕하세요") is True
+    assert is_non_product_chitchat("Hi") is True
+    assert is_non_product_chitchat("ㅋㅋㅋ") is True
+
+
+def test_is_non_product_chitchat_false_for_real_short_product_query():
+    # "테스트 상품"은 기존 테스트 스위트에서 "못 찾은 상품 검색어"로 쓰이는
+    # 문구다 - 잡담으로 오탐하면 안 된다(needs_clarification은 여전히 True).
+    assert is_non_product_chitchat("테스트 상품") is False
+    assert is_non_product_chitchat("음료수") is False
+    assert is_non_product_chitchat("아이폰 15") is False
+
+
+def test_is_non_product_chitchat_false_when_greeting_word_is_substring():
+    # 전체 문자열이 인사말과 정확히 일치할 때만 True - 부분 문자열은 오탐하지 않는다.
+    assert is_non_product_chitchat("하이마트 에어컨") is False
+
+
+# -- 회귀: 잡담 입력은 검색/LLM 호출 없이 즉시 실패한다(속도 개선) -----------------
+
+
+def test_check_clarify_facets_returns_empty_immediately_for_greeting(monkeypatch):
+    async def _boom_search(query, limit=3):
+        raise AssertionError("잡담 입력인데 search_danawa가 호출됐다")
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _boom_search)
+
+    async def _boom_facets(query, names):
+        raise AssertionError("잡담 입력인데 extract_facets_from_names가 호출됐다")
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _boom_facets)
+
+    result = asyncio.run(check_clarify_facets("하이"))
+
+    assert result.options.facets == []
+
+
+def test_run_debate_stream_fails_fast_for_greeting_without_any_search_or_llm_call(monkeypatch):
+    async def _boom_search(query, max_results=12):
+        raise AssertionError("잡담 입력인데 search가 호출됐다")
+
+    monkeypatch.setattr("app.search.search", _boom_search)
+    monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: True)
+
+    async def _collect():
+        return [event async for event in run_debate_stream("안녕하세요")]
+
+    events = asyncio.run(_collect())
+
+    assert events == [{"type": "error", "message": "적절한 상품 후보를 찾지 못했습니다."}]
+
+
+def test_run_debate_raises_immediately_for_greeting(monkeypatch):
+    async def _boom_search(query, max_results=12):
+        raise AssertionError("잡담 입력인데 search가 호출됐다")
+
+    monkeypatch.setattr("app.search.search", _boom_search)
+    monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: True)
+
+    try:
+        asyncio.run(run_debate("하이"))
+        raise AssertionError("RuntimeError가 발생해야 한다")
+    except RuntimeError as exc:
+        assert str(exc) == "적절한 상품 후보를 찾지 못했습니다."
 
 
 # -- app.agents.deepseek.extract_facets_from_names ---------------------------
@@ -183,6 +254,74 @@ def test_extract_facets_from_names_drops_facets_with_only_one_distinct_option(mo
     monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
 
     facets = asyncio.run(deepseek.extract_facets_from_names("핸드폰", ["삼성전자 갤럭시S25", "APPLE 아이폰17"]))
+
+    labels = {f.label for f in facets}
+    assert labels == {"브랜드"}
+
+
+def test_extract_facets_from_names_strips_purchase_type_terms_from_container_form(monkeypatch):
+    """사용자 리포트(2026-08-14: 음료 검색에서 용기형태 선택지로 "업소용"이
+    나옴 - 페트/캔이 나와야 정상) - LLM이 구매유형 수식어를 용기형태로 잘못
+    묶어 보내도, "업소용" 같은 알려진 비-용기형태 값은 코드에서 걸러내야 한다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = '{"facets": {"용기형태": ["업소용", "페트", "캔"]}}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    names = ["코카콜라 업소용 페트 1.5L", "코카콜라 캔 250ml"]
+    facets = asyncio.run(deepseek.extract_facets_from_names("콜라", names))
+
+    assert len(facets) == 1
+    assert facets[0].label == "용기형태"
+    assert "업소용" not in facets[0].options
+    assert set(facets[0].options) == {"페트", "캔"}
+
+
+def test_extract_facets_from_names_drops_container_form_facet_when_only_purchase_type_terms(monkeypatch):
+    """용기형태로 뽑힌 값 전부가 알려진 비-용기형태 값이면(필터 후 1개 이하만
+    남으면), 애초에 값이 하나뿐인 기준과 동일하게 그 facet 자체를 버려야 한다."""
+    from app.agents import deepseek
+
+    class _FakeMessage:
+        content = '{"facets": {"용기형태": ["업소용", "가정용"], "브랜드": ["코카콜라", "펩시"]}}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr(deepseek, "_client", lambda: _FakeClient())
+
+    facets = asyncio.run(deepseek.extract_facets_from_names("콜라", ["코카콜라 업소용", "펩시 가정용"]))
 
     labels = {f.label for f in facets}
     assert labels == {"브랜드"}
@@ -555,14 +694,16 @@ def test_run_danawa_only_debate_stream_never_calls_deepseek_facets_even_for_shor
 def test_run_debate_routes_to_danawa_only_when_no_llm_key_even_for_short_query(monkeypatch):
     """2026-08-12에 needs_clarification()을 넓히면서 드러난 순서 버그의 회귀
     테스트 - LLM 키가 하나도 없으면(_any_llm_key_configured False) "테스트 상품"
-    처럼 이제 clarify로도 보이는 짧은 검색어라도 run_clarify(GPT 호출)로 새지
-    않고 그대로 run_danawa_only_debate로 가야 한다."""
+    처럼 이제 clarify로도 보이는 짧은 검색어라도 run_clarify(facet 추출 호출)로
+    새지 않고 그대로 run_danawa_only_debate로 가야 한다. run_clarify는
+    _extract_clarify_options를 거쳐 2026-08-16부터 deepseek.extract_facets_from_names를
+    부른다(예전엔 gpt.extract_options였음 - facet 통합으로 대상이 바뀜)."""
     monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: False)
 
-    async def _boom_gpt(query, results):
-        raise AssertionError("LLM 키가 없는데 gpt.extract_options이 호출됐다")
+    async def _boom_facets(query, product_names, required_labels=None):
+        raise AssertionError("LLM 키가 없는데 deepseek.extract_facets_from_names이 호출됐다")
 
-    monkeypatch.setattr("app.agents.gpt.extract_options", _boom_gpt)
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _boom_facets)
 
     async def _search_danawa(query, limit=3):
         return []

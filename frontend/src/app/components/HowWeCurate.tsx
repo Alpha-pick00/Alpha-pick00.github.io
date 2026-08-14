@@ -16,7 +16,7 @@ const steps = [
   {
     icon: Users,
     title: '3개 모델이 각자 제안',
-    description: 'ChatGPT · Gemini · DeepSeek가 같은 검색 결과를 보고 독립적으로 상품과 가격, 판매처, 선택 이유를 제안합니다.',
+    description: 'Qwen · Gemini · DeepSeek가 같은 검색 결과를 보고 독립적으로 상품과 가격, 판매처, 선택 이유를 제안합니다.',
   },
   {
     icon: ShieldCheck,
@@ -89,7 +89,7 @@ export const HowWeCurate = () => {
           <svg
             viewBox="0 0 1460 380"
             role="img"
-            aria-label="검색어가 들어오면 먼저 Gemini가 질의를 다듬고, 백엔드가 Tavily를 통해 다나와를 검색한다. 그 결과를 ChatGPT, Gemini, DeepSeek 세 모델에게 동시에 전달하면 세 모델은 각자 근거를 담아 상품을 제안한다. DeepSeek가 그 세 제안의 근거를 다시 검토해 교차 검증하고, Claude가 검증을 통과한 근거를 비교 심사해 하나의 최종 추천으로 압축한다."
+            aria-label="검색어가 들어오면 먼저 Gemini가 질의를 다듬고, 백엔드가 Tavily를 통해 다나와를 검색한다. 그 결과를 Qwen, Gemini, DeepSeek 세 모델에게 동시에 전달하면 세 모델은 각자 근거를 담아 상품을 제안한다. DeepSeek가 그 세 제안의 근거를 다시 검토해 교차 검증하고, Claude가 검증을 통과한 근거를 비교 심사해 하나의 최종 추천으로 압축한다."
             className="w-full h-auto min-w-[1180px]"
           >
             <defs>
@@ -134,7 +134,7 @@ export const HowWeCurate = () => {
 
             {/* Agent boxes */}
             <rect x="642" y="50" width="164" height="60" rx="10" fill="#fafafa" stroke="#e5e5e5" />
-            <text x="724" y="86" textAnchor="middle" fontSize="12.5" fontWeight="600" fill="#0a0a0a" fontFamily="-apple-system, sans-serif">ChatGPT</text>
+            <text x="724" y="86" textAnchor="middle" fontSize="12.5" fontWeight="600" fill="#0a0a0a" fontFamily="-apple-system, sans-serif">Qwen</text>
 
             <rect x="642" y="160" width="164" height="60" rx="10" fill="#fafafa" stroke="#e5e5e5" />
             <text x="724" y="196" textAnchor="middle" fontSize="12.5" fontWeight="600" fill="#0a0a0a" fontFamily="-apple-system, sans-serif">Gemini</text>

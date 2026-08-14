@@ -38,17 +38,17 @@ flowchart LR
     end
 
     subgraph PIPE["AI 오케스트레이션 · Google ADK (adk_pipeline)"]
-        REFINE["질의 정제<br/>(Gemini)"]
+        REFINE["질의 정제<br/>(Groq)"]
         SEARCH["검색<br/>(Tavily + 의미 기반 캐시)"]
-        CAT["카테고리 분류<br/>(Gemini, 16종)"]
-        subgraph PROPOSE["제안 · 병렬 실행 (모델별 최대 5개)"]
-            GPT["ChatGPT"]
-            GEMINI["Gemini"]
+        CAT["카테고리 분류<br/>(Groq, 16종)"]
+        subgraph PROPOSE["제안 · 병렬 실행 (모델별 최선 1개)"]
+            GPT["Qwen"]
+            GEMINI["Groq"]
             DEEPSEEK["DeepSeek"]
         end
         MERGE["병합 · 중복 제거<br/>(최저가 매물 기준 통합)"]
         CHALLENGE["교차 검증<br/>(DeepSeek)"]
-        JUDGE["최종 심사<br/>(Claude)"]
+        JUDGE["최종 심사<br/>(Groq)"]
     end
 
     subgraph DANAWA["다나와 실측 가격 연동"]
@@ -102,11 +102,11 @@ flowchart LR
 | Frontend | React 18, Vite 6, TypeScript, Tailwind CSS v4, Framer Motion(`motion`), React Router (HashRouter) |
 | Backend | FastAPI, Python, httpx, PyJWT |
 | 멀티에이전트 오케스트레이션 | Google ADK(`SequentialAgent`/`ParallelAgent`), LiteLLM |
-| AI / 제안 · 검증 · 심사 | OpenAI(ChatGPT) · Google Gemini · DeepSeek — 병렬 제안(모델별 최대 5개) / DeepSeek — 교차 검증(challenge) / Anthropic Claude — 최종 심사(judge) |
+| AI / 제안 · 검증 · 심사 | Qwen(DashScope) · Groq(Llama) · DeepSeek — 병렬 제안(모델별 최선 1개) / DeepSeek — 교차 검증(challenge) / Groq(GPT-OSS) — 최종 심사(judge) |
 | 검색 | Tavily Search API (다나와로 도메인 한정) + 임베딩 기반 의미 유사도 검색 캐시 |
 | 다나와 실측 가격 연동 | 다나와 직접 검색/상세페이지 페치(`httpx` + `BeautifulSoup4`/`lxml`), 내부 AJAX 엔드포인트를 통한 최저가 판매처 브릿지 URL 해석 |
-| Human-in-the-loop | ① 카테고리 기반 고정 축(브랜드·제품·용량·개수, Gemini 16종 분류 연동) ② AI 상세검색 facet(DeepSeek, 상호 교차 필터링) — 상황에 따라 병행, 대화형 질문/답장은 GPT가 실시간 생성 |
-| 이미지 인식 | Google Cloud Vision (텍스트 추출) → Gemini (정제 · 검색어 추출) |
+| Human-in-the-loop | ① 카테고리 기반 고정 축(브랜드·제품·용량·개수, Groq 16종 분류 연동) ② AI 상세검색 facet(DeepSeek, 상호 교차 필터링) — 상황에 따라 병행, 대화형 질문/답장은 Qwen이 실시간 생성 |
+| 이미지 인식 | Google Cloud Vision (텍스트 추출) → Groq (정제 · 검색어 추출) |
 | 인증 | Google / Kakao / Naver OAuth2 + JWT 기반 세션 |
 | 저장소 | SQLite (검색 기록 · 자동완성 인덱스 · 검색 캐시) |
 | 배포 | Docker, nginx, certbot, AWS GPU 인스턴스, nip.io / GitHub Pages(Frontend), GitHub Actions(CI) |
@@ -126,8 +126,8 @@ flowchart LR
 | 팀원 | 주요 역할 |
 | --- | --- |
 | parkikk (patrick01053457926@gmail.com) | 백엔드 멀티에이전트 토론 엔진, 검색 품질(Tavily 연동/필터링), 소셜 로그인, 배포(AWS/Docker/nginx), 프론트엔드 UI/UX 전반 |
-| tmdals3000 | 검색어 자동완성(cold-start) 기능 |
-| lou0-ux | OCR 텍스트 추출 파이프라인(Google Vision + Gemini 정제) |
+| tmdals3000 | 검색어 자동완성(cold-start) 기능, 멀티턴 대화 기능 |
+| lou0-ux | OCR 텍스트 추출 파이프라인(Google Vision + Groq 정제) |
 
 ### 주요 의사결정 사항
 
@@ -136,7 +136,7 @@ flowchart LR
 - **Google 로그인 방식**: 공식 렌더 버튼(iframe)은 Kakao/Naver와 스타일을 맞추기 어려워, `google.accounts.oauth2` 토큰 클라이언트 팝업 방식 + 커스텀 버튼으로 전환
 - **CORS 정책**: 인증이 필요 없는 API이지만, 유료 LLM 호출 비용이 드는 만큼 origin을 알려진 도메인으로만 제한(와일드카드 금지)
 - **검색 기록 저장**: 로그인 시 계정별 서버(SQLite) 저장, 비로그인 시 브라우저 로컬(localStorage) 저장으로 분기
-- **판단 구조 재설계(역할 분리형 에이전트 체인)**: 멘토 피드백(데이터 신뢰도 · 토론/지연시간 구조)을 반영해, 한 번의 호출로 검색부터 추천까지 처리하던 구조를 Google ADK 기반의 **정제 → 검색 → 제안(3모델 병렬, 모델별 최대 5개) → 병합 → 교차 검증 → 심사** 단계로 명시적으로 분리
+- **판단 구조 재설계(역할 분리형 에이전트 체인)**: 멘토 피드백(데이터 신뢰도 · 토론/지연시간 구조)을 반영해, 한 번의 호출로 검색부터 추천까지 처리하던 구조를 Google ADK 기반의 **정제 → 검색 → 제안(3모델 병렬, 모델별 최선 1개) → 병합 → 교차 검증 → 심사** 단계로 명시적으로 분리
 - **후보 병합 기준**: 여러 모델이 제안한 동일 상품 후보를 병합할 때 가격 · 판매처 · URL을 필드별로 각각 다수결 처리하면 서로 다른 상품의 필드가 섞일 수 있어, **하나의 최저가 매물(cheapest member) 기준으로 가격 · 판매처 · URL을 함께** 채택하도록 변경 — 최종 추천이 항상 실제로 그 가격에 구매 가능한 하나의 URL을 가리키도록 보장
 - **Human-in-the-loop 도입 방식**: ADK 내부 pause/resume(`long_running_tool_ids` + `FunctionResponse` 재주입)은 커스텀 `BaseAgent` 구조에서 검증되지 않고 세션 영속화가 필요해 리스크가 크다고 판단, 대신 **앱 레벨에서 파이프라인을 완전히 무상태로 나눠 재실행**하는 방식을 채택(별도 세션 저장소 불필요) — 검색 직후 브랜드 · 제품 · 용량 · 개수가 모호하면 파이프라인을 멈추고, 사용자에게 한 축씩 되물어 이미 답한 조건은 다시 묻지 않는다
 - **카테고리 기반 HITL 축 최적화**: "음료가 아닌 식품에도 용량을 묻는다" 같은 무의미한 질문이 상품 매핑 정확도를 떨어뜨려, Gemini로 검색어를 16개 대분류로 분류하고 카테고리별로 용량 · 개수 축의 관련성을 다르게 판정하도록 개선(예: 식품 중 음료만 용량이 유효, 도서는 용량 없이 개수만 유효) — clarify 단계에서만 호출해 지연시간 영향 최소화
@@ -146,6 +146,11 @@ flowchart LR
 - **Human-in-the-loop 이원화(고정 축 + AI 상세검색 facet)**: 두 팀이 각자 발전시킨 clarify 방식(카테고리 기반 고정 4축 · GPT / 다나와 검색 결과 기반 동적 facet · DeepSeek, 상호 교차 필터링)이 서로 다른 강점을 가져 하나를 버리지 않고 병행 — 짧고 애매한 검색어는 먼저 AI 상세검색(facet)을 시도하고, facet이 못 찾으면 AI 오케스트레이션 내부의 고정 축 clarify로 폴백
 - **대화형 UI로 통합(멀티턴 `ChatTurn`)**: 첫 검색어부터 이후의 모든 되묻기 · 재검색까지 하나의 성장하는 대화 스레드로 보이도록 프론트를 `ChatTurn` 배열 기반으로 재구성 — 브랜드/facet/고정 축 선택은 전부 새 턴을 만드는 방식으로 통일하고, 봇의 질문 · 답장은 고정 문구가 아니라 GPT가 매번 실제로 생성
 - **AI 오케스트레이션과 다나와 통합의 병합**: 같은 기능(멀티에이전트 토론 + 다나와 연동 + HITL + 대화형 UI)을 두 갈래로 독립 개발한 뒤 병합하면서, ADK 파이프라인을 정식 오케스트레이션으로 유지하고 다나와 후보를 judge 풀에 직접 주입하는 직접-구현 경로는 `run_single_debate_price_table_variant`로 보존만 해두고 아직 ADK 파이프라인에 이식하지 않음(후속 과제) — 병합 도중 실제 구동 테스트에서 "이미 답한 축을 다시 묻는" 회귀를 발견해 `skip_clarify` 플래그로 즉시 수정
+- **"gpt" 슬롯을 GPT → Qwen으로 교체**: OpenAI 토큰이 소진돼 `agents/gpt.py`가 호출하는 실제 모델을 DashScope(Alibaba Cloud) 기준 최상위 모델인 Qwen으로 바꿈 — `agent="gpt"`라는 내부 식별자(스키마의 `AgentName` 리터럴, 프론트엔드 타입, 테스트 픽스처 등 수십 곳에 걸침)는 그대로 두고 내부에서 호출하는 모델만 교체(파일명·함수명도 유지, `AsyncOpenAI` SDK를 DashScope의 OpenAI 호환 엔드포인트로 base_url만 바꿔 재사용 - `agents/deepseek.py`와 동일한 패턴). 사용자에게 보이는 이름만 프론트엔드 `AGENT_LABEL`에서 "Qwen"으로 변경. `openai_api_key`는 임베딩 기반 검색 캐시에서만 계속 쓰임
+- **Gemini · Claude → Groq(무료 API)로 교체**: Gemini 프로젝트가 403으로 막히고 Anthropic엔 상시 무료 티어가 없어, DeepSeek/Qwen을 뺀 나머지 전부를 무료 API인 Groq로 전환 — `agent="gemini"` 식별자와 `agents/gemini.py`/`agents/judge.py` 파일·함수명은 그대로 두고 호출 모델만 교체(Qwen 때와 동일한 패턴). 역할별로 다른 모델을 쓰는데, ADK의 구조화 출력(`output_schema`→`response_format=json_schema`)을 지원하는 모델이 Groq 카탈로그에 `gpt-oss` 계열뿐이라 refine(작은 프롬프트)은 `gpt-oss-20b`, judge(그보다 큰 프롬프트 · 최종 심사)는 `gpt-oss-120b`를 쓰고, 구조화 출력이 필요 없는 categorize/OCR정제/propose의 "gemini" 슬롯은 무료 티어 분당 토큰(TPM) 한도가 가장 넉넉한 `llama-3.3-70b-versatile`을 쓴다 — `groq/compound(-mini)`는 TPM은 넉넉했지만 내부적으로 여러 모델에 요청을 위임하는 에이전틱 모델이라 하위 모델 rate limit을 그대로 물려받아 오히려 더 자주 실패해 제외. 검색 결과 12건을 그대로 프롬프트에 넣으면(Tavily 스니펫 건당 최대 1500자) 이 TPM 한도를 매번 초과해, `format_results_block`이 스니펫을 500자로 잘라 담도록 함께 수정(Qwen/DeepSeek 쪽 프롬프트 비용도 동반 절감)
+- **다나와 A등급 실측가 주입을 ADK 파이프라인으로 포팅**: `run_single_debate_price_table_variant`(PART 4-2)에만 있던 "다나와 실측가를 judge 후보 풀에 직접 추가"를 라이브 파이프라인(`adk_pipeline`)에 이식 — `_DanawaFetchNode`를 gpt/gemini/deepseek와 같은 `ParallelAgent`(propose) 소속으로 추가해 동시 실행되게 하고(지연시간 추가 없음), 그 결과를 다른 3개 슬롯과 동일한 raw JSON 모양으로 만들어 기존 `_merge_proposals`/`merge_candidates`에 그대로 태워 `proposed_by` 합의 신호도 같이 얻는다(레거시처럼 별도 merge를 다시 안 돌림). 다나와 데이터는 이미 실측 검증된 값이라 DeepSeek 텍스트 검증에 다시 맡기지 않고, 병합된 후보의 `proposed_by`에 `"danawa"`가 있으면 `_apply_challenge`가 verified를 무조건 True로 강제한다. judge 확정 후에는 `enrich_decision`/`exclude_price_comparison_site_as_final_pick`을 그대로 재사용해 이름이 맞으면 실측가로 덮어쓰고, 최종 URL이 다나와 가격비교 페이지 자체면 치환한다 — 이 작업 전까지 `DecideResponse.price_table`은 라이브 경로에서 항상 null이었다.
+- **clarify 백엔드 추출 로직을 facet 하나로 통합(백엔드 한정)**: 고정 4축(브랜드/제품/용량/개수, Qwen이 Tavily 결과에서 추출)과 AI 상세검색 facet(라벨 자유, DeepSeek이 다나와 검색 결과에서 추출)이 서로 다른 진입점에서 독립적으로 동작하던 걸, `adk_pipeline`의 내부 안전망 clarify(`_extract_clarify_options`)가 `/decide/clarify`(`check_clarify_facets`)와 같은 facet 추출 파이프라인(`_extract_facets`)을 쓰도록 통합 — 입력만 다르게 유지한다(`check_clarify_facets`는 다나와 직접 검색, `_extract_clarify_options`는 이미 갖고 있는 Tavily 검색 결과 제목을 그대로 써서 네트워크 호출을 늘리지 않음). 프론트가 이미 facet 렌더링(교차 필터링·검색창·페르소나 배지)을 완전히 지원해서 프론트엔드 변경 없이 바로 가능했다 - 프론트의 `FixedAxisClarifyCard`/브랜드 전용 버튼 블록/`/clarify/ask` 대화형 질문까지 건드리는 완전한 UI 수준 통합은 범위 밖으로 명시적으로 남겨뒀다(체감 UX가 바뀌는 결정이라 사용자 판단이 필요해서). 고정 4축 전용이던 `_strip_resolved_options`/`_resolved_dimension_count`/`_is_ambiguous`(adk_pipeline.py)는 facet 버전(`_strip_resolved_facets`/`_resolved_facet_count`/`_is_ambiguous_facets`, 전부 debate.py)으로 교체하고 원본은 삭제했다. 카테고리 기반 축 관련성 필터링(`_strip_category_irrelevant_options`)은 facet 추출 프롬프트 자체가 이미 의미 있는 축만 뽑도록 유도한다고 판단해 이번엔 옮기지 않고 함수만 보존(`PRESERVED FROM seungmin/lsm` 주석) - 라이브에서 무의미한 facet이 실제로 섞여 나오면 후속 작업으로 라벨 패턴 매칭 버전을 추가한다.
+- **facet 크로스필터를 하이퍼그래프 incidence 구조로 재구성**: `_attach_facet_crossfilter`는 사실상 이미 하이퍼그래프였다 - 상품 하나(하이퍼엣지)가 브랜드·시리즈·용량 같은 여러 facet 값(정점)을 동시에 묶는데, 이걸 facet 쌍마다 선택지 값마다 상품명 전체를 매번 재스캔하는 브루트포스로 계산했다. `_build_facet_value_incidence`(facet 값 -> 등장하는 상품 인덱스 집합)를 한 번만 만들어, "같은 상품에 같이 등장하는가" 판정을 집합 교집합 유무로 바꿨다 - 원래 판정과 수학적으로 동치라 `options_by_selection` 결과는 그대로다(기존 테스트로 검증). 이 incidence를 재사용해 `_facet_centrality`(평균 degree)로 `_FACET_ORDER_HINTS`가 못 잡는 facet들의 정렬을 LLM이 낸 임의 순서 대신 "다른 값들과 얼마나 폭넓게 공존하는가" 기준으로 다시 가른다 - 단, 힌트가 이미 잡은 facet(카테고리/브랜드/용량 등)은 중심성을 아예 안 본다(표본이 작은 질의에서 통계적 신호가 약해질 위험을 원천 차단, `_facet_sort_key`). numpy 등 새 의존성 없이 순수 `set` 연산으로 구현 - 표본 규모(다나와 직접검색 상한 ~20~30개, Tavily 상한 12개)에서 충분히 빠르다.
 
 ### 문제 해결 내역 (Troubleshooting)
 
@@ -155,7 +160,7 @@ flowchart LR
 - **Human-in-the-loop 선택이 수렴하지 않음**: 사용자가 이미 답한 조건(개수 등)을 매 검색마다 검색 결과에서 새로 추출해, 결과가 여전히 여러 값을 보여주면 같은 질문을 반복하던 문제 → 질의 텍스트에 이미 반영된 조건은 재추출 결과와 무관하게 확정된 것으로 취급하도록 수정
 - **자동완성 추천창이 결과 화면 뒤에 남음**: 검색 상태(idle/loading/done)와 무관하게 질의(query) 변경 시마다 자동완성이 다시 열려, HITL 단계 선택이나 완료된 결과 뒤에 추천창이 남아있던 문제 → idle 상태일 때만 노출되도록 수정
 - **멀티턴 드릴다운이 수렴하지 않음(2026-08 통합 병합)**: 프론트가 대화형 멀티턴 오케스트레이션 호출로 전환된 뒤, 브랜드 · facet · 고정 축을 이미 선택해 후속 턴으로 넘어갔는데도 ADK 파이프라인 내부의 애매함 판정(`_is_ambiguous`)이 요청의 `skip_intent_check` 플래그와 무관하게 매번 다시 동작해 같은 질문이 무한 반복되던 문제 → `skip_clarify` 플래그를 `main.py` → `run_single_debate(_stream)` → `adk_pipeline.run(_stream)`까지 관통시켜, 후속 턴에서는 내부 조기 종료를 건너뛰고 곧장 제안 · 검증 · 심사까지 진행하도록 수정(완전히 후보가 없을 때의 안전망 clarify는 그대로 유지)
-- **두 팀의 독립 구현 병합 시 함수 누락**: git의 비충돌 3-way 병합이 한쪽에서 삭제되고 다른 쪽에서 그대로 남아있던 함수(`agents/{gpt,gemini,deepseek}.propose`, `agents/judge.decide`)를 조용히 지워버려, 보존하려던 구현(`run_single_debate_price_table_variant`)이 임포트 시점부터 깨져 있던 문제 → 함수별 diff 비교로 원본을 복원해 재배치
+- **"용기형태" facet에 구매유형 값이 섞임(2026-08-14 사용자 리포트)**: 음료 검색의 AI 상세검색에서 "용기형태" 기준 선택지로 "업소용"이 나오는 등(정상이라면 페트/캔 등이 나와야 함), facet 추출 프롬프트가 "용기형태"의 의미를 정의하지 않아 DeepSeek이 상품명 속 구매유형 수식어(업소용 · 가정용 · 벌크 등)를 물리적 용기 형태로 잘못 분류하던 문제 → 프롬프트에 "용기형태"는 페트/캔/유리병 등 물리적 형태만, 구매 방식은 별도 "구매유형" 기준으로 분류하라고 명시하고, `extract_facets_from_names`에서 "용기형태" 라벨의 값 중 알려진 비-용기형태 값을 한 번 더 걸러내는 코드 레벨 안전망 추가
 
 ---
 
@@ -176,7 +181,7 @@ flowchart LR
 - 상품 상세/가격 정보가 없는 콘텐츠·매거진·검색결과 목록 도메인 제외 (`EXCLUDE_DOMAINS`)
 - 정규식 기반 제네릭 목록 URL 필터링 (`is_generic_listing_url`)
 - 브랜드-URL 그라운딩 검증으로 무관한 상품이 섞이는 것을 방지
-- OCR 원문에서 가격/바코드/프로모션 문구를 제거하고 상품명·용량 등 핵심 메타데이터만 남기는 Gemini 정제 단계(`search_query` 추출)
+- OCR 원문에서 가격/바코드/프로모션 문구를 제거하고 상품명·용량 등 핵심 메타데이터만 남기는 Groq 정제 단계(`search_query` 추출)
 
 ### 평가 기준 (무엇으로 "좋은 답"을 판단할지)
 
@@ -197,14 +202,14 @@ sequenceDiagram
     participant B as 백엔드(ADK 파이프라인)
     participant Cache as 검색 캐시(의미 기반)
     participant T as Tavily
-    participant P as 제안 에이전트(GPT·Gemini·DeepSeek)
+    participant P as 제안 에이전트(Qwen·Groq·DeepSeek)
     participant D as DeepSeek(교차 검증)
-    participant J as Claude(심사)
+    participant J as Groq(심사)
     participant DW as 다나와(브릿지 URL 해석)
 
     U->>CTX: 검색어 입력(첫 턴)
     CTX->>B: POST /decide/stream (skip_intent_check=false)
-    B->>B: 질의 정제(Gemini)
+    B->>B: 질의 정제(Groq)
     B->>Cache: 캐시 조회
     alt 캐시 미스
         B->>T: 다나와 한정 검색
@@ -214,11 +219,11 @@ sequenceDiagram
     alt 브랜드/제품/용량/개수 모호 (Human-in-the-loop)
         B-->>CTX: mode: clarify (고정 축 옵션)
         CTX-->>U: 새 턴으로 이어붙여 되묻기(버튼 · 채팅 둘 다)
-        U->>CTX: 옵션 선택 또는 채팅 답변(GPT가 매칭)
+        U->>CTX: 옵션 선택 또는 채팅 답변(Qwen이 매칭)
         CTX->>B: 후속 턴 POST /decide/stream (skip_intent_check=true)
         Note over B: skip_clarify=true → 내부 애매함 판정을 건너뛰고<br/>바로 제안 단계로 진행(재질문 방지)
     end
-    B->>P: 검색 결과 + 질의 전달 (병렬, 모델별 최대 5개)
+    B->>P: 검색 결과 + 질의 전달 (병렬, 모델별 최선 1개)
     P-->>B: 상품 후보 제안 (근거 포함)
     B->>B: 후보 병합 · 중복 제거(최저가 매물 기준)
     B->>D: 병합된 후보 교차 검증 요청
@@ -245,7 +250,7 @@ sequenceDiagram
 - 검색 캐시를 정확 일치(exact-key) 방식에서 **임베딩 기반 의미 유사도 매칭**으로 업그레이드해, 표현만 다른 유사 질의의 중복 Tavily/LLM 호출 비용을 절감
 - 동일 상품 후보 병합 시 가격 · 판매처 · URL을 최저가 매물 하나에서 함께 채택하도록 바꿔 "가격과 실제 연결 URL이 다른 상품" 불일치 제거
 - 제안/교차 검증 프롬프트에 브랜드 · 제품 · 용량 · 개수 정확 일치 조건을 명시해, Human-in-the-loop으로 이미 좁힌 조건이 검색 품질 문제로 다시 섞이지 않도록 개선
-- 카테고리별로 용량 · 개수 축의 관련성을 다르게 판정해(Gemini 16종 분류), 해당 없는 축을 억지로 고르게 해 상품 매핑이 틀어지는 문제 감소
+- 카테고리별로 용량 · 개수 축의 관련성을 다르게 판정해(Groq 16종 분류), 해당 없는 축을 억지로 고르게 해 상품 매핑이 틀어지는 문제 감소
 - AI 상세검색(facet) 다중 라운드 시 base_query를 유지해 다나와 검색 캐시(1시간, 10초 crawl-delay)를 재사용하도록 개선해 드릴다운 응답속도 단축
 - 다나와 실측 최저가를 별도로 확보해 LLM 추정 가격 · URL의 오차를 줄이고, 최종 URL이 다나와 가격비교 페이지 자체로 남지 않도록 실제 구매처 브릿지 URL로 항상 변환
 - 멀티턴 대화 흐름에서 후속 턴에 `skip_clarify`를 적용해, 이미 답한 조건에 대해 파이프라인이 다시 되묻는 무한 재질문을 제거
@@ -264,8 +269,7 @@ sequenceDiagram
 - 현재는 다나와 하나로 한정된 검색 범위를 점진적으로 확장할 여지가 있음
 - Google ADK가 출시 초기 버전(`SequentialAgent`/`ParallelAgent`가 이미 deprecated 표시)이라, 향후 문서가 더 풍부한 `Workflow`/`@node` API로의 이전을 검토할 필요가 있음
 - Human-in-the-loop을 앱 레벨의 무상태 재실행(파이프라인을 처음부터 다시 실행)으로 구현해 단계마다 정제/검색 비용이 다시 발생함 — ADK 세션 기반의 내부 pause/resume으로 전환하면 절감 가능
-- 다나와 A등급 실측 가격 후보를 judge 선택 풀에 직접 주입하는 구현(`run_single_debate_price_table_variant`)이 별도 경로로만 보존돼 있고 아직 ADK 파이프라인(`adk_pipeline`)의 제안/심사 단계에 이식되지 않음 — 후속 작업으로 남겨둠
-- 고정 축 clarify(GPT)와 AI 상세검색 facet(DeepSeek)이 서로 다른 팀에서 독립적으로 발전해 로직이 완전히 통합되지 않고 병행 운영 중 — 장기적으로는 하나의 clarify 모델로 수렴할 필요가 있음
+- clarify의 백엔드 추출 로직은 facet(DeepSeek) 하나로 통합했지만(아래 의사결정 참고), 프론트엔드의 `FixedAxisClarifyCard`(자연어 질문 생성용 `/clarify/ask`)와 브랜드 전용 버튼 블록은 아직 별도 UI로 남아있음 — 완전한 UI 수준 수렴은 후속 과제
 
 ### 회고
 

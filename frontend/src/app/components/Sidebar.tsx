@@ -121,16 +121,7 @@ const AuthArea = () => {
 export const Sidebar = () => {
   const { isOpen, open: openSidebar, close, toggle } = useSidebar();
   const [historySearch, setHistorySearch] = useState('');
-  const {
-    history,
-    loadFromHistory,
-    deleteFromHistory,
-    clearAllHistory,
-    handleReset,
-    conversations,
-    activeConversationId,
-    switchConversation,
-  } = useSearch();
+  const { history, loadFromHistory, deleteFromHistory, clearAllHistory, handleReset } = useSearch();
   const { user } = useAuth();
 
   const openWithAction = (action: () => void) => {
@@ -196,35 +187,12 @@ export const Sidebar = () => {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {/* 대화 목록(ChatGPT/Gemini 스타일, 2026-08-15) - "새 검색"으로 연 대화
-            창들의 목록. 클릭하면 그 대화의 전체 턴(멀티턴 히스토리)이 그대로
-            복원된다 - 아래 "기록"은 완료된 검색 결과 하나하나의 평평한
-            목록이라 다르다(같은 대화에서 나온 턴 여러 개가 기록에는 각각
-            따로 쌓인다). 세션 동안만 유지되고 새로고침하면 사라진다. */}
-        {conversations.length > 0 && (
-          <>
-            <div className="mt-4 px-5">
-              <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400">대화</span>
-            </div>
-            <div className="px-3 mt-2 space-y-1">
-              {conversations.map((conversation) => (
-                <button
-                  key={conversation.id}
-                  type="button"
-                  onClick={() => openWithAction(() => switchConversation(conversation.id))}
-                  className={`w-full text-left px-2.5 py-2 rounded-lg text-sm font-light truncate transition-colors ${
-                    conversation.id === activeConversationId
-                      ? 'bg-neutral-100 text-neutral-950'
-                      : 'text-neutral-700 hover:bg-neutral-100'
-                  }`}
-                >
-                  {conversation.title}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-        <div className="mt-6 px-5">
+        {/* 대화(conversations) 목록은 따로 안 보여준다(사용자 요청, 2026-08-15:
+            "사이드바 열면 대화창이 새롭게 생겼는데 그냥 원래 있던 기록 창에
+            냅둬") - 멀티턴 대화 전환 기능(switchConversation) 자체는
+            SearchContext에 그대로 남아있지만, 사이드바 목록은 예전처럼 "기록"
+            하나로만 보여준다. */}
+        <div className="mt-4 px-5">
           <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400">기록</span>
         </div>
         <div className="px-3 mt-2 space-y-1">

@@ -98,9 +98,21 @@ BULK_PROPOSAL_INSTRUCTIONS = (
 )
 
 
+# Tavily snippet은 실측으로 건당 최대 1500자까지 나온다 - 검색 결과 12건을 그대로
+# 넣으면 프롬프트가 2만자(약 1만3천 토큰)를 넘어, Groq 무료(on-demand) 티어의
+# 분당 토큰(TPM) 한도(6000~12000)를 매번 초과했다(2026-08-16, "gemini" 슬롯을
+# Groq로 옮기며 발견). 상품 하나를 식별하는 데 스니펫 전체가 필요하진 않으므로
+# 500자로 자른다 - 이 함수가 propose/challenge/clarify/브랜드가격 프롬프트에 전부
+# 쓰여 Qwen/DeepSeek 쪽 비용도 같이 줄어든다.
+_SNIPPET_MAX_CHARS = 500
+
+
 def format_results_block(search_results: list[SearchResult]) -> str:
+    def _snippet(text: str) -> str:
+        return text if len(text) <= _SNIPPET_MAX_CHARS else text[:_SNIPPET_MAX_CHARS] + "…"
+
     return (
-        "\n".join(f"- {r.title} ({r.url}): {r.snippet}" for r in search_results)
+        "\n".join(f"- {r.title} ({r.url}): {_snippet(r.snippet)}" for r in search_results)
         or "(검색 결과 없음)"
     )
 
@@ -114,30 +126,6 @@ def build_bulk_prompt(query: str, search_results: list[SearchResult], max_option
     results_block = format_results_block(search_results)
     instructions = BULK_PROPOSAL_INSTRUCTIONS.format(max_options=max_options)
     return f"{instructions}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
-
-
-CLARIFY_INSTRUCTIONS = (
-    "당신은 검색 결과에서 실제 판매 중인 상품의 옵션을 추출하는 에이전트입니다. "
-    "아래 검색 결과에 등장하는 서로 다른 브랜드, 제품/모델명, 용량(ml/L 등), "
-    "판매 단위(묶음 개수)를 각각 목록으로 뽑아주세요. "
-    "products는 브랜드가 아니라 그 브랜드 안에서, 사용자가 질의한 상품과 같은 "
-    "종류의 서로 다른 제품 라인/모델명입니다 (예: 질의가 '빙그레 아이스크림'이면 "
-    "브랜드 '빙그레' 안에 '메로나', '비비빅', '투게더'처럼 서로 다른 아이스크림이 "
-    "섞여 있는 경우). 검색 결과 페이지에 사이드바 추천/함께 본 상품처럼 질의와 "
-    "다른 종류의 상품(예: 이어폰을 찾는데 냉장고·모니터·시계가 섞여 있는 경우)이 "
-    "함께 나오더라도, 그런 무관한 카테고리 상품은 products에 절대 넣지 마세요 — "
-    "질의와 같은 종류의 상품만 뽑으세요. 한 브랜드에 제품이 하나뿐이면 products는 "
-    "빈 배열로 두세요 — 브랜드명과 똑같은 값을 억지로 넣지 마세요. "
-    "실제로 검색 결과에 나온 값만 사용하고 지어내지 마세요. "
-    "찾을 수 없으면 해당 목록을 빈 배열로 두세요. "
-    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
-    '{"brands": ["..."], "products": ["..."], "volumes": ["..."], "quantities": ["..."]}'
-)
-
-
-def build_clarify_prompt(query: str, search_results: list[SearchResult]) -> str:
-    results_block = format_results_block(search_results)
-    return f"{CLARIFY_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n검색 결과:\n{results_block}"
 
 
 CLARIFY_MATCH_INSTRUCTIONS = (
@@ -185,7 +173,11 @@ FACET_CLARIFY_INSTRUCTIONS = (
     "바탕으로 사용자가 선택해 좁혀나갈 수 있는 기준을 최대 4개까지 뽑아주세요. 기준의 "
     "예시: 카테고리, 제조사, 브랜드, 시리즈, 모델, 용량, 용기형태, 특징 - 이 상품군에 "
     "실제로 의미 있는 기준만 고르세요(예: 전자기기류는 시리즈/모델/용량이, 식음료/생활용품류는 "
-    "용기형태/특징이 더 유의미할 수 있습니다). '브랜드'나 '제조사' 기준은 상품명에 실제로 등장하는 서로 다른 "
+    "용기형태/특징이 더 유의미할 수 있습니다). "
+    "'용기형태'는 페트/캔/유리병/파우치/박스처럼 상품을 담는 물리적 용기의 재질·형태만을 "
+    "뜻합니다 - '업소용'/'가정용'/'벌크'/'낱개'/'묶음'/'세트'처럼 누가 어떤 방식으로 "
+    "구매하는지를 나타내는 값은 용기형태가 아니라 '구매유형' 기준으로 따로 분류하세요. "
+    "'브랜드'나 '제조사' 기준은 상품명에 실제로 등장하는 서로 다른 "
     "브랜드를 최대 15개까지(적으면 있는 만큼만) 뽑고, 그 외 기준은 최대 6개까지 뽑아주세요. "
     "각 기준 안에서는 상품명 목록에 더 많이 등장하는(더 인기 있는) 값부터 먼저 오도록 "
     "순서대로 나열하세요. 상품명 전부가 사실상 같은 값 하나뿐인 기준(예: '핸드폰'을 "
@@ -220,7 +212,10 @@ def build_facet_clarify_prompt_for_labels(
         f"라벨을 만들거나 이름을 바꾸지 마세요): {labels_block}. 각 라벨마다 아래 "
         "상품명들에 실제로 등장하는 서로 다른 값을 최대 6개까지, 더 많이 등장하는 "
         "값부터 먼저 오도록 뽑으세요. 그 라벨에 해당하는 값이 상품명에 없으면 그 "
-        "라벨은 아예 빼세요(빈 배열 넣지 마세요). 실제로 상품명에 나온 값만 쓰고 "
+        "라벨은 아예 빼세요(빈 배열 넣지 마세요). '용기형태' 라벨에는 페트/캔/유리병/"
+        "파우치/박스처럼 물리적 용기의 재질·형태만 넣고, '업소용'/'가정용'/'벌크'/"
+        "'낱개'/'묶음'/'세트'처럼 구매 방식을 나타내는 값은 넣지 마세요. "
+        "실제로 상품명에 나온 값만 쓰고 "
         "지어내지 마세요. 반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트나 "
         "코드펜스를 덧붙이지 마세요.\n\n"
         f'{{"facets": {{"{labels[0] if labels else "..."}": ["...", "..."]}}}}'
@@ -251,8 +246,8 @@ def build_brand_price_prompt(query: str, brand: str, search_results: list[Search
 
 # 완전 일치 후보가 하나도 없을 때의 폴백 경로(2026-08-15, "적절한 상품 후보를
 # 찾지 못하면 다시 fallback해서 feedback 구조로 돌아가서 가장 관련성 높은
-# 상품을 추천해주는 시스템") - PROPOSAL_INSTRUCTIONS/CLARIFY_INSTRUCTIONS는
-# 브랜드/스펙이 정확히 일치하지 않으면 후보를 아예 비워서 반환하도록 요구한다
+# 상품을 추천해주는 시스템") - PROPOSAL_INSTRUCTIONS는 브랜드/스펙이 정확히
+# 일치하지 않으면 후보를 아예 비워서 반환하도록 요구한다
 # (그라운딩 - 존재하지 않는 상품을 지어내지 않기 위함). 이 프롬프트는 딱 그
 # 엄격함만 완화해 "정확히 일치하진 않아도 검색 결과 중 가장 관련성 높은 것
 # 하나"를 고르게 한다 - 여전히 실제로 검색 결과에 있는 상품만 골라야 하고

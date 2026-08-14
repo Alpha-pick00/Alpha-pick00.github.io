@@ -86,10 +86,12 @@ def _patch_llm_layer(monkeypatch):
     monkeypatch.setattr("app.agents.judge.decide", _fake_decide)
     # 2026-08 통합 병합 이후 /decide(run_debate -> run_single_debate)는 ADK
     # 파이프라인(adk_pipeline.run)을 타므로 이 4개 mock을 거치지 않는다 - 다나와
-    # price_table 후보를 judge 풀에 직접 넣는 통합은 아직 adk_pipeline으로
-    # 이식되지 않았다(app.debate.run_single_debate_price_table_variant의 TODO
-    # 참고). 그래서 이 mock들을 실제로 쓰는 테스트는 run_single_debate_price_table_variant를
-    # 직접 호출한다 - HTTP 엔드포인트(/decide)를 거치지 않는다.
+    # price_table 주입 자체는 2026-08-16부터 adk_pipeline에도 포팅됐지만
+    # (adk_pipeline._DanawaFetchNode/_finalize_with_danawa, tests/test_adk_pipeline.py
+    # 참고), 거긴 gpt/gemini/deepseek이 LlmAgent(실제 모델 호출)라 이 파일의
+    # monkeypatch 방식으로는 못 막는다. 그래서 이 mock들을 실제로 쓰는 테스트는
+    # run_single_debate_price_table_variant를 직접 호출한다 - HTTP 엔드포인트
+    # (/decide)를 거치지 않는다.
     monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: True)
     # 실제 sqlite 자동완성 인덱스에 테스트 검색어가 쌓이지 않도록 무력화한다 -
     # /decide의 BackgroundTasks가 record_terms를 실제로 실행하기 때문.

@@ -6,7 +6,6 @@ from ..schemas import (
     AgentCandidates,
     BrandOption,
     BulkProposal,
-    ClarifyOptions,
     JudgeVerdict,
     SearchResult,
 )
@@ -15,7 +14,6 @@ from .base import (
     build_bulk_prompt,
     build_clarify_ask_prompt,
     build_clarify_match_prompt,
-    build_clarify_prompt,
     build_prompt,
     build_relaxed_pick_prompt,
     filter_bulk_options,
@@ -25,15 +23,31 @@ from .base import (
     parse_json_object,
 )
 
+# 이 모듈이 담당하는 에이전트 슬롯은 스키마/프론트엔드/테스트 전반에서
+# agent="gpt"로 식별된다(파일명·함수명도 그대로) - 하지만 실제로 호출하는
+# 모델은 2026-08-15부터 OpenAI가 아니라 Qwen이다(사용자 요청: "GPT 토큰이
+# 더 이상 없어서 Qwen 성능 제일 좋은 걸로 바꿔줘"). DashScope가 OpenAI SDK와
+# 호환되는 엔드포인트를 제공해서, openai SDK를 base_url만 바꿔 그대로 쓴다
+# (agents/deepseek.py와 동일한 패턴). agent="gpt" 식별자 자체를 "qwen"으로
+# 바꾸지 않은 이유 - AgentName 리터럴, DB에 저장된 과거 기록, 프론트엔드 타입,
+# 테스트 픽스처 등 수십 곳에 걸쳐 있어 그 리네임 자체가 훨씬 큰(그리고 지금
+# 급한 문제와 무관한) 변경이 된다. 사용자에게 보이는 이름만
+# frontend/src/app/components/SearchResults.tsx의 AGENT_LABEL에서 "Qwen"으로
+# 바꿔뒀다.
+
+
+def _client() -> AsyncOpenAI:
+    return AsyncOpenAI(api_key=settings.qwen_api_key, base_url=settings.qwen_api_base)
+
 
 async def propose(query: str, search_results: list[SearchResult]) -> AgentCandidates:
     """PRESERVED FROM seungmin/lsm - run_single_debate_price_table_variant
     (app.debate)에서만 쓰인다. run_debate()의 실제 LLM 경로는 adk_pipeline이
     담당하며 거기서는 propose 단계가 LlmAgent로 이미 구현돼 있다."""
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _client()
         response = await client.chat.completions.create(
-            model=settings.gpt_model,
+            model=settings.qwen_model,
             messages=[{"role": "user", "content": build_prompt(query, search_results)}],
         )
         items = parse_json_array(response.choices[0].message.content or "")
@@ -45,9 +59,9 @@ async def propose(query: str, search_results: list[SearchResult]) -> AgentCandid
 
 async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkProposal:
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _client()
         response = await client.chat.completions.create(
-            model=settings.gpt_model,
+            model=settings.qwen_model,
             messages=[{"role": "user", "content": build_bulk_prompt(query, search_results)}],
         )
         options = parse_json_array(response.choices[0].message.content or "")
@@ -55,20 +69,6 @@ async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkPr
         return BulkProposal(agent="gpt", options=options)
     except Exception as exc:
         return BulkProposal(agent="gpt", error=str(exc))
-
-
-async def extract_options(query: str, search_results: list[SearchResult]) -> ClarifyOptions:
-    try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
-        response = await client.chat.completions.create(
-            model=settings.gpt_model,
-            messages=[{"role": "user", "content": build_clarify_prompt(query, search_results)}],
-            response_format={"type": "json_object"},
-        )
-        data = parse_json_object(response.choices[0].message.content or "")
-        return ClarifyOptions(**data)
-    except Exception:
-        return ClarifyOptions()
 
 
 _CLARIFY_MATCH_FALLBACK_REPLY = "지금은 답장을 만들지 못했어요 — 아래 선택지 중에서 골라주시겠어요?"
@@ -84,9 +84,9 @@ async def match_clarify_reply(message: str, options: list[str]) -> tuple[str | N
     if not options:
         return None, _CLARIFY_MATCH_FALLBACK_REPLY
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _client()
         response = await client.chat.completions.create(
-            model=settings.gpt_model,
+            model=settings.qwen_model,
             messages=[{"role": "user", "content": build_clarify_match_prompt(message, options)}],
             response_format={"type": "json_object"},
         )
@@ -110,9 +110,9 @@ async def generate_clarify_question(query: str, options: list[str]) -> str:
     if not options:
         return _CLARIFY_ASK_FALLBACK
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _client()
         response = await client.chat.completions.create(
-            model=settings.gpt_model,
+            model=settings.qwen_model,
             messages=[{"role": "user", "content": build_clarify_ask_prompt(query, options)}],
             response_format={"type": "json_object"},
         )
@@ -126,9 +126,9 @@ async def find_lowest_price(
     query: str, brand: str, search_results: list[SearchResult]
 ) -> BrandOption | None:
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _client()
         response = await client.chat.completions.create(
-            model=settings.gpt_model,
+            model=settings.qwen_model,
             messages=[
                 {"role": "user", "content": build_brand_price_prompt(query, brand, search_results)}
             ],
@@ -156,9 +156,9 @@ async def pick_most_relevant(query: str, search_results: list[SearchResult]) -> 
     if not search_results:
         return None
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _client()
         response = await client.chat.completions.create(
-            model=settings.gpt_model,
+            model=settings.qwen_model,
             messages=[{"role": "user", "content": build_relaxed_pick_prompt(query, search_results)}],
             response_format={"type": "json_object"},
         )

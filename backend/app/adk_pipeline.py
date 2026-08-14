@@ -1,9 +1,10 @@
 """ADK(Google Agent Development Kit) 기반 역할 분리형 검색 파이프라인.
 
-정제(Gemini) → 검색 → 제안(GPT·Gemini·DeepSeek 병렬, 각자 최선 1개) →
-필터링+병합(fusion.dedup 재사용) → 검증(DeepSeek) → 매칭/합성 → 심사(Claude)
+정제(Groq) → 검색 → 제안(Qwen·Groq·DeepSeek 병렬, 각자 최선 1개) →
+필터링+병합(fusion.dedup 재사용) → 검증(DeepSeek) → 매칭/합성 → 심사(Groq)
 순서로 실행된다 — `debate.py`의 run_single_debate/run_single_debate_stream이
-이 모듈의 run()/run_stream()을 호출한다.
+이 모듈의 run()/run_stream()을 호출한다. (제안 슬롯 이름은 여전히 "gpt"/"gemini"
+다 - 스키마의 AgentName 리터럴이라 실제 백엔드 모델이 바뀌어도 그대로 둔다.)
 
 SequentialAgent/ParallelAgent는 google-adk 2.6.3 기준 deprecated(대체 예정인
 Workflow가 아직 LlmAgent의 sub-agent로 못 쓰여 미완성 상태)이지만, 실제로는
@@ -13,10 +14,13 @@ Workflow가 아직 LlmAgent의 sub-agent로 못 쓰여 미완성 상태)이지�
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from typing import Any, AsyncGenerator, AsyncIterator
+from urllib.parse import urlsplit
 
+from fetchers import danawa as danawa_fetcher
 from google.adk.agents import BaseAgent, LlmAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -27,11 +31,12 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 from pydantic import TypeAdapter
 
+from . import price_table as price_table_module
 from . import search as search_module
 from .agents import gpt as gpt_module
 from .agents import judge as judge_module
 from .category import CategoryClassification, classify_category
-from .intent import has_count_spec, has_volume_spec
+from .intent import needs_clarification
 from .agents.base import (
     NO_CANDIDATE_ERROR,
     build_challenge_prompt,
@@ -46,10 +51,10 @@ from .schemas import (
     AgentCandidate,
     ChallengeResult,
     ChallengeVerdict,
-    ClarifyOptions,
     ClarifyResponse,
     DecideResponse,
     Decision,
+    PriceTable,
     Proposal,
     RefinedQuery,
     SearchResult,
@@ -138,10 +143,70 @@ class _SearchNode(BaseAgent):
         )
 
 
+class _DanawaFetchNode(BaseAgent):
+    """다나와 실측 가격표를 propose 3개 모델과 나란히(동시에) 조회한다 —
+    PRESERVED FROM seungmin/lsm의 run_single_debate_price_table_variant(PART 4-2)를
+    ADK 파이프라인으로 포팅(2026-08-16, README "한계점 및 향후 과제" 후속작업).
+    같은 ParallelAgent(propose_parallel) 소속이라 gpt/gemini/deepseek LlmAgent와
+    동시에 실행되므로 지연시간이 추가되지 않는다.
+
+    price_table_module.fetch_price_tables()는 원래도 예외를 던지지 않지만,
+    이 노드도 다른 커스텀 노드(_SearchNode 등)와 같은 방어 패턴을 따라 한 번 더
+    감싼다 — 다나와 조회가 실패해도 gpt/gemini/deepseek 후보만으로 파이프라인이
+    계속 진행된다.
+
+    A등급(구매 링크 생성 가능) 최저가 offer가 있는 대표 가격표(pick_primary -
+    offer가 가장 많은 페이지) 하나만 골라 다른 슬롯과 같은 모양(raw JSON
+    문자열, output_key 컨벤션)으로 danawa_raw에 저장한다 - _FilterMergeNode가
+    다른 3개 슬롯과 동일하게 처리해 병합 풀에 합류시킨다. 여러 다나와 페이지가
+    있어도 대표 1개만 후보로 올리는 이유: 다른 3개 에이전트도 이미 "각자 최선
+    1개"만 제안하도록 되어 있어(_MAX_CANDIDATES_PER_AGENT) 여러 개를 넣어도
+    filter_candidates가 어차피 1개로 자른다.
+
+    danawa_tables(전체 가격표, 모든 offer 포함)는 별도로 저장해 run_stream()의
+    후처리(enrich_decision/exclude_price_comparison_site_as_final_pick/
+    price_table 채우기)에서 그대로 재사용한다 - 이 노드에서 만든 대표 후보
+    하나로는 그 후처리들이 필요로 하는 전체 가격표 정보(모든 offer, 다른 pcode
+    페이지들)를 담을 수 없다."""
+
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        query = _refined_query_text(ctx.session.state)
+        results = _search_results_from_state(ctx.session.state)
+
+        tables_dump: list[list] = []
+        danawa_raw = "[]"
+        try:
+            tables = await price_table_module.fetch_price_tables(query, results)
+            tables_dump = [[table.model_dump(), raw] for table, raw in tables]
+            primary = price_table_module.pick_primary(tables)
+            if primary is not None:
+                primary_table, raw_result = primary
+                offer = price_table_module.cheapest_linkable_raw_offer(raw_result)
+                if offer is not None:
+                    resolved_url = await price_table_module.resolve_purchase_url(offer)
+                    if resolved_url is not None:
+                        candidate = AgentCandidate(
+                            product_name=primary_table.product_name or query,
+                            price_krw=offer["price_krw"],
+                            retailer=offer["seller"],
+                            url=resolved_url,
+                        )
+                        danawa_raw = json.dumps([candidate.model_dump()])
+        except Exception:
+            logger.exception("다나와 실측가 조회 실패: %r", query)
+
+        yield Event(
+            author=self.name,
+            actions=EventActions(
+                state_delta={"danawa_tables": tables_dump, "danawa_raw": danawa_raw}
+            ),
+        )
+
+
 class _FilterMergeNode(BaseAgent):
-    """3개 제안 노드의 원시 JSON을 각각 파싱+필터링한 뒤, fusion.dedup으로
-    동일 상품을 병합한다 — 지금까지 어디서도 안 쓰이던 merge_candidates()가
-    여기서 처음 실사용된다."""
+    """3개 제안 노드 + 다나와 후보의 원시 JSON을 각각 파싱+필터링한 뒤,
+    fusion.dedup으로 동일 상품을 병합한다 — 지금까지 어디서도 안 쓰이던
+    merge_candidates()가 여기서 처음 실사용된다."""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         state = ctx.session.state
@@ -149,6 +214,7 @@ class _FilterMergeNode(BaseAgent):
             "gpt": state.get("gpt_raw"),
             "gemini": state.get("gemini_raw"),
             "deepseek": state.get("deepseek_raw"),
+            "danawa": state.get("danawa_raw"),
         }
         merged = _merge_proposals(raw_by_agent)
         logger.info(
@@ -185,17 +251,30 @@ def _urls_to_extract(candidates: list[dict]) -> list[str]:
     return [c["url"] for c in candidates[:_MAX_EXTRACT_CANDIDATES] if c.get("url")]
 
 
+def _is_danawa_product_url(url: str | None) -> bool:
+    return bool(url) and urlsplit(url).netloc.lower().endswith("danawa.com")
+
+
 class _ExtractPagesNode(BaseAgent):
     """병합된 후보들의 실제 판매 페이지 원문을 다시 가져와 상태에 저장한다.
     challenge(DeepSeek)는 기존에는 검색 당시 잘린 스니펫(최대 1500자)만 보고
     판단했는데, 여기서 채운 candidate_pages를 함께 주면 지금 이 URL의 실제
     최신 본문을 근거로 재검증할 수 있다 — search.extract()는 원래도 있었지만
     어디서도 쓰이지 않던 함수였다. 개별 URL 조회가 실패해도 그 후보만 스니펫
-    기반 검증으로 남고 나머지는 그대로 진행한다(전체를 막지 않음)."""
+    기반 검증으로 남고 나머지는 그대로 진행한다(전체를 막지 않음).
+
+    후보 URL은 전부 다나와 검색(Tavily include_domains=danawa.com)에서 나오므로,
+    다나와 URL에 한해 fetchers/danawa.py로 직접 재조회해 "가격비교 서비스가
+    종료된 상품" 페이지인지도 함께 확인한다(사용자 요청, 2026-08-13: "가격미확인
+    되어있는것도 뜨거든... 가격 비교가 중지된 상품이라고 뜨는 이런 경우의 수도
+    없애주면"). Tavily extract 텍스트만으로 challenge LLM이 이 패턴을 매번
+    알아채리라 보장할 수 없어서, _is_expired_page()로 이미 검증된 판별을
+    LLM 판단에 맡기지 않고 여기서 결정적으로 걸러낸다."""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         candidates: list[dict] = ctx.session.state.get("candidates") or []
         urls = _urls_to_extract(candidates)
+        danawa_urls = [u for u in urls if _is_danawa_product_url(u)]
 
         async def _safe_extract(url: str) -> tuple[str, str | None]:
             try:
@@ -204,12 +283,28 @@ class _ExtractPagesNode(BaseAgent):
                 logger.warning("후보 페이지 재조회 실패: %r", url, exc_info=True)
                 return url, None
 
-        pages: dict[str, str] = {}
-        if urls:
-            fetched = await asyncio.gather(*(_safe_extract(u) for u in urls))
-            pages = {url: text for url, text in fetched if text}
+        async def _check_expired(url: str) -> tuple[str, bool]:
+            try:
+                result = await danawa_fetcher.fetch_danawa_offers(url)
+                return url, result["parse_status"] == "expired"
+            except Exception:
+                logger.warning("다나와 후보 URL 상태 확인 실패: %r", url, exc_info=True)
+                return url, False
 
-        yield Event(author=self.name, actions=EventActions(state_delta={"candidate_pages": pages}))
+        pages: dict[str, str] = {}
+        expired_urls: list[str] = []
+        if urls:
+            extracted, expiry_checked = await asyncio.gather(
+                asyncio.gather(*(_safe_extract(u) for u in urls)),
+                asyncio.gather(*(_check_expired(u) for u in danawa_urls)),
+            )
+            pages = {url: text for url, text in extracted if text}
+            expired_urls = [url for url, is_expired in expiry_checked if is_expired]
+
+        yield Event(
+            author=self.name,
+            actions=EventActions(state_delta={"candidate_pages": pages, "expired_danawa_urls": expired_urls}),
+        )
 
 
 class _ApplyChallengeNode(BaseAgent):
@@ -220,6 +315,7 @@ class _ApplyChallengeNode(BaseAgent):
         state = ctx.session.state
         candidates: list[dict] = state.get("candidates") or []
         raw_challenge = state.get("raw_challenge")
+        expired_urls = set(state.get("expired_danawa_urls") or [])
 
         verdicts: list[ChallengeVerdict] = []
         if raw_challenge:
@@ -228,7 +324,7 @@ class _ApplyChallengeNode(BaseAgent):
             except Exception:
                 logger.exception("DeepSeek 검증 결과 파싱 실패 — 전부 미검증으로 진행")
 
-        proposals = _apply_challenge(candidates, ChallengeResult(verdicts=verdicts))
+        proposals = _apply_challenge(candidates, ChallengeResult(verdicts=verdicts), expired_urls)
 
         yield Event(
             author=self.name,
@@ -236,18 +332,44 @@ class _ApplyChallengeNode(BaseAgent):
         )
 
 
-def _apply_challenge(candidates: list[dict], challenge: ChallengeResult) -> list[Proposal]:
+def _apply_challenge(
+    candidates: list[dict], challenge: ChallengeResult, expired_urls: set[str] = frozenset()
+) -> list[Proposal]:
     """병합된 후보(merge_candidates 출력 dict)와 검증 결과를 매칭해 Proposal로
-    합성하는 순수 함수 — LLM 호출 없이 테스트 가능."""
+    합성하는 순수 함수 — LLM 호출 없이 테스트 가능.
+
+    expired_urls에 속한 후보(다나와가 "가격비교 서비스가 종료된 상품"으로 표시하는
+    페이지로 확인됨)는 verified=False로 남기지 않고 아예 결과에서 제외한다 —
+    challenge/judge 단계까지 흘려보내면 죽은 링크가 "가격미확인" 카드로 그대로
+    노출될 수 있어서다. 후보가 전부 걸러지면 proposals가 빈 리스트가 되는데,
+    이는 run_stream()의 기존 "후보 0개" 폴백 체인(clarify → relaxed fallback →
+    NO_CANDIDATE_ERROR)이 그대로 처리한다.
+
+    proposed_by에 "danawa"가 섞인 후보(_DanawaFetchNode가 넣은 실측가 - 다른
+    에이전트와 병합됐든 단독이든)는 DeepSeek 검증 결과를 안 보고 verified=True로
+    강제한다 - 이미 실측 확인된 가격/구매링크를 텍스트 기반 challenge LLM에게
+    다시 판단하게 하는 건 불필요하고, verdict가 안 붙으면 verified=None(미검증)
+    으로 표시돼 실측 데이터가 오히려 검증 안 된 것처럼 보이는 문제도 막는다."""
     verdicts_by_url = {v.url: v for v in challenge.verdicts if v.url}
 
     proposals = []
     for i, candidate in enumerate(candidates):
-        verdict = verdicts_by_url.get(candidate.get("url"))
-        if verdict is None and i < len(challenge.verdicts):
-            verdict = challenge.verdicts[i]
+        url = candidate.get("url")
+        if url in expired_urls:
+            logger.info("다나와 가격비교 중지 페이지로 확인되어 후보에서 제외: %s", url)
+            continue
 
         proposed_by = candidate.get("proposed_by") or []
+        if "danawa" in proposed_by:
+            verified: bool | None = True
+            challenge_note = "다나와 실측 가격표에서 확인된 A등급(구매 링크 검증됨) 후보"
+        else:
+            verdict = verdicts_by_url.get(url)
+            if verdict is None and i < len(challenge.verdicts):
+                verdict = challenge.verdicts[i]
+            verified = verdict.verified if verdict else None
+            challenge_note = verdict.note if verdict else None
+
         # 같은 상품이 여러 모델에서 조금씩 다른 문구로 제안되면 reasons가 여러 개
         # 쌓인다 — 전부 이어붙이면 근거가 아니라 벽글이 되므로 최대 2개만 보여준다.
         reasons = (candidate.get("reasons") or [])[:2]
@@ -259,8 +381,8 @@ def _apply_challenge(candidates: list[dict], challenge: ChallengeResult) -> list
                 retailer=candidate.get("retailer"),
                 url=candidate.get("url"),
                 reasoning=" / ".join(reasons) if reasons else None,
-                verified=verdict.verified if verdict else None,
-                challenge_note=verdict.note if verdict else None,
+                verified=verified,
+                challenge_note=challenge_note,
                 proposed_by=proposed_by or None,
             )
         )
@@ -287,6 +409,23 @@ def _model_error_fallback_response(text: str) -> LlmResponse:
     return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=text)]))
 
 
+def _skip_refine_if_already_specific(callback_context, llm_request) -> LlmResponse | None:
+    """정제(refine)는 파이프라인에서 검색이 시작되기 전에 걸리는 첫 LLM 왕복이라,
+    여기를 건너뛰면 그만큼 전체 응답 지연이 그대로 줄어든다(사용자 요청,
+    2026-08-15: "순차단계 줄이자"). REFINE_QUERY_INSTRUCTIONS 자체가 "질의가
+    이미 구체적이면 그대로 반환하라"고 하므로, 그 판단을 Gemini에 매번 왕복해
+    묻는 대신 이미 있는 needs_clarification() 휴리스틱(브랜드/스펙 없이 짧은
+    질의나 "사고싶어"류 모호한 구매의도 문구만 True)으로 로컬에서 먼저 걸러
+    낸다. 애매하면(True) 여기서 손대지 않고 실제 Gemini 정제를 그대로 태운다 -
+    오탐(정제가 실제로 필요한데 건너뜀)의 대가가 "약간 덜 다듬어진 검색어"
+    정도라 위험하지 않다."""
+    original_query = callback_context.state.get("original_query", "")
+    if not original_query or needs_clarification(original_query):
+        return None
+    fallback = RefinedQuery(query=original_query)
+    return _model_error_fallback_response(fallback.model_dump_json())
+
+
 def _on_refine_model_error(callback_context, llm_request, error) -> LlmResponse:
     """refine의 Gemini 호출이 실패하면 정제를 포기하고 원본 질의를 그대로 쓴다 —
     다듬지 않은 질의로라도 검색을 계속하는 게 파이프라인 전체를 죽이는 것보다
@@ -307,16 +446,30 @@ def _on_propose_model_error(callback_context, llm_request, error) -> LlmResponse
     return _model_error_fallback_response("[]")
 
 
+def _groq_model(model_name: str) -> LiteLlm:
+    """Groq는 OpenAI 호환 엔드포인트라 "openai/" 프리픽스 뒤에 api_base/api_key로
+    Groq 엔드포인트를 직접 지정한다 - litellm이 groq 프로바이더를 자체 지원하는지에
+    기대지 않고 "그냥 OpenAI 호환 엔드포인트"로 취급하는 쪽이 확실하다(agents/gpt.py의
+    DashScope 처리와 동일한 접근)."""
+    return LiteLlm(model=f"openai/{model_name}", api_base=settings.groq_api_base, api_key=settings.groq_api_key)
+
+
 def _build_refine_agent() -> LlmAgent:
     def instruction(ctx: ReadonlyContext) -> str:
         return build_refine_query_prompt(ctx.state.get("original_query", ""))
 
     return LlmAgent(
         name="refine",
-        model=settings.gemini_model,  # 네이티브 Gemini — LiteLlm 불필요
+        # refine은 2026-08-16부터 Gemini가 아니라 Groq다(사용자 요청: "deepseek
+        # Qwen 빼고 싹 다 무료 모델로 바꾸려고 해"). ADK가 output_schema를
+        # response_format=json_schema로 요청하는데 propose 쪽 groq_model
+        # (groq/compound-mini)은 이를 지원하지 않아, 구조화 출력이 되는 전용
+        # 모델(groq_refine_model)을 따로 쓴다(config.py 주석 참고).
+        model=_groq_model(settings.groq_refine_model),
         instruction=instruction,
         output_schema=RefinedQuery,
         output_key="refined_query",
+        before_model_callback=_skip_refine_if_already_specific,
         on_model_error_callback=_on_refine_model_error,
     )
 
@@ -370,7 +523,13 @@ def _build_judge_agent() -> LlmAgent:
 
     return LlmAgent(
         name="judge",
-        model=LiteLlm(model=f"anthropic/{settings.judge_model}"),
+        # judge는 2026-08-16부터 Claude가 아니라 Groq(openai/gpt-oss-120b)다
+        # (사용자 요청: "deepseek Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" -
+        # Anthropic엔 상시 무료 API 티어가 없다). propose 쪽 gemini 슬롯도 같은
+        # gpt-oss 계열(20b)이지만 judge는 그보다 큰 120b를 따로 써서 최소한의
+        # 판단력 격차를 둔다 - Groq 카탈로그에 구조화 출력(json_schema)을 지원하는
+        # 모델이 gpt-oss 계열뿐이라 propose·judge가 완전히 다른 계보를 쓰긴 어렵다.
+        model=_groq_model(settings.groq_judge_model),
         instruction=instruction,
         output_schema=judge_module.JudgeVerdict,
         output_key="raw_decision",
@@ -385,9 +544,35 @@ def _build_pipeline() -> SequentialAgent:
     propose_parallel = ParallelAgent(
         name="propose",
         sub_agents=[
-            _build_propose_agent(gpt_raw, LiteLlm(model=f"openai/{settings.gpt_model}")),
-            _build_propose_agent(gemini_raw, settings.gemini_model),
+            # "gpt" 슬롯은 2026-08-15부터 Qwen(DashScope)이 담당한다(사용자 요청:
+            # "GPT 토큰이 더 이상 없어서 Qwen 성능 제일 좋은 걸로 바꿔줘") - openai/
+            # 프리픽스 대신, DashScope의 OpenAI 호환 엔드포인트를 api_base로 직접
+            # 지정한다. litellm이 dashscope 프로바이더를 자체적으로 지원하는지에
+            # 기대지 않고, "그냥 OpenAI 호환 엔드포인트"로 취급하는 쪽이 확실하다
+            # (agents/gpt.py의 openai SDK+base_url 방식과 동일한 접근). name/
+            # output_key는 그대로 "gpt"라 스키마의 AgentName 리터럴이나 이 파일
+            # 다른 곳의 "gpt" 참조를 안 건드린다.
+            _build_propose_agent(
+                gpt_raw,
+                LiteLlm(
+                    model=f"openai/{settings.qwen_model}",
+                    api_base=settings.qwen_api_base,
+                    api_key=settings.qwen_api_key,
+                ),
+            ),
+            # "gemini" 슬롯은 2026-08-16부터 Groq(gpt-oss-20b)가 담당한다
+            # (사용자 요청: "deepseek Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" -
+            # Gemini 프로젝트가 403으로 막혀있기도 했다). name/output_key는 그대로
+            # "gemini"라 스키마의 AgentName 리터럴이나 이 파일 다른 곳의 "gemini"
+            # 참조를 안 건드린다.
+            _build_propose_agent(gemini_raw, _groq_model(settings.groq_model)),
             _build_propose_agent(deepseek_raw, LiteLlm(model=f"deepseek/{settings.deepseek_model}")),
+            # 다나와 A등급 실측가 - 2026-08-16, PRESERVED FROM seungmin/lsm의
+            # run_single_debate_price_table_variant(PART 4-2)를 라이브 ADK
+            # 파이프라인으로 포팅(README "한계점 및 향후 과제" 후속작업). LLM이
+            # 아니라 커스텀 BaseAgent지만 같은 ParallelAgent 소속이라 gpt/gemini/
+            # deepseek와 동시에 실행된다(지연시간 추가 없음).
+            _DanawaFetchNode(name="danawa"),
         ],
     )
 
@@ -494,26 +679,43 @@ async def _relaxed_fallback_decision(query: str, search_results: list[SearchResu
     )
 
 
-def _is_ambiguous(query: str, options: ClarifyOptions) -> bool:
-    """브랜드/제품/용량/개수 중 하나라도 2개 이상이면 사용자에게 물어볼 만큼
-    애매하다고 본다 — 0~1개뿐이면 고를 게 없으니 그대로 진행.
+def _danawa_tables_from_state(state: dict) -> list[tuple[PriceTable, dict]]:
+    return [(PriceTable(**t), raw) for t, raw in (state.get("danawa_tables") or [])]
 
-    단, 검색 결과가 완전히 못 걸러내더라도(예: "70mL 10개"로 좁혔는데도 검색
-    결과에 30개입 페이지가 섞여 나옴) 사용자가 Human-in-the-loop으로 이미 답한
-    기준은 다시 안 묻는다 — 질의 텍스트에 이미 용량/개수 스펙이 있으면 그
-    차원은 애매함 판정에서 제외한다. 브랜드·제품도 후보 중 하나가 이미 질의에
-    문자 그대로 들어있으면 같은 이유로 제외한다."""
-    brand_resolved = any(b.casefold() in query.casefold() for b in options.brands)
-    product_resolved = any(p.casefold() in query.casefold() for p in options.products)
-    volume_resolved = has_volume_spec(query)
-    quantity_resolved = has_count_spec(query)
 
-    return (
-        (len(options.brands) > 1 and not brand_resolved)
-        or (len(options.products) > 1 and not product_resolved)
-        or (len(options.volumes) > 1 and not volume_resolved)
-        or (len(options.quantities) > 1 and not quantity_resolved)
+async def _finalize_with_danawa(
+    decision: Decision,
+    proposals: list[Proposal],
+    danawa_tables: list[tuple[PriceTable, dict]],
+) -> tuple[Decision, PriceTable | None]:
+    """judge(또는 relaxed fallback)가 고른 decision을 다나와 실측 데이터로
+    후처리한다 - PRESERVED FROM seungmin/lsm의 run_single_debate_price_table_variant
+    PART 4-2/4-3과 동일한 순서(debate.py 260-273줄)를 ADK 파이프라인으로 포팅.
+    danawa_tables가 비어있으면(다나와 조회 실패/결과 없음) 세 호출 모두
+    안전하게 아무것도 안 하고 decision을 그대로 돌려준다.
+
+    1) judge가 실제로 danawa 후보를 골랐으면 price_source를 danawa_offer로 표시.
+    2) pick_primary(offer가 가장 많은 페이지)를 응답의 price_table로 채운다 -
+       지금까지 ADK 파이프라인은 이 필드를 항상 null로 냈다.
+    3) enrich_decision - judge가 고른 상품명이 다나와 페이지와 이름이 맞으면
+       실측 가격/판매처/URL로 덮어쓴다(이름이 안 맞으면 손대지 않음).
+    4) exclude_price_comparison_site_as_final_pick - 최종 URL이 다나와
+       가격비교 페이지 자체면(judge가 실수로 그렇게 골랐을 때) 실제 구매
+       URL로 치환하거나 다른 제안으로 넘긴다."""
+    if decision.chosen_agent == "danawa":
+        decision.price_source = "danawa_offer"
+
+    primary = price_table_module.pick_primary(danawa_tables)
+    price_table: PriceTable | None = None
+    if primary is not None:
+        table, raw_result = primary
+        price_table = table
+        decision = await price_table_module.enrich_decision(decision, raw_result)
+
+    decision = await price_table_module.exclude_price_comparison_site_as_final_pick(
+        decision, proposals, danawa_tables
     )
+    return decision, price_table
 
 
 async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[dict[str, Any]]:
@@ -523,12 +725,13 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
     skip_clarify(2026-08 통합 병합) - 프론트의 SearchContext.runTurn이 이미
     브랜드/facet/고정축 선택으로 한 라운드를 좁혀온 후속 턴이면 True로 넘어온다
     (main.py의 DecideRequest.skip_intent_check). 이게 없으면 검색 직후
-    _is_ambiguous()가 이번 라운드에도 남아있는 다른 축(예: 브랜드는 답했는데
-    용량이 여러 개)을 또 clarify로 멈춰세워, 사용자가 이미 몇 라운드나 답했는데도
-    계속 새 선택 화면이 뜨는 재질문 버그가 생긴다 - True면 이 조기 종료를 건너뛰고
-    바로 propose/challenge/judge까지 진행한다(완전히 후보가 0개면 아래의
-    안전망 clarify는 skip_clarify와 무관하게 그대로 동작한다)."""
-    from .debate import _extract_clarify_options  # 지연 임포트 — 순환 참조 방지
+    debate._is_ambiguous_facets()가 이번 라운드에도 남아있는 다른 facet(예:
+    브랜드는 답했는데 용량이 여러 개)을 또 clarify로 멈춰세워, 사용자가 이미
+    몇 라운드나 답했는데도 계속 새 선택 화면이 뜨는 재질문 버그가 생긴다 -
+    True면 이 조기 종료를 건너뛰고 바로 propose/challenge/judge까지 진행한다
+    (완전히 후보가 0개면 아래의 안전망 clarify는 skip_clarify와 무관하게
+    그대로 동작한다)."""
+    from .debate import _extract_clarify_options, _is_ambiguous_facets  # 지연 임포트 — 순환 참조 방지
 
     runner = _get_runner()
     session_id = str(uuid.uuid4())
@@ -555,7 +758,11 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
                     SearchResult(**r) for r in event.actions.state_delta.get("search_results") or []
                 ]
                 clarify = await _extract_clarify_options(query, search_results)
-                if clarify is not None and not skip_clarify and _is_ambiguous(query, clarify.options):
+                if (
+                    clarify is not None
+                    and not skip_clarify
+                    and _is_ambiguous_facets(query, clarify.options.facets)
+                ):
                     await gen.aclose()
                     yield {"type": "final", "result": clarify.model_dump()}
                     return
@@ -583,6 +790,7 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
     if pipeline_failed:
         final_state.setdefault("proposals", [])
 
+    danawa_tables = _danawa_tables_from_state(final_state)
     proposals = [Proposal(**p) for p in (final_state.get("proposals") or [])]
 
     if not proposals:
@@ -593,7 +801,10 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
             return
         fallback_decision = await _relaxed_fallback_decision(query, search_results)
         if fallback_decision is not None:
-            result = DecideResponse(query=query, proposals=[], decision=fallback_decision)
+            fallback_decision, price_table = await _finalize_with_danawa(fallback_decision, [], danawa_tables)
+            result = DecideResponse(
+                query=query, proposals=[], decision=fallback_decision, price_table=price_table
+            )
             yield {"type": "final", "result": result.model_dump()}
             return
         raise RuntimeError(NO_CANDIDATE_ERROR)
@@ -602,12 +813,18 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
     if decision is None:
         fallback_decision = await _relaxed_fallback_decision(query, _search_results_from_state(final_state))
         if fallback_decision is not None:
-            result = DecideResponse(query=query, proposals=proposals, decision=fallback_decision)
+            fallback_decision, price_table = await _finalize_with_danawa(
+                fallback_decision, proposals, danawa_tables
+            )
+            result = DecideResponse(
+                query=query, proposals=proposals, decision=fallback_decision, price_table=price_table
+            )
             yield {"type": "final", "result": result.model_dump()}
             return
         raise RuntimeError(NO_CANDIDATE_ERROR)
 
-    result = DecideResponse(query=query, proposals=proposals, decision=decision)
+    decision, price_table = await _finalize_with_danawa(decision, proposals, danawa_tables)
+    result = DecideResponse(query=query, proposals=proposals, decision=decision, price_table=price_table)
     yield {"type": "final", "result": result.model_dump()}
 
 
