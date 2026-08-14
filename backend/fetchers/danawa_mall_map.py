@@ -62,8 +62,17 @@ class MallMapping(TypedDict):
 
 
 CMPNYC_MAP: dict[str, MallMapping] = {
-    # --- 검증 A (STEP 3 사전검증)에서 실제 리다이렉트 추적으로 완전 확인 ---
-    "TP40F": {"seller": "쿠팡", "domain": "coupang.com", "url_rule": "bridge_passthrough"},
+    # --- 검증 A (STEP 3 사전검증)에서 실제 리다이렉트 추적으로 완전 확인, 이후
+    # 재검증(2026-08-16)에서 url_rule을 None으로 강등 - 사용자 리포트("구매링크를
+    # 안띄워주는거야") + 실제 bridge_url을 사용자 본인 브라우저로 직접 열어본 결과,
+    # 서로 다른 pcode(아이폰16/코카콜라/갤럭시버즈3) 전부 동일하게 "사용권한이
+    # 제한된 페이지입니다"(쿠팡 접근 제한 에러)로 확인됨 - 특정 상품이 아니라
+    # 이 cmpnyc(다나와의 쿠팡 제휴 코드) 자체가 지금 막혀 있다는 뜻. 서버가
+    # /bridge/를 직접 크롤링하지 않는(robots.txt 준수) 원칙은 그대로 유지하고,
+    # 대신 "링크 있는 추천만 노출한다"는 원칙에 따라 이 코드를 A등급에서 뺀다.
+    # 나중에 다나와-쿠팡 제휴가 복구되면 url_rule을 다시 "bridge_passthrough"로
+    # 되돌릴 것 - domain은 여전히 사실이므로 그대로 둔다(trust 등급에는 계속 반영).
+    "TP40F": {"seller": "쿠팡", "domain": "coupang.com", "url_rule": None},
 
     # --- 검증 D (게이트웨이 쿼리 파라미터 해부)에서 확인 ---
     "TH201": {

@@ -27,9 +27,20 @@ _PCODE_PATTERN = re.compile(r"^\d+$")
 def _extract_pcode(url: str) -> str | None:
     """다나와 상품 상세 페이지(prod.danawa.com/info?pcode=...)의 pcode를 뽑는다.
     다나와의 다른 페이지(plan.danawa.com 기획전, mauto.danawa.com 뉴스 등)는
-    해당하지 않아 None을 반환 — 호출부는 이 경우 원래 URL을 그대로 쓴다."""
+    해당하지 않아 None을 반환 — 호출부는 이 경우 원래 URL을 그대로 쓴다.
+
+    /bridge/ 경로(loadingBridge.html)는 제외한다(2026-08-16, 사용자 리포트
+    "구매링크를 안띄워주는거야" 회귀 수정) - 이 경로는 pipeline이 이미 A등급
+    (실제로 클릭 가능함이 확인된) 판매처로 확정한 구매 링크다. 여기서 다시
+    pcode를 뽑아 이 모듈 자신의 getAllPriceCompareMallList.ajax.php 조회로
+    "최저가"를 재해석하면, 그쪽은 danawa 자신이 객관적으로 가장 싼 값만 보고
+    고르지 A등급 여부(fetchers/danawa_mall_map.CMPNYC_MAP)를 전혀 모른다 -
+    이미 올바르게 확정된(가끔은 A등급 중 최저가가 아닌 값일 수도 있는, 그러나
+    확실히 작동하는) 링크를 알 수 없는 판매처로 조용히 덮어써버렸다."""
     parts = urlsplit(url)
     if parts.netloc != "prod.danawa.com":
+        return None
+    if parts.path.startswith("/bridge/"):
         return None
     pcode = parse_qs(parts.query).get("pcode", [None])[0]
     if pcode and _PCODE_PATTERN.match(pcode):
