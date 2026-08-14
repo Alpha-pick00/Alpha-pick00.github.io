@@ -534,6 +534,36 @@ def _judge_eligible_proposals(proposals: list[Proposal]) -> list[Proposal]:
     return eligible or proposals
 
 
+def _skip_judge_if_single_candidate(callback_context, llm_request) -> LlmResponse | None:
+    """검증을 통과한 제안이 정확히 1개면 그 사이에서 "고를" 게 없다 - judge(Claude,
+    약 5초) 호출을 건너뛰고 그 하나를 그대로 채택한다(사용자 요청, 2026-08-15:
+    "너무 느려 더 빠르게" - 에이전트당 최종 후보 1개 + dedup 병합 + verified=False
+    탈락을 거치고 나면, 특히 지금처럼 일부 에이전트 토큰이 소진된 상황에서는
+    실제로 이 경우가 자주 나온다). _build_decision()이 judge의 raw product_name/
+    price/retailer보다 url로 찾은 실제 proposal(matched)의 그라운딩된 값을
+    우선하므로, 여기서는 url만 정확히 일치시키면 나머지 필드는 자동으로 검증된
+    값으로 채워진다 - reasoning만 이 함수가 직접 채운다.
+
+    후보가 0개거나 2개 이상이면 원래대로 judge를 그대로 태운다 - 0개는 "고를
+    필요 없음"이 아니라 "아무것도 못 찾음"이라 judge의 완화된 자유 추론이 여전히
+    의미 있고, 2개 이상은 진짜 비교/심사가 필요하다."""
+    proposals = [Proposal(**p) for p in (callback_context.state.get("proposals") or [])]
+    eligible = _judge_eligible_proposals(proposals)
+    if len(eligible) != 1:
+        return None
+    only = eligible[0]
+    if not (only.product_name and only.price and only.retailer and only.url):
+        return None
+    verdict = judge_module.JudgeVerdict(
+        product_name=only.product_name,
+        price=only.price,
+        retailer=only.retailer,
+        url=only.url,
+        reasoning=f"다른 유효한 제안이 없어 {only.agent}의 후보를 그대로 채택했습니다.",
+    )
+    return _model_error_fallback_response(verdict.model_dump_json())
+
+
 def _build_judge_agent() -> LlmAgent:
     def instruction(ctx: ReadonlyContext) -> str:
         query = _refined_query_text(ctx.state)
@@ -552,6 +582,7 @@ def _build_judge_agent() -> LlmAgent:
         instruction=instruction,
         output_schema=judge_module.JudgeVerdict,
         output_key="raw_decision",
+        before_model_callback=_skip_judge_if_single_candidate,
     )
 
 

@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import TypeAdapter
 
-from . import autocomplete, danawa, history, popularity_scheduler, preferences
+from . import autocomplete, danawa, decision_cache, history, popularity_scheduler, preferences
 from .agents import gpt as gpt_agent
 from .auth import google as google_auth
 from .auth import kakao as kakao_auth
@@ -263,12 +263,17 @@ async def ocr_extract(image: UploadFile) -> OcrExtractResponse:
 
 @app.post("/decide", response_model=DecideResult)
 async def decide(request: DecideRequest, background_tasks: BackgroundTasks) -> DecideResult:
+    skip_resolve = False
     try:
         if request.brand:
             result = await run_brand_price(request.query, request.brand)
         elif request.skip_intent_check:
             result = await run_single_debate(request.query, skip_clarify=True)
         else:
+            # 정적 최종결과 캐시(decision_cache) 히트면 이미 캡처 시점에 한 번
+            # resolve_lowest_price를 거친 링크라 - 다시 부르면 다나와에 실시간
+            # 네트워크 호출(~0.5초)이 또 나가 캐시의 속도 이점이 사라진다.
+            skip_resolve = decision_cache.lookup(request.query) is not None
             result = await run_debate(request.query)
     except (RuntimeError, ValueError) as exc:
         # RuntimeError: 제안 전부 실패, ValueError: judge 응답에서 JSON을 못 찾음
@@ -279,7 +284,8 @@ async def decide(request: DecideRequest, background_tasks: BackgroundTasks) -> D
             status_code=502, detail="구매 결정을 처리하는 중 오류가 발생했습니다."
         ) from exc
 
-    result = await _resolve_danawa_urls(result)
+    if not skip_resolve:
+        result = await _resolve_danawa_urls(result)
     background_tasks.add_task(autocomplete.record_terms, _autocomplete_terms(request, result))
     return result
 
@@ -300,6 +306,9 @@ async def decide_stream(request: DecideRequest) -> StreamingResponse:
                 yield json.dumps({"type": "final", "result": result.model_dump()}) + "\n"
             else:
                 result = None
+                # decide()와 같은 이유(skip_resolve 주석 참고) - decision_cache
+                # 히트는 링크를 다시 해석하지 않는다.
+                skip_resolve = not request.skip_intent_check and decision_cache.lookup(request.query) is not None
                 stream = (
                     run_single_debate_stream(request.query, skip_clarify=True)
                     if request.skip_intent_check
@@ -307,9 +316,8 @@ async def decide_stream(request: DecideRequest) -> StreamingResponse:
                 )
                 async for event in stream:
                     if event["type"] == "final":
-                        result = await _resolve_danawa_urls(
-                            _decide_result_adapter.validate_python(event["result"])
-                        )
+                        parsed = _decide_result_adapter.validate_python(event["result"])
+                        result = parsed if skip_resolve else await _resolve_danawa_urls(parsed)
                         event["result"] = result.model_dump()
                     yield json.dumps(event) + "\n"
         except (RuntimeError, ValueError) as exc:

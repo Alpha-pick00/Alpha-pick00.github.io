@@ -6,6 +6,8 @@ from typing import Any, AsyncIterator
 from fetchers import danawa, danawa_search
 
 from . import adk_pipeline
+from . import decision_cache
+from . import facet_cache
 from . import price_table as price_table_module
 from . import search as search_module
 from .agents import deepseek, gemini, gpt, judge
@@ -50,6 +52,9 @@ async def run_debate(query: str) -> DecideResponse | BulkDecideResponse | Clarif
     if is_non_product_chitchat(query):
         # 검색/LLM 호출을 아예 안 하고 즉시 실패한다 - is_non_product_chitchat 참고.
         raise RuntimeError(NO_CANDIDATE_ERROR)
+    static_decision = decision_cache.lookup(query)
+    if static_decision is not None:
+        return DecideResponse(**static_decision)
     if is_bulk_query(query):
         return await run_bulk_debate(query)
     if not _any_llm_key_configured():
@@ -73,6 +78,14 @@ async def run_debate_stream(query: str) -> AsyncIterator[dict[str, Any]]:
     두 경우 다 처리하면 된다."""
     if is_non_product_chitchat(query):
         yield {"type": "error", "message": NO_CANDIDATE_ERROR}
+        return
+    static_decision = decision_cache.lookup(query)
+    if static_decision is not None:
+        # 정적 최종결과 캐시(2026-08-16, 속도 개선) - "여기서 상세검색까지
+        # 누르면 바로 정규식으로 찾을수있게 0.1초만에 해줘": AI 상세검색에서
+        # facet을 다 고른 뒤 넘어가는 최종 검색(정제+검색+제안 3개+검증+심사
+        # 전체, 실측 ~9~15초)을 건너뛰고 캡처해둔 실제 결과를 즉시 낸다.
+        yield {"type": "final", "result": static_decision}
         return
     if is_bulk_query(query):
         yield {"type": "final", "result": (await run_bulk_debate(query)).model_dump()}
@@ -669,9 +682,18 @@ async def check_clarify_facets(
     danawa_search._cache)가 맞을 확률이 높아 10초 Crawl-delay를 건너뛰고, 그 결과를
     query에서 base_query에 없는 단어들로 로컬 필터링해 재사용한다 - 실제 최종
     가격 조회(run_danawa_only_debate*)는 이 캐시/필터링을 안 쓰고 항상 정확한
-    검색을 새로 한다."""
+    검색을 새로 한다.
+
+    정적 facet 캐시(2026-08-16, 속도 개선) - "아이폰"처럼 자주 검색될 유명
+    카테고리는 facet_cache.lookup()이 정규식 매칭만으로 즉시 답한다(검색도
+    DeepSeek 호출도 없음) - 실제 검색+추출 경로(아래)는 이 캐시에 없는 질의만
+    타게 된다. 매치 안 되면 None이라 기존 동작 그대로 이어진다."""
     if not needs_clarification(query) or is_non_product_chitchat(query):
         return ClarifyResponse(query=query, options=ClarifyOptions())
+
+    static_facets = facet_cache.lookup(query)
+    if static_facets is not None:
+        return ClarifyResponse(query=query, options=ClarifyOptions(facets=static_facets))
 
     search_query = base_query if base_query and base_query.strip() else query
     items = await price_table_module._search_danawa_items(
@@ -817,6 +839,16 @@ async def run_clarify(query: str) -> DecideResponse | ClarifyResponse:
     clarify = await _extract_clarify_options(query, results)
     if clarify is not None:
         return clarify
+
+    if not results:
+        # 다나와 검색 자체가 이 질의에 대해 아무것도 못 찾았다 - run_single_debate가
+        # 정제해서 다시 검색해도 같은 검색 엔진, 거의 같은 검색어라 또 아무것도
+        # 못 찾을 가능성이 매우 높다(사용자 요청, 2026-08-15: "다른 쓸데없는 말
+        # 하니까 왜이리 오래걸려" - is_non_product_chitchat이 못 잡는, 상품과
+        # 무관한 임의의 텍스트까지 이 증거 기반 신호로 일반적으로 빠르게 실패
+        # 처리한다). 검색+제안 3개+검증+심사 전체를 다시 태우는 대신 바로
+        # 정직하게 포기한다.
+        raise RuntimeError(NO_CANDIDATE_ERROR)
 
     return await run_single_debate(query)
 

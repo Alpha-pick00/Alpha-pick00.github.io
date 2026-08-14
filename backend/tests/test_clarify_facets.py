@@ -9,10 +9,11 @@ import asyncio
 
 from fastapi.testclient import TestClient
 
-from app.debate import check_clarify_facets, run_danawa_only_debate_stream, run_debate, run_debate_stream
+from app import decision_cache
+from app.debate import check_clarify_facets, run_clarify, run_danawa_only_debate_stream, run_debate, run_debate_stream
 from app.intent import is_non_product_chitchat, needs_clarification
 from app.main import app
-from app.schemas import ClarifyFacet
+from app.schemas import ClarifyFacet, Decision, DecideResponse, SearchResult
 
 client = TestClient(app)
 
@@ -70,6 +71,37 @@ def test_is_non_product_chitchat_false_when_greeting_word_is_substring():
     assert is_non_product_chitchat("하이마트 에어컨") is False
 
 
+def test_is_non_product_chitchat_true_for_pronoun_or_question_opener():
+    # 닫힌 인사말 집합 밖의, 봇에게 말을 거는 임의의 잡담/시비도 잡아야 한다
+    # (사용자 요청: "'하이' '안녕' 이것만 처리해놨네 ... 다른 쓸데없는 말 하니까
+    # 왜이리 오래걸려").
+    assert is_non_product_chitchat("너 뒤질래") is True
+    assert is_non_product_chitchat("너 뭐야") is True
+    assert is_non_product_chitchat("왜 이렇게 비싸") is True
+    assert is_non_product_chitchat("누구세요") is True
+    assert is_non_product_chitchat("심심하다") is True
+
+
+def test_is_non_product_chitchat_false_for_pronoun_prefix_that_is_a_real_product():
+    # 접두사 매칭이었다면 "너"로 시작한다는 이유로 오탐됐을 실제 상품명들 -
+    # 첫 토큰이 "너"/"장어" 등과 정확히 일치할 때만 판정하므로 안전해야 한다.
+    assert is_non_product_chitchat("너구리") is False
+    assert is_non_product_chitchat("너구리 라면") is False
+    assert is_non_product_chitchat("휴지") is False
+    assert is_non_product_chitchat("장어") is False
+
+
+def test_is_non_product_chitchat_false_for_long_sentence():
+    # 잡담 판정은 짧은 문장에만 적용된다 - 길면 진짜 구매 의도/상세 설명일
+    # 가능성이 높아 보수적으로 접는다.
+    assert is_non_product_chitchat("너 혹시 이 근처에서 제일 싸게 파는 데 아는 곳 있어?") is False
+
+
+def test_is_non_product_chitchat_false_for_buy_intent_even_with_chitchat_shape():
+    # BUY_INTENT_PATTERN이 먼저 적용돼야 한다 - 구매 의도 문구는 잡담이 아니다.
+    assert is_non_product_chitchat("이거 진짜 사고 싶은데 뭐가 좋을까") is False
+
+
 # -- 회귀: 잡담 입력은 검색/LLM 호출 없이 즉시 실패한다(속도 개선) -----------------
 
 
@@ -116,6 +148,121 @@ def test_run_debate_raises_immediately_for_greeting(monkeypatch):
         raise AssertionError("RuntimeError가 발생해야 한다")
     except RuntimeError as exc:
         assert str(exc) == "적절한 상품 후보를 찾지 못했습니다."
+
+
+# -- 정적 최종결과 캐시(속도 개선) -------------------------------------------
+
+
+def test_decision_cache_lookup_matches_regardless_of_token_order():
+    """AI 상세검색에서 facet을 클릭하는 순서가 달라도(dedupeAppend가 다른
+    순서로 이어붙여도) 같은 선택 집합이면 같은 캐시 항목을 찾아야 한다."""
+    forward = decision_cache.lookup("아이폰 17 256GB 자급제")
+    shuffled = decision_cache.lookup("자급제 256GB 아이폰 17")
+
+    assert forward is not None
+    assert forward == shuffled
+
+
+def test_decision_cache_lookup_returns_none_for_unknown_combo():
+    assert decision_cache.lookup("아이폰 아이폰 아이폰") is None
+
+
+def test_run_debate_stream_uses_static_decision_cache_without_full_pipeline(monkeypatch):
+    """사용자 요청(2026-08-16: "여기서 상세검색까지 누르면 바로 정규식으로
+    찾을수있게 0.1초만에 해줘") - 캐시에 있는 facet 조합이면 정제/검색/제안/
+    검증/심사 전체를 건너뛰고 즉시 최종 결과를 내야 한다."""
+
+    async def _boom(query, max_results=12):
+        raise AssertionError("정적 캐시에 있는 조합인데 search가 호출됐다")
+
+    monkeypatch.setattr("app.search.search", _boom)
+    monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: True)
+
+    async def _collect():
+        return [event async for event in run_debate_stream("아이폰 17 256GB 자급제")]
+
+    events = asyncio.run(_collect())
+
+    assert len(events) == 1
+    assert events[0]["type"] == "final"
+    assert events[0]["result"]["decision"]["product_name"]
+
+
+def test_run_debate_uses_static_decision_cache_without_full_pipeline(monkeypatch):
+    async def _boom(query, max_results=12):
+        raise AssertionError("정적 캐시에 있는 조합인데 search가 호출됐다")
+
+    monkeypatch.setattr("app.search.search", _boom)
+    monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: True)
+
+    result = asyncio.run(run_debate("아이폰 17 256GB 자급제"))
+
+    assert isinstance(result, DecideResponse)
+    assert result.decision.product_name
+
+
+# -- 회귀: 잡담 판정을 못 빠져나간 인식 불가 입력도 검색이 완전히 비면 즉시 실패한다 ----
+
+
+def test_run_clarify_fails_fast_when_search_finds_nothing_without_full_pipeline(monkeypatch):
+    """is_non_product_chitchat이 못 잡는 임의의 인식 불가 텍스트라도, 다나와
+    검색 자체가 아무것도 못 찾았으면 run_single_debate(정제+검색+제안 3개+검증+
+    심사 전체 재실행)까지 새지 않고 바로 실패해야 한다."""
+
+    async def _empty_search(query, max_results=10):
+        return []
+
+    monkeypatch.setattr("app.search.search", _empty_search)
+
+    async def _no_options(query, results):
+        return None
+
+    monkeypatch.setattr("app.debate._extract_clarify_options", _no_options)
+
+    async def _boom_single_debate(query, skip_clarify=False):
+        raise AssertionError("검색 결과가 0개인데 run_single_debate까지 흘러갔다")
+
+    monkeypatch.setattr("app.debate.run_single_debate", _boom_single_debate)
+
+    try:
+        asyncio.run(run_clarify("완전히 인식 불가능한 문자열입니다아아"))
+        raise AssertionError("RuntimeError가 발생해야 한다")
+    except RuntimeError as exc:
+        assert str(exc) == "적절한 상품 후보를 찾지 못했습니다."
+
+
+def test_run_clarify_still_falls_back_to_full_pipeline_when_search_has_results(monkeypatch):
+    """검색 결과가 있는데 clarify 옵션만 못 뽑았으면(기존 동작) 여전히
+    run_single_debate로 폴백해야 한다 - 이번 변경으로 이 경로를 막으면 안 된다."""
+
+    async def _some_results(query, max_results=10):
+        return [SearchResult(title="다나와", url="https://prod.danawa.com/info?pcode=1", snippet="", score=0.9)]
+
+    monkeypatch.setattr("app.search.search", _some_results)
+
+    async def _no_options(query, results):
+        return None
+
+    monkeypatch.setattr("app.debate._extract_clarify_options", _no_options)
+
+    called = {"value": False}
+
+    async def _fake_single_debate(query, skip_clarify=False):
+        called["value"] = True
+        return DecideResponse(
+            query=query,
+            proposals=[],
+            decision=Decision(
+                product_name="상품", price="1,000원", retailer="쿠팡",
+                url="https://coupang.com/vp/products/1", reasoning="근거", chosen_agent="gpt",
+            ),
+        )
+
+    monkeypatch.setattr("app.debate.run_single_debate", _fake_single_debate)
+
+    asyncio.run(run_clarify("음료수"))
+
+    assert called["value"] is True
 
 
 # -- app.agents.deepseek.extract_facets_from_names ---------------------------
@@ -860,6 +1007,69 @@ def test_check_clarify_facets_skips_search_for_specific_query(monkeypatch):
     result = asyncio.run(check_clarify_facets("아이폰 15 프로 256기가"))
 
     assert result.options.facets == []
+
+
+# -- check_clarify_facets: 정적 facet 캐시(속도 개선) --------------------------
+
+
+def test_check_clarify_facets_uses_static_cache_without_any_search_or_llm_call(monkeypatch):
+    """사용자 요청(2026-08-16: "'아이폰' 검색했을때... 그 AI상세검색하는 창...
+    바로 띄워주라는 소리였어 - 질의검사하고 뭐하고 단계가 많으니까 그거를
+    정규식으로 바꾸자") - facet_cache에 있는 카테고리는 검색도 DeepSeek 호출도
+    없이 즉시 답해야 한다."""
+
+    async def _boom_search(query, limit=3):
+        raise AssertionError("정적 캐시에 있는 카테고리인데 search_danawa가 호출됐다")
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _boom_search)
+
+    async def _boom_facets(query, names):
+        raise AssertionError("정적 캐시에 있는 카테고리인데 extract_facets_from_names가 호출됐다")
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _boom_facets)
+
+    result = asyncio.run(check_clarify_facets("아이폰"))
+
+    assert result.mode == "clarify"
+    assert len(result.options.facets) > 0
+
+
+def test_check_clarify_facets_static_cache_ignores_queries_with_extra_words(monkeypatch):
+    """"아이폰 케이스"처럼 카테고리 키워드를 포함하지만 실제로는 다른 걸 찾는
+    질의까지 아이폰 facet으로 잘못 가로채면 안 된다 - 전체 질의가 정확히
+    일치할 때만 정적 캐시를 쓴다(부분 문자열 매치 아님)."""
+    seen: list[str] = []
+
+    async def _fake_search_danawa(query, limit=3):
+        seen.append(query)
+        return [{"pcode": "1", "product_name": "아이폰 케이스 실리콘", "total_mall_count": None}]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+    monkeypatch.setattr(
+        "app.agents.deepseek.extract_facets_from_names", lambda query, names: asyncio.sleep(0, result=[])
+    )
+
+    asyncio.run(check_clarify_facets("아이폰 케이스"))
+
+    assert seen == ["아이폰 케이스"]
+
+
+def test_check_clarify_facets_static_cache_miss_falls_through_to_real_search(monkeypatch):
+    """목록에 없는 카테고리는 지금까지처럼 실제 검색+추출 경로를 그대로 타야 한다."""
+
+    async def _fake_search_danawa(query, limit=3):
+        return [{"pcode": "1", "product_name": "코카콜라 350ml 24개", "total_mall_count": None}]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+
+    async def _fake_extract_facets(query, names):
+        return [ClarifyFacet(label="카테고리", options=["탄산음료"])]
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
+
+    result = asyncio.run(check_clarify_facets("과자"))
+
+    assert result.options.facets == [ClarifyFacet(label="카테고리", options=["탄산음료"])]
 
 
 def test_check_clarify_facets_returns_facets_for_ambiguous_query(monkeypatch):

@@ -11,6 +11,7 @@ from app.adk_pipeline import (
     _is_danawa_product_url,
     _judge_eligible_proposals,
     _merge_proposals,
+    _skip_judge_if_single_candidate,
     _urls_to_extract,
 )
 from app.agents.base import CHALLENGE_INSTRUCTIONS, build_challenge_prompt
@@ -511,3 +512,57 @@ def test_finalize_with_danawa_leaves_decision_unchanged_when_no_tables():
     assert updated.price_source == "llm_guess"
     assert updated.url == "https://coupang.com/vp/products/1"
     assert price_table is None
+
+
+# --- _skip_judge_if_single_candidate (judge LLM 호출 생략, 속도 개선) -----------
+
+
+class _FakeCallbackContext:
+    def __init__(self, state: dict):
+        self.state = state
+
+
+def test_skip_judge_returns_verdict_matching_the_only_candidate():
+    proposals = [_proposal(COUPANG_URL, True)]
+    ctx = _FakeCallbackContext({"proposals": [p.model_dump() for p in proposals]})
+
+    response = _skip_judge_if_single_candidate(ctx, None)
+
+    assert response is not None
+    verdict = json.loads(response.content.parts[0].text)
+    assert verdict["url"] == COUPANG_URL
+    assert verdict["product_name"] == "상품"
+    assert verdict["price"] == "1,000원"
+    assert verdict["retailer"] == "쿠팡"
+    assert verdict["reasoning"]
+
+
+def test_skip_judge_none_when_no_candidates():
+    ctx = _FakeCallbackContext({"proposals": []})
+
+    assert _skip_judge_if_single_candidate(ctx, None) is None
+
+
+def test_skip_judge_none_when_multiple_candidates():
+    proposals = [_proposal(COUPANG_URL, True), _proposal(ELEVENST_URL, True)]
+    ctx = _FakeCallbackContext({"proposals": [p.model_dump() for p in proposals]})
+
+    assert _skip_judge_if_single_candidate(ctx, None) is None
+
+
+def test_skip_judge_uses_only_eligible_candidate_when_others_rejected():
+    proposals = [_proposal(COUPANG_URL, True), _proposal(ELEVENST_URL, False)]
+    ctx = _FakeCallbackContext({"proposals": [p.model_dump() for p in proposals]})
+
+    response = _skip_judge_if_single_candidate(ctx, None)
+
+    assert response is not None
+    verdict = json.loads(response.content.parts[0].text)
+    assert verdict["url"] == COUPANG_URL
+
+
+def test_skip_judge_none_when_the_only_candidate_is_missing_a_required_field():
+    incomplete = Proposal(agent="gpt", product_name="상품", price="", retailer="쿠팡", url=COUPANG_URL)
+    ctx = _FakeCallbackContext({"proposals": [incomplete.model_dump()]})
+
+    assert _skip_judge_if_single_candidate(ctx, None) is None
