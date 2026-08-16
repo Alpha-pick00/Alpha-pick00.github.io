@@ -13,6 +13,7 @@ from .base import (
     build_clarify_ask_prompt,
     build_relaxed_pick_prompt,
     filter_bulk_options,
+    is_danawa_comparison_page,
     is_generic_listing_url,
     parse_json_array,
     parse_json_object,
@@ -115,7 +116,8 @@ async def pick_most_relevant(query: str, search_results: list[SearchResult]) -> 
         data = parse_json_object(response.choices[0].message.content or "")
         if not data.get("product_name") or not data.get("url"):
             return None
-        if is_generic_listing_url(data.get("url", "")):
+        url = data.get("url", "")
+        if is_generic_listing_url(url) or is_danawa_comparison_page(url):
             return None
         return JudgeVerdict(**data)
     except Exception:
