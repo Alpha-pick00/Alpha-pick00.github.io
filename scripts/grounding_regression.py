@@ -47,6 +47,7 @@ import asyncio
 import json
 import sys
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -63,6 +64,10 @@ from app.price_table import DANAWA_ROOT_DOMAIN, _is_danawa_bridge_passthrough  #
 from app.schemas import ClarifyResponse  # noqa: E402
 
 RESULTS_PATH = Path(__file__).resolve().parent / "grounding_regression_results.json"
+HISTORY_PATH = Path(__file__).resolve().parent / "grounding_regression_history.json"
+README_PATH = Path(__file__).resolve().parent.parent / "README.md"
+README_HISTORY_START = "<!-- GROUNDING_HISTORY_START -->"
+README_HISTORY_END = "<!-- GROUNDING_HISTORY_END -->"
 
 # 2026-08-17("앞으로는 테스트할 때 토큰 다 쓰면 나한테 말하고 중지해줘 - LLM
 # 모델 하나라도 빠지면 실험하는게 의미가 없어") - 50개 재검증 파일럿 도중
@@ -236,6 +241,75 @@ def _is_price_comparison_url(url: str) -> bool:
     return host == DANAWA_ROOT_DOMAIN or host.endswith("." + DANAWA_ROOT_DOMAIN)
 
 
+# --- 실험 기록(2026-08-17, "앞으로 진행되는 모든 실험들도 그래프로 성능 지표 -----
+# Readme로 추가해주고 계속해서 업데이트해줘") - 완주한 실행마다 여기 기록을
+# 남기고 README의 마커 구간을 재생성한다. 중간에 쿼터 소진으로 중단된 실행은
+# "완주한 실험"이 아니므로 기록하지 않는다(추세 그래프를 의미 없는 부분 실행
+# 데이터로 흐리지 않기 위함) - main()에서 사전 헬스체크 실패/도중 중단 시엔
+# sys.exit()가 먼저 실행돼 아래 기록 로직에 도달하지 않는다.
+
+
+def _load_history() -> list[dict]:
+    if not HISTORY_PATH.exists():
+        return []
+    return json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
+
+
+def _append_history(entry: dict) -> list[dict]:
+    history = _load_history()
+    history.append(entry)
+    HISTORY_PATH.write_text(json.dumps(history, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return history
+
+
+def _render_history_section(history: list[dict]) -> str:
+    """README에 그대로 끼워 넣을 마크다운(표 + mermaid xychart-beta)을 만든다.
+    순수 함수 - 파일 I/O 없이 테스트/미리보기 가능."""
+    lines = [
+        "실행할 때마다 이 표/그래프가 자동으로 갱신된다(`scripts/grounding_regression.py`가",
+        "`scripts/grounding_regression_history.json`에 결과를 추가하고 이 구간을 재생성한다 -",
+        "수동으로 이 마커(`GROUNDING_HISTORY_START`/`_END`) 사이를 직접 편집하지 말 것,",
+        "다음 실행 때 덮어써진다).",
+        "",
+        "| 날짜 | 통과율 | 통과/전체 | 내용 | 인프라 참고 |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for h in history:
+        rate = round(h["passed"] / h["total"] * 100)
+        lines.append(f"| {h['date']} | {rate}% | {h['passed']}/{h['total']} | {h['context']} | {h.get('infra_note') or '-'} |")
+
+    if history:
+        dates = ", ".join(f'"{h["date"]}"' for h in history)
+        rates = ", ".join(str(round(h["passed"] / h["total"] * 100)) for h in history)
+        lines += [
+            "",
+            "```mermaid",
+            "xychart-beta",
+            '    title "그라운딩 회귀 파일럿 통과율 추이(%)"',
+            f"    x-axis [{dates}]",
+            '    y-axis "통과율 (%)" 0 --> 100',
+            f"    bar [{rates}]",
+            f"    line [{rates}]",
+            "```",
+            "",
+            "그래프의 특정 지점이 유독 낮다고 코드가 나빠졌다는 뜻은 아닐 수 있다 -",
+            "표의 \"인프라 참고\" 칸에 그 실행에서 제공자 쿼터 문제가 있었는지 항상 같이 본다.",
+        ]
+    return "\n".join(lines)
+
+
+def update_readme_history_section(history: list[dict]) -> None:
+    content = README_PATH.read_text(encoding="utf-8")
+    if README_HISTORY_START not in content or README_HISTORY_END not in content:
+        print(f"경고: README.md에 {README_HISTORY_START}/{README_HISTORY_END} 마커가 없어 자동 갱신 건너뜀", flush=True)
+        return
+    before, rest = content.split(README_HISTORY_START, 1)
+    _, after = rest.split(README_HISTORY_END, 1)
+    section = _render_history_section(history)
+    README_PATH.write_text(f"{before}{README_HISTORY_START}\n{section}\n{README_HISTORY_END}{after}", encoding="utf-8")
+    print(f"README.md 그라운딩 실험 기록 섹션 갱신 완료 ({len(history)}건)", flush=True)
+
+
 async def run_case(case: Case) -> dict:
     result = await debate.run_single_debate(case.query)
     if isinstance(result, ClarifyResponse):
@@ -275,6 +349,10 @@ async def run_case(case: Case) -> dict:
 
 
 async def main() -> None:
+    # 실행 맥락 한 줄(예: "PR #27 적용 후 재검증") - README 표에 그대로 실린다.
+    # 생략하면 일반적인 정기 실행으로 표시된다: python scripts/grounding_regression.py "설명"
+    run_context = sys.argv[1] if len(sys.argv) > 1 else "정기 재검증"
+
     print("사전 헬스체크: Qwen/DeepSeek/Groq/Tavily...", flush=True)
     unhealthy = await check_providers_healthy()
     if unhealthy:
@@ -347,6 +425,17 @@ async def main() -> None:
         for r in failed:
             print(f"  [FAIL] ({r['category']}) {r['query']}: {r['failures']}")
     print("=" * 70)
+
+    history = _append_history(
+        {
+            "date": date.today().isoformat(),
+            "total": len(results),
+            "passed": len(results) - len(failed),
+            "context": run_context,
+            "infra_note": "",
+        }
+    )
+    update_readme_history_section(history)
 
     if failed:
         sys.exit(1)
