@@ -168,7 +168,17 @@ class _DanawaFetchNode(BaseAgent):
     후처리(enrich_decision/exclude_price_comparison_site_as_final_pick/
     price_table 채우기)에서 그대로 재사용한다 - 이 노드에서 만든 대표 후보
     하나로는 그 후처리들이 필요로 하는 전체 가격표 정보(모든 offer, 다른 pcode
-    페이지들)를 담을 수 없다."""
+    페이지들)를 담을 수 없다.
+
+    (2026-08-16 하드닝, 그라운딩 회귀 파일럿에서 발견) pick_primary()는
+    offer가 가장 많은 페이지를 고를 뿐 query와의 관련성은 전혀 안 본다 -
+    "아이폰 16 프로 256GB" 검색에서 실제로 무관한 액세서리(아이패드 케이스,
+    판매처가 많아 offer 수만 높음)가 골라져 verified=True로 강제된 채(아래
+    _apply_challenge 참고 - danawa 출신 후보는 challenge 검증 자체를 건너뜀)
+    최종 추천으로 노출된 사례를 확인했다. enrich_decision이 이미 쓰는
+    _product_name_matches(fuzzy 유사도 + 모델/수량 충돌 가드)를 query 자체에도
+    적용해, 이름이 안 맞으면 애초에 후보를 만들지 않는다 - danawa_tables(전체
+    가격표)는 그대로 보존해 다른 후처리는 영향받지 않는다."""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         query = _refined_query_text(ctx.session.state)
@@ -182,17 +192,18 @@ class _DanawaFetchNode(BaseAgent):
             primary = price_table_module.pick_primary(tables)
             if primary is not None:
                 primary_table, raw_result = primary
-                offer = price_table_module.cheapest_linkable_raw_offer(raw_result)
-                if offer is not None:
-                    resolved_url = await price_table_module.resolve_purchase_url(offer)
-                    if resolved_url is not None:
-                        candidate = AgentCandidate(
-                            product_name=primary_table.product_name or query,
-                            price_krw=offer["price_krw"],
-                            retailer=offer["seller"],
-                            url=resolved_url,
-                        )
-                        danawa_raw = json.dumps([candidate.model_dump()])
+                if price_table_module._product_name_matches(query, primary_table.product_name or ""):
+                    offer = price_table_module.cheapest_linkable_raw_offer(raw_result)
+                    if offer is not None:
+                        resolved_url = await price_table_module.resolve_purchase_url(offer)
+                        if resolved_url is not None:
+                            candidate = AgentCandidate(
+                                product_name=primary_table.product_name or query,
+                                price_krw=offer["price_krw"],
+                                retailer=offer["seller"],
+                                url=resolved_url,
+                            )
+                            danawa_raw = json.dumps([candidate.model_dump()])
         except Exception:
             logger.exception("다나와 실측가 조회 실패: %r", query)
 
