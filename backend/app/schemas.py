@@ -71,6 +71,12 @@ class Decision(BaseModel):
     # 가능) offer와 대조해 price/url을 검증된 값으로 교체했다는 뜻.
     # "llm_guess"(기본값): 그런 대조 없이 LLM이 제안한 값 그대로.
     price_source: Literal["danawa_offer", "llm_guess"] = "llm_guess"
+    # 최종 선택된 후보가 DeepSeek challenge 검증을 통과했는지(Proposal.verified와
+    # 같은 의미) — judge 경로는 매칭된 proposal의 값을 그대로 물려받고, relaxed
+    # fallback 경로(2026-08-16 강화)는 별도로 challenge를 태워 채운다. None은
+    # "검증 자체가 안 됐거나 실패함"(다나와 실측처럼 애초에 challenge가 필요
+    # 없는 경우도 apply_challenge에서 True로 강제되므로 여기 None에는 안 걸림).
+    verified: bool | None = None
 
 
 class JudgeVerdict(BaseModel):

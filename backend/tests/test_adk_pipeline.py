@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import app.adk_pipeline as adk_pipeline_module
 from app.adk_pipeline import (
     _apply_challenge,
     _augment_search_query,
@@ -11,13 +12,16 @@ from app.adk_pipeline import (
     _is_danawa_product_url,
     _judge_eligible_proposals,
     _merge_proposals,
+    _pick_and_verify_relaxed,
+    _relaxed_fallback_decision,
     _skip_judge_if_single_candidate,
     _urls_to_extract,
+    _verify_relaxed_verdict,
 )
 from app.agents.base import CHALLENGE_INSTRUCTIONS, build_challenge_prompt
 from app.category import CategoryClassification
 from app.price_table import build_price_table
-from app.schemas import ChallengeResult, ChallengeVerdict, Decision, Proposal, SearchResult
+from app.schemas import ChallengeResult, ChallengeVerdict, Decision, JudgeVerdict, Proposal, SearchResult
 from fetchers.danawa import parse_danawa_html
 
 COUPANG_URL = "https://coupang.com/vp/products/1"
@@ -236,6 +240,26 @@ def test_build_decision_prefers_matched_candidate_fields_over_judge_raw_text():
     assert decision.url == COUPANG_URL
 
 
+def test_build_decision_propagates_verified_from_matched_proposal():
+    """Decision.verified(2026-08-16 추가)는 matched proposal의 challenge 검증
+    결과를 그대로 물려받아야 한다 - 프론트/API 소비자가 이 답이 실제로
+    그라운딩 검증을 통과했는지 알 수 있게 하기 위함."""
+    proposals = [_proposal_for_decision(COUPANG_URL)]  # verified=True 고정
+    state = {
+        "raw_decision": {
+            "product_name": "무선 마우스",
+            "price": "12,900원",
+            "retailer": "쿠팡",
+            "url": COUPANG_URL,
+            "reasoning": "가장 저렴합니다.",
+        }
+    }
+
+    decision = _build_decision(state, proposals)
+
+    assert decision.verified is True
+
+
 def test_build_decision_falls_back_to_raw_when_matched_field_missing():
     proposals = [_proposal_for_decision(COUPANG_URL, price="", retailer="")]
     state = {
@@ -409,6 +433,42 @@ def test_challenge_instructions_treat_coupang_signal_as_soft():
     assert "쿠팡" in CHALLENGE_INSTRUCTIONS
 
 
+# --- 네이버쇼핑 교차 확인(build_challenge_prompt, 2026-08-16) ----------------
+
+
+def test_build_challenge_prompt_without_naver_results_matches_prior_output():
+    without_naver = build_challenge_prompt("무선 마우스", [], [])
+    with_empty_list = build_challenge_prompt("무선 마우스", [], [], None, None, [])
+
+    assert without_naver == with_empty_list
+    assert "네이버쇼핑 교차 확인 검색 결과(참고용)" not in without_naver
+
+
+def test_build_challenge_prompt_includes_naver_block_when_provided():
+    naver_url = "https://shopping.naver.com/products/1"
+    naver_results = [SearchResult(title="네이버 무선 마우스", url=naver_url, snippet="12,900원")]
+
+    prompt = build_challenge_prompt("무선 마우스", [], [], None, None, naver_results)
+
+    assert "네이버쇼핑 교차 확인 검색 결과(참고용)" in prompt
+    assert naver_url in prompt
+
+
+def test_build_challenge_prompt_includes_both_coupang_and_naver_blocks():
+    coupang_results = [SearchResult(title="쿠팡", url=COUPANG_URL, snippet="12,900원")]
+    naver_results = [SearchResult(title="네이버", url="https://shopping.naver.com/products/1", snippet="12,900원")]
+
+    prompt = build_challenge_prompt("무선 마우스", [], [], None, coupang_results, naver_results)
+
+    assert "쿠팡 교차 확인 검색 결과(참고용)" in prompt
+    assert "네이버쇼핑 교차 확인 검색 결과(참고용)" in prompt
+
+
+def test_challenge_instructions_treat_naver_signal_as_soft():
+    assert "곧바로 false로 판단하지 마세요" in CHALLENGE_INSTRUCTIONS
+    assert "네이버쇼핑" in CHALLENGE_INSTRUCTIONS
+
+
 def _offer_li(alt: str, price_text: str, cmpnyc: str, link_pcode: str = "999") -> str:
     return f"""
     <li class="list-item">
@@ -566,3 +626,199 @@ def test_skip_judge_none_when_the_only_candidate_is_missing_a_required_field():
     ctx = _FakeCallbackContext({"proposals": [incomplete.model_dump()]})
 
     assert _skip_judge_if_single_candidate(ctx, None) is None
+
+
+# --- relaxed fallback 하드닝(2026-08-16, "구매링크를 안띄워주는거야" 버그의 근본 -----
+# 원인이었던 경로 - challenge 검증을 우회할 수 없도록 게이팅한다) ------------------
+
+
+def _relaxed_verdict(url: str = COUPANG_URL, product_name: str = "무선 마우스") -> JudgeVerdict:
+    return JudgeVerdict(
+        product_name=product_name, price="12,900원", retailer="쿠팡", url=url, reasoning="가장 관련성이 높습니다."
+    )
+
+
+def _patch_no_cross_check_signals(monkeypatch):
+    """쿠팡/네이버 소프트 신호 자체는 이 테스트들의 관심사가 아니므로 항상
+    빈 리스트로 고정해 challenge_candidates에 전달되는 인자만 신경 쓴다."""
+
+    async def _empty(query: str) -> list[SearchResult]:
+        return []
+
+    monkeypatch.setattr(adk_pipeline_module.search_module, "search_coupang", _empty)
+    monkeypatch.setattr(adk_pipeline_module.search_module, "search_naver", _empty)
+
+
+def test_verify_relaxed_verdict_matches_challenge_verdict_by_url(monkeypatch):
+    _patch_no_cross_check_signals(monkeypatch)
+    verdict = _relaxed_verdict()
+
+    async def _fake_challenge(query, candidates, search_results, candidate_pages, coupang_results, naver_results):
+        return [ChallengeVerdict(url=verdict.url, verified=True, note="검색 결과와 일치")]
+
+    monkeypatch.setattr(adk_pipeline_module.deepseek_module, "challenge_candidates", _fake_challenge)
+
+    verified = asyncio.run(_verify_relaxed_verdict("무선 마우스", verdict, []))
+
+    assert verified is True
+
+
+def test_verify_relaxed_verdict_returns_none_when_challenge_infra_fails(monkeypatch):
+    """challenge_candidates가 빈 리스트(API 오류/파싱 실패)를 돌려주면
+    "검증 안 됨"으로 취급해야지, 검증 실패를 "그라운딩 우려"와 혼동해 후보를
+    폐기해서는 안 된다."""
+    _patch_no_cross_check_signals(monkeypatch)
+
+    async def _fake_challenge(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(adk_pipeline_module.deepseek_module, "challenge_candidates", _fake_challenge)
+
+    verified = asyncio.run(_verify_relaxed_verdict("무선 마우스", _relaxed_verdict(), []))
+
+    assert verified is None
+
+
+def test_pick_and_verify_relaxed_discards_candidate_rejected_by_challenge(monkeypatch):
+    _patch_no_cross_check_signals(monkeypatch)
+    verdict = _relaxed_verdict()
+
+    async def _fake_pick(query, search_results):
+        return verdict
+
+    async def _fake_challenge(query, candidates, search_results, candidate_pages, coupang_results, naver_results):
+        return [ChallengeVerdict(url=verdict.url, verified=False, note="검색 결과 어디에도 이 가격이 없음")]
+
+    monkeypatch.setattr(adk_pipeline_module.gpt_module, "pick_most_relevant", _fake_pick)
+    monkeypatch.setattr(adk_pipeline_module.deepseek_module, "challenge_candidates", _fake_challenge)
+
+    result = asyncio.run(_pick_and_verify_relaxed("무선 마우스", []))
+
+    assert result is None
+
+
+def test_pick_and_verify_relaxed_keeps_candidate_when_verified_true(monkeypatch):
+    _patch_no_cross_check_signals(monkeypatch)
+    verdict = _relaxed_verdict()
+
+    async def _fake_pick(query, search_results):
+        return verdict
+
+    async def _fake_challenge(query, candidates, search_results, candidate_pages, coupang_results, naver_results):
+        return [ChallengeVerdict(url=verdict.url, verified=True, note="검색 결과와 일치")]
+
+    monkeypatch.setattr(adk_pipeline_module.gpt_module, "pick_most_relevant", _fake_pick)
+    monkeypatch.setattr(adk_pipeline_module.deepseek_module, "challenge_candidates", _fake_challenge)
+
+    result = asyncio.run(_pick_and_verify_relaxed("무선 마우스", []))
+
+    assert result == (verdict, True)
+
+
+def test_relaxed_fallback_decision_returns_verified_decision_without_caveat(monkeypatch):
+    _patch_no_cross_check_signals(monkeypatch)
+    verdict = _relaxed_verdict()
+
+    async def _fake_pick(query, search_results):
+        return verdict
+
+    async def _fake_challenge(query, candidates, search_results, candidate_pages, coupang_results, naver_results):
+        return [ChallengeVerdict(url=verdict.url, verified=True, note="검색 결과와 일치")]
+
+    monkeypatch.setattr(adk_pipeline_module.gpt_module, "pick_most_relevant", _fake_pick)
+    monkeypatch.setattr(adk_pipeline_module.deepseek_module, "challenge_candidates", _fake_challenge)
+
+    decision = asyncio.run(_relaxed_fallback_decision("무선 마우스", []))
+
+    assert decision is not None
+    assert decision.verified is True
+    assert "낮은 확신" not in decision.reasoning
+
+
+def test_relaxed_fallback_decision_none_when_short_query_rejected_and_cannot_broaden(monkeypatch):
+    """질의가 2단어 이하면 broadened_query == query라 재검색을 건너뛴다 - 1라운드가
+    challenge에서 명백히 탈락하면 더 시도할 게 없으므로 정직하게 포기해야 한다
+    (하드닝 전에는 이 경로가 검증 없이 그대로 최종 응답이 됐다)."""
+    _patch_no_cross_check_signals(monkeypatch)
+    verdict = _relaxed_verdict()
+
+    async def _fake_pick(query, search_results):
+        return verdict
+
+    async def _fake_challenge(query, candidates, search_results, candidate_pages, coupang_results, naver_results):
+        return [ChallengeVerdict(url=verdict.url, verified=False, note="검색 결과 어디에도 이 가격이 없음")]
+
+    monkeypatch.setattr(adk_pipeline_module.gpt_module, "pick_most_relevant", _fake_pick)
+    monkeypatch.setattr(adk_pipeline_module.deepseek_module, "challenge_candidates", _fake_challenge)
+
+    decision = asyncio.run(_relaxed_fallback_decision("마우스", []))
+
+    assert decision is None
+
+
+def test_relaxed_fallback_decision_broadens_query_after_challenge_rejection(monkeypatch):
+    """1라운드 후보가 challenge에서 명백히 탈락하면(verified=False), 완전히
+    포기하기 전에 넓힌 질의로 한 번 더 시도한다 - 후보를 아예 못 찾았을 때와
+    같은 재시도 경로를 탄다."""
+    _patch_no_cross_check_signals(monkeypatch)
+    rejected = _relaxed_verdict(url=COUPANG_URL, product_name="무선 마우스 A")
+    accepted = _relaxed_verdict(url=ELEVENST_URL, product_name="무선 마우스 B")
+
+    call_count = {"pick": 0}
+
+    async def _fake_pick(query, search_results):
+        call_count["pick"] += 1
+        return rejected if call_count["pick"] == 1 else accepted
+
+    async def _fake_challenge(query, candidates, search_results, candidate_pages, coupang_results, naver_results):
+        url = candidates[0]["url"]
+        verified = url == accepted.url
+        return [ChallengeVerdict(url=url, verified=verified, note="")]
+
+    async def _fake_broadened_search(query):
+        return [SearchResult(title="넓힌 검색", url=ELEVENST_URL, snippet="12,900원")]
+
+    monkeypatch.setattr(adk_pipeline_module.gpt_module, "pick_most_relevant", _fake_pick)
+    monkeypatch.setattr(adk_pipeline_module.deepseek_module, "challenge_candidates", _fake_challenge)
+    monkeypatch.setattr(adk_pipeline_module.search_module, "search", _fake_broadened_search)
+
+    decision = asyncio.run(_relaxed_fallback_decision("무선 마우스 정확한 모델명", []))
+
+    assert decision is not None
+    assert decision.url == ELEVENST_URL
+    assert decision.verified is True
+    assert call_count["pick"] == 2
+    assert "검색 범위를 넓혀" in decision.reasoning
+
+
+def test_relaxed_fallback_decision_marks_unverified_with_caveat_when_challenge_infra_fails(monkeypatch):
+    _patch_no_cross_check_signals(monkeypatch)
+    verdict = _relaxed_verdict()
+
+    async def _fake_pick(query, search_results):
+        return verdict
+
+    async def _fake_challenge(*args, **kwargs):
+        return []  # 검증 인프라 장애 시뮬레이션
+
+    monkeypatch.setattr(adk_pipeline_module.gpt_module, "pick_most_relevant", _fake_pick)
+    monkeypatch.setattr(adk_pipeline_module.deepseek_module, "challenge_candidates", _fake_challenge)
+
+    decision = asyncio.run(_relaxed_fallback_decision("무선 마우스", []))
+
+    assert decision is not None
+    assert decision.verified is None
+    assert "낮은 확신" in decision.reasoning
+
+
+def test_relaxed_fallback_decision_none_when_no_candidate_found_at_all(monkeypatch):
+    _patch_no_cross_check_signals(monkeypatch)
+
+    async def _fake_pick(query, search_results):
+        return None
+
+    monkeypatch.setattr(adk_pipeline_module.gpt_module, "pick_most_relevant", _fake_pick)
+
+    decision = asyncio.run(_relaxed_fallback_decision("마우스", []))
+
+    assert decision is None

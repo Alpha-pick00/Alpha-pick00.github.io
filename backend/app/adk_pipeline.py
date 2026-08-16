@@ -33,6 +33,7 @@ from pydantic import TypeAdapter
 
 from . import price_table as price_table_module
 from . import search as search_module
+from .agents import deepseek as deepseek_module
 from .agents import gpt as gpt_module
 from .agents import judge as judge_module
 from .category import CategoryClassification, classify_category
@@ -218,6 +219,23 @@ class _CoupangCheckNode(BaseAgent):
         yield Event(
             author=self.name,
             actions=EventActions(state_delta={"coupang_results": [r.model_dump() for r in results]}),
+        )
+
+
+class _NaverCheckNode(BaseAgent):
+    """쿠팡(_CoupangCheckNode)과 동일한 패턴의 두 번째 소프트 그라운딩 신호
+    (2026-08-16, "다나와 단일 실측 소스에 대한 의존도를 낮추도록") - 다나와
+    실측가만 확정 소스이고 쿠팡 하나만으로는 교차 확인 대상이 한 곳뿐이라,
+    서로 다른 두 번째 쇼핑몰을 propose_parallel에 같이 태워 challenge가 볼
+    참고 자료를 넓힌다. 후보를 만들지 않는 점, 실패해도 조용히 빈 리스트인
+    점 모두 쿠팡 노드와 동일."""
+
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        query = _refined_query_text(ctx.session.state)
+        results = await search_module.search_naver(query)
+        yield Event(
+            author=self.name,
+            actions=EventActions(state_delta={"naver_results": [r.model_dump() for r in results]}),
         )
 
 
@@ -514,7 +532,8 @@ def _build_challenge_agent() -> LlmAgent:
         results = _search_results_from_state(ctx.state)
         candidate_pages = ctx.state.get("candidate_pages") or {}
         coupang_results = [SearchResult(**r) for r in ctx.state.get("coupang_results") or []]
-        return build_challenge_prompt(query, candidates, results, candidate_pages, coupang_results)
+        naver_results = [SearchResult(**r) for r in ctx.state.get("naver_results") or []]
+        return build_challenge_prompt(query, candidates, results, candidate_pages, coupang_results, naver_results)
 
     return LlmAgent(
         name="challenge",
@@ -627,6 +646,9 @@ def _build_pipeline() -> SequentialAgent:
             # 않고 challenge 단계의 참고 신호만 채운다. 같은 ParallelAgent 소속이라
             # 지연시간이 추가되지 않는다.
             _CoupangCheckNode(name="coupang_check"),
+            # 네이버쇼핑 교차 확인(2026-08-16, "다나와 단일 실측 소스에 대한
+            # 의존도를 낮추도록") - 쿠팡과 같은 소프트 신호 패턴의 두 번째 소스.
+            _NaverCheckNode(name="naver_check"),
         ],
     )
 
@@ -686,7 +708,55 @@ def _build_decision(state: dict, proposals: list[Proposal]) -> Decision | None:
         url=matched.url or raw.get("url") or "",
         reasoning=raw.get("reasoning") or "",
         chosen_agent=matched.agent,
+        verified=matched.verified,
     )
+
+
+async def _verify_relaxed_verdict(
+    query: str, verdict: judge_module.JudgeVerdict, search_results: list[SearchResult]
+) -> bool | None:
+    """relaxed fallback이 고른 verdict를 정상 propose 후보와 동일한 DeepSeek
+    challenge 기준으로 그라운딩 재검증한다(2026-08-16 하드닝 - "구매링크를
+    안띄워주는거야" 버그의 근본 원인이 바로 이 경로였다: challenge/CMPNYC_MAP
+    검증을 전부 우회한 채 Qwen 단독 판단을 그대로 최종 응답으로 내보냈다).
+    쿠팡·네이버쇼핑 참고 신호도 정상 challenge와 동일하게 함께 준다. 검증
+    자체가 실패(API 오류·파싱 실패)하면 None(미검증)을 반환한다 - 검증 인프라
+    장애 때문에 이미 찾은 유일한 후보를 버리지 않는다."""
+    candidate = {
+        "product_name": verdict.product_name,
+        "price_krw": verdict.price,
+        "retailer": verdict.retailer,
+        "url": verdict.url,
+        "reasoning": verdict.reasoning,
+    }
+    coupang_task = search_module.search_coupang(query)
+    naver_task = search_module.search_naver(query)
+    coupang_results, naver_results = await asyncio.gather(coupang_task, naver_task)
+    verdicts = await deepseek_module.challenge_candidates(
+        query, [candidate], search_results, None, coupang_results, naver_results
+    )
+    if not verdicts:
+        return None
+    match = next((v for v in verdicts if v.url == verdict.url), verdicts[0])
+    return match.verified
+
+
+async def _pick_and_verify_relaxed(
+    query: str, search_results: list[SearchResult]
+) -> tuple[judge_module.JudgeVerdict, bool | None] | None:
+    """한 라운드(주어진 검색 결과 기준)의 relaxed pick + challenge 재검증을
+    묶은 헬퍼. verified=False로 명백히 우려 표시되면 그 후보는 폐기하고
+    None을 돌려줘(호출부가 다음 라운드로 넘어가거나 완전히 포기하게) - "낮은
+    확신"과 "명백히 틀림"은 다르게 취급한다(challenge의 기존 원칙과 동일:
+    애매하면 false 남발 금지, 명백할 때만 false)."""
+    verdict = await gpt_module.pick_most_relevant(query, search_results)
+    if verdict is None:
+        return None
+    verified = await _verify_relaxed_verdict(query, verdict, search_results)
+    if verified is False:
+        logger.info("relaxed fallback 후보가 challenge 검증에서 탈락 — 폐기: %r", verdict.url)
+        return None
+    return verdict, verified
 
 
 async def _relaxed_fallback_decision(query: str, search_results: list[SearchResult]) -> Decision | None:
@@ -697,17 +767,17 @@ async def _relaxed_fallback_decision(query: str, search_results: list[SearchResu
     없으면 정직하게 포기한다(NO_CANDIDATE_ERROR).
 
     1라운드 - 이미 가져온 검색 결과 그대로, gpt.pick_most_relevant로 완벽히
-    일치하지 않아도 가장 관련성 높은 것을 고르게 한다(브랜드/스펙 그라운딩만
-    완화 - 존재하지 않는 상품을 지어내는 건 여전히 금지). 검색 자체는 다시
-    안 하므로 비용이 거의 없다.
+    일치하지 않아도 가장 관련성 높은 것을 고르게 한 뒤, DeepSeek challenge로
+    다시 검증한다(2026-08-16 하드닝). 검색 자체는 다시 안 하므로 비용이
+    거의 없다.
 
-    2라운드(1라운드가 그마저도 못 찾았을 때만 - 즉 검색 결과 자체가 질의와
-    아예 무관했을 때) - 질의를 앞 2단어로 넓혀 한 번만 재검색한 뒤 같은 완화
-    기준으로 다시 시도한다. 넓힌 질의가 원래 질의와 같으면(이미 짧은 질의라
-    넓힐 게 없으면) 똑같은 검색을 반복하는 낭비이므로 건너뛴다."""
-    verdict = await gpt_module.pick_most_relevant(query, search_results)
+    2라운드(1라운드가 후보를 아예 못 찾았거나 challenge에서 명백히 탈락했을
+    때만) - 질의를 앞 2단어로 넓혀 한 번만 재검색한 뒤 같은 기준으로 다시
+    시도한다. 넓힌 질의가 원래 질의와 같으면(이미 짧은 질의라 넓힐 게 없으면)
+    똑같은 검색을 반복하는 낭비이므로 건너뛴다."""
+    picked = await _pick_and_verify_relaxed(query, search_results)
     used_broadened = False
-    if verdict is None:
+    if picked is None:
         tokens = query.split()
         broadened_query = " ".join(tokens[:2]) if len(tokens) > 2 else query
         if broadened_query != query:
@@ -715,14 +785,19 @@ async def _relaxed_fallback_decision(query: str, search_results: list[SearchResu
                 broadened_results = await search_module.search(broadened_query)
             except Exception:
                 broadened_results = []
-            verdict = await gpt_module.pick_most_relevant(query, broadened_results)
+            picked = await _pick_and_verify_relaxed(query, broadened_results)
             used_broadened = True
-    if verdict is None or not verdict.product_name:
+    if picked is None:
+        return None
+    verdict, verified = picked
+    if not verdict.product_name:
         return None
 
     reasoning = verdict.reasoning
     if used_broadened:
         reasoning = f"'{query}'로는 적절한 상품을 찾지 못해 검색 범위를 넓혀 찾았습니다. {reasoning}"
+    if verified is not True:
+        reasoning = f"{reasoning} (참고: 교차 검증을 통과하지 못한 낮은 확신의 답변입니다.)"
     return Decision(
         product_name=verdict.product_name,
         price=verdict.price,
@@ -730,6 +805,7 @@ async def _relaxed_fallback_decision(query: str, search_results: list[SearchResu
         url=verdict.url,
         reasoning=reasoning,
         chosen_agent="gpt",
+        verified=verified,
     )
 
 

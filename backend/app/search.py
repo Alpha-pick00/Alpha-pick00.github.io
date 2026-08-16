@@ -152,3 +152,23 @@ async def search_coupang(query: str) -> list[SearchResult]:
     except Exception:
         logger.warning("쿠팡 교차 확인 검색 실패: %r", query, exc_info=True)
         return []
+
+
+NAVER_DOMAINS = ["shopping.naver.com"]
+_NAVER_MAX_RESULTS = 5
+
+
+async def search_naver(query: str) -> list[SearchResult]:
+    """쿠팡(search_coupang)과 동일한 패턴의 두 번째 소프트 그라운딩 신호
+    (2026-08-16, "다나와 단일 실측 소스에 대한 의존도를 낮추도록") - 다나와
+    실측가가 유일한 "확정" 소스이고 쿠팡 하나만으로는 교차 확인 대상이 한
+    곳뿐이라, 서로 다른 두 번째 독립 쇼핑몰을 더해 challenge 판단의 참고
+    자료를 넓힌다. 쿠팡과 마찬가지로 페이지를 파싱해 후보를 만들지 않고
+    Tavily 스니펫만 참고용으로 넘긴다 - 15개 리테일러를 다나와로 좁혔던
+    이유(스니펫만으로 파싱하면 엉뚱한 상품/가격이 섞임)를 반복하지 않기
+    위함. 실패해도 조용히 빈 리스트."""
+    try:
+        return await _tavily_search(query, _NAVER_MAX_RESULTS, domains=NAVER_DOMAINS)
+    except Exception:
+        logger.warning("네이버쇼핑 교차 확인 검색 실패: %r", query, exc_info=True)
+        return []
