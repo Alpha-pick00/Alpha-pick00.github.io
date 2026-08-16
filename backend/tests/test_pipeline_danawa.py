@@ -13,6 +13,7 @@ from app.main import app
 from app.price_table import (
     MAX_DANAWA_URLS,
     _is_single_product_family,
+    _product_name_matches,
     _query_param,
     build_price_table,
     cheapest_linkable_raw_offer,
@@ -232,6 +233,26 @@ def test_name_match_fills_price_when_llm_price_missing():
     assert enriched.price == "23,000원"
     assert enriched.retailer == "옥션"
     assert enriched.url == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=EE715&link_pcode=777"
+
+
+# -- 2026-08-16 하드닝: _DanawaFetchNode의 query-vs-pick_primary 관련성 가드 ---
+# (그라운딩 회귀 파일럿 50개 중 발견: "아이폰 16 프로 256GB" 검색이 무관한
+# 아이패드 액세서리를 최종 추천으로 냈다 - pick_primary()가 offer 개수만 보고
+# query와의 관련성은 전혀 확인하지 않아서다. 아래는 그때 실제로 관측된 문자열.)
+
+
+def test_product_name_matches_rejects_unrelated_accessory_for_iphone_query():
+    query = "아이폰 16 프로 256GB"
+    wrong_pick = "태블리스 iPad 10세대 애플펜슬 홀더 힐링커버 케이스"
+
+    assert _product_name_matches(query, wrong_pick) is False
+
+
+def test_product_name_matches_accepts_genuine_iphone_match():
+    query = "아이폰 16 프로 256GB"
+    right_pick = "Apple 아이폰 16 Pro 256GB 자급제"
+
+    assert _product_name_matches(query, right_pick) is True
 
 
 # -- STEP 6: 모델명 충돌(V8 vs V15)이면 매칭 실패 -------------------------------
