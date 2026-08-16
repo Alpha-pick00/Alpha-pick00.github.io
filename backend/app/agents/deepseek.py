@@ -1,12 +1,14 @@
+import logging
 import re
 from collections import defaultdict
 
 from openai import AsyncOpenAI
 
 from ..config import settings
-from ..schemas import BulkProposal, ClarifyFacet, SearchResult
+from ..schemas import BulkProposal, ChallengeVerdict, ClarifyFacet, SearchResult
 from .base import (
     build_bulk_prompt,
+    build_challenge_prompt,
     build_facet_clarify_prompt,
     build_facet_clarify_prompt_for_labels,
     filter_bulk_options,
@@ -14,12 +16,43 @@ from .base import (
     parse_json_object,
 )
 
+logger = logging.getLogger(__name__)
+
 # DeepSeek은 OpenAI 호환 API라 openai SDK를 base_url만 바꿔서 그대로 쓴다.
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 
 def _client() -> AsyncOpenAI:
     return AsyncOpenAI(api_key=settings.deepseek_api_key, base_url=DEEPSEEK_BASE_URL)
+
+
+async def challenge_candidates(
+    query: str,
+    candidates: list[dict],
+    search_results: list[SearchResult],
+    candidate_pages: dict[str, str] | None = None,
+    coupang_results: list[SearchResult] | None = None,
+    naver_results: list[SearchResult] | None = None,
+) -> list[ChallengeVerdict]:
+    """ADK 파이프라인의 정상 challenge 단계(LlmAgent + LiteLlm)와 별개로,
+    파이프라인 세션 밖에서(2026-08-16, relaxed fallback 하드닝) 같은 그라운딩
+    검증을 태울 때 쓰는 단발 호출 버전 - build_challenge_prompt를 그대로
+    재사용해 프롬프트/기준이 정상 경로와 어긋나지 않는다. 실패(API 오류·파싱
+    실패)하면 빈 리스트를 반환한다 - 호출부는 이를 "검증 안 됨"으로 처리하고,
+    이미 찾은 유일한 후보를 검증 인프라 장애 때문에 버리지 않는다."""
+    try:
+        client = _client()
+        prompt = build_challenge_prompt(
+            query, candidates, search_results, candidate_pages, coupang_results, naver_results
+        )
+        response = await client.chat.completions.create(
+            model=settings.deepseek_model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return [ChallengeVerdict(**v) for v in parse_json_array(response.choices[0].message.content or "")]
+    except Exception:
+        logger.warning("relaxed fallback 후보 challenge 검증 실패 — 미검증으로 진행", exc_info=True)
+        return []
 
 
 async def propose_bulk(query: str, search_results: list[SearchResult]) -> BulkProposal:
