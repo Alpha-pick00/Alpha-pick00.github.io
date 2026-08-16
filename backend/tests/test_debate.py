@@ -69,6 +69,57 @@ def test_is_ambiguous_facets_false_when_option_already_chosen_in_query():
     assert _is_ambiguous_facets("무선청소기 다이슨", facets) is False
 
 
+# -- 2026-08-16 하드닝: crossfilter가 옵션을 1개로 좁혔으면 되묻지 않는다 -----
+# (그라운딩 회귀 파일럿 50개 중 발견: "햇반 백미 210g 24개"처럼 용량·수량을
+# 이미 구체적으로 적었는데도, 브랜드 facet의 원본 옵션(CJ제일제당/시아스/하림)
+# 중 어느 것도 질의에 문자 그대로 없다는 이유만으로 불필요하게 되물었다.
+# options_by_selection은 "210g 24개"를 고르면 CJ제일제당 하나로 좁혀진다는
+# 걸 이미 알고 있었는데 그 정보가 안 쓰이고 있었다 - 아래는 실제 라이브
+# 파이프라인에서 관측된 값 그대로.)
+
+
+def _brand_facet_with_crossfilter() -> ClarifyFacet:
+    return ClarifyFacet(
+        label="브랜드",
+        options=["CJ제일제당", "시아스", "하림"],
+        options_by_selection={
+            "210g 24개": ["CJ제일제당"],
+            "210g 12개": ["CJ제일제당"],
+            "12개": ["CJ제일제당"],
+            "48개": ["CJ제일제당"],
+            "36개": ["CJ제일제당"],
+            "8개": ["CJ제일제당", "시아스"],
+        },
+    )
+
+
+def test_facet_resolved_true_when_crossfilter_narrows_to_single_option():
+    assert _facet_resolved("햇반 백미 210g 24개", _brand_facet_with_crossfilter()) is True
+
+
+def test_is_ambiguous_facets_false_when_crossfilter_narrows_to_single_option():
+    assert _is_ambiguous_facets("햇반 백미 210g 24개", [_brand_facet_with_crossfilter()]) is False
+
+
+def test_facet_resolved_false_when_crossfilter_selector_not_in_query():
+    """셀렉터 키("210g 24개" 등)가 질의에 전혀 없으면(다른 용량/수량을 찾는
+    질의라서) 원본 다중 옵션 그대로 애매함으로 남아야 한다 - 무조건 좁히는
+    게 아니라 질의에 실제로 반영된 선택만 반영한다."""
+    assert _facet_resolved("즉석밥 추천", _brand_facet_with_crossfilter()) is False
+
+
+def test_facet_resolved_false_when_crossfilter_selectors_conflict_to_empty_intersection():
+    """서로 다른 셀렉터 키 두 개가 동시에 질의에 매치되는데 교집합이 비면
+    (모순되는 신호) 잘못 좁혀서 정말 필요한 되묻기를 건너뛰지 않고, 원본
+    옵션 그대로 안전하게 남긴다."""
+    facet = ClarifyFacet(
+        label="브랜드",
+        options=["A브랜드", "B브랜드"],
+        options_by_selection={"12개": ["A브랜드"], "8개": ["B브랜드"]},
+    )
+    assert _facet_resolved("상품 12개 8개입", facet) is False
+
+
 def test_resolved_facet_count_counts_resolved_facets():
     facets = [_facet("브랜드", ["해태제과"]), _facet("제품", ["초코파이 오리지널", "초코파이 다크"])]
 
