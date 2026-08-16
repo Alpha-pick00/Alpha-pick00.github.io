@@ -118,6 +118,23 @@ def test_merge_proposals_filters_danawa_comparison_page_url():
     assert _merge_proposals(raw_by_agent) == []
 
 
+def test_merge_proposals_filters_danawa_mobile_comparison_page_url():
+    """2026-08-17, 재검증 파일럿에서 발견: prod.danawa.com/info만 정규식으로
+    걸렀더니 같은 문제의 모바일 페이지 변형(m.danawa.com/product/product.html)
+    이 그대로 통과했다("LG 그램 16인치 2024" 질의에서 retailer="다나와",
+    price="" 재현) - is_danawa_comparison_page를 도메인 기반(다나와 도메인 +
+    /bridge/ 아님)으로 일반화한 뒤에는 이 변형도 걸러져야 한다."""
+    raw_by_agent = {
+        "gpt": json.dumps(
+            [_raw_candidate("LG전자 2024 그램16", 0, "https://m.danawa.com/product/product.html?code=45320081")]
+        ),
+        "gemini": None,
+        "deepseek": None,
+    }
+
+    assert _merge_proposals(raw_by_agent) == []
+
+
 def test_merge_proposals_keeps_danawa_bridge_purchase_link():
     """/bridge/loadingBridge.html은 다나와가 최종 판매처로 리다이렉트하는
     실제 구매 링크라 가격비교 페이지 필터에 걸리면 안 된다."""
