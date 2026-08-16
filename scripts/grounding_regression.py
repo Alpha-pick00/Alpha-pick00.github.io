@@ -15,6 +15,16 @@ pytest 스위트에 넣지 않는다 - Tavily/Qwen/Groq/DeepSeek/다나와 전�
 흔들릴 수 있다(live_smoke_test.py와 동일한 원칙). 수동으로 주기적으로 돌리거나
 릴리스 전 체크리스트로 쓴다.
 
+2026-08-17("앞으로는 테스트할 때 토큰 다 쓰면 나한테 말하고 중지해줘 - LLM
+모델 하나라도 빠지면 실험하는게 의미가 없어") - 50개를 재검증하던 도중
+Qwen(DashScope) 무료 티어가 완전히 소진됐는데 나머지 49개를 그대로 끝까지
+돌려서, 통과율이 실제 코드 품질이 아니라 인프라 상태를 반영하는 왜곡된
+숫자(17/50 -> 6/50)가 나왔다. 이제 (1) 실행 전 Qwen/DeepSeek/Groq/Tavily
+4개를 최소 호출로 헬스체크해 하나라도 죽어있으면 아예 시작하지 않고,
+(2) 도중에 연속 2건에서 쿼터 소진 신호(429/403/insufficient_quota 등)가
+보이면 즉시 재확인 후 확정되면 중단한다(부분 결과는 저장) - 우연한 1회성
+오류로 끝까지 못 도는 일은 피하되, 진짜 소진이면 나머지를 억지로 안 돈다.
+
 검사 기준은 3가지 - 전부 이번 세션에서 실제로 겪은 버그 클래스를 겨냥한다:
 1. URL이 비어있거나 가격비교 사이트(다나와) 자체를 가리키면 안 된다 - "구매링크를
    안띄워주는거야" 버그(다나와 페이지 자체가 최종 URL로 노출됨)의 재발 감지.
@@ -40,14 +50,104 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import httpx
+
 BACKEND_DIR = Path(__file__).resolve().parent.parent / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
 from app import debate  # noqa: E402
+from app.agents import deepseek as deepseek_module  # noqa: E402
+from app.agents import gpt as gpt_module  # noqa: E402
+from app.config import settings  # noqa: E402
 from app.price_table import DANAWA_ROOT_DOMAIN, _is_danawa_bridge_passthrough  # noqa: E402
 from app.schemas import ClarifyResponse  # noqa: E402
 
 RESULTS_PATH = Path(__file__).resolve().parent / "grounding_regression_results.json"
+
+# 2026-08-17("앞으로는 테스트할 때 토큰 다 쓰면 나한테 말하고 중지해줘 - LLM
+# 모델 하나라도 빠지면 실험하는게 의미가 없어") - 50개 재검증 파일럿 도중
+# Qwen(DashScope) 무료 티어가 완전히 소진됐는데 스크립트가 그대로 끝까지
+# 돌아서, 통과율이 실제 코드 품질이 아니라 인프라 상태를 반영하는 왜곡된
+# 숫자가 나왔다(17/50 -> 6/50, 고친 코드 때문이 아니라 3개 제공자 중 사실상
+# DeepSeek만 남았던 탓). 실행 전 4개 제공자를 모두 가볍게 확인하고, 하나라도
+# 죽어있으면 아예 시작하지 않는다. 각 제공자의 실제 429/403 에러 메시지에서
+# 확인한 문자열 그대로 - 새 제공자가 추가되면 여기도 늘려야 한다.
+_QUOTA_EXHAUSTION_SIGNATURES = (
+    "insufficient_quota",
+    "rate_limit_exceeded",
+    "credit_balance_exhausted",
+    "Free quota exhausted",
+    "RateLimitError",
+    "PermissionDeniedError",
+)
+
+
+async def _ping_qwen() -> str | None:
+    try:
+        client = gpt_module._client()
+        await client.chat.completions.create(
+            model=settings.qwen_model, messages=[{"role": "user", "content": "ping"}], max_tokens=1
+        )
+        return None
+    except Exception as exc:
+        return f"Qwen(gpt): {exc}"
+
+
+async def _ping_deepseek() -> str | None:
+    try:
+        client = deepseek_module._client()
+        await client.chat.completions.create(
+            model=settings.deepseek_model, messages=[{"role": "user", "content": "ping"}], max_tokens=1
+        )
+        return None
+    except Exception as exc:
+        return f"DeepSeek: {exc}"
+
+
+async def _ping_groq() -> str | None:
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{settings.groq_api_base}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                json={"model": settings.groq_model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1},
+            )
+            resp.raise_for_status()
+        return None
+    except Exception as exc:
+        return f"Groq: {exc}"
+
+
+async def _ping_tavily() -> str | None:
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": settings.tavily_api_key,
+                    "query": "ping",
+                    "search_depth": "basic",
+                    "max_results": 1,
+                    "include_domains": ["danawa.com"],
+                },
+            )
+            resp.raise_for_status()
+        return None
+    except Exception as exc:
+        return f"Tavily: {exc}"
+
+
+async def check_providers_healthy() -> list[str]:
+    """4개 제공자를 최소 호출로 확인한다 - 실패 메시지 목록을 돌려주며, 빈
+    리스트면 전부 정상이다. Qwen/DeepSeek/Groq는 propose·challenge·judge에
+    전부 관여하고, Tavily는 검색 자체를 담당해 하나라도 죽으면 50개 전체의
+    신뢰도가 무너진다."""
+    results = await asyncio.gather(_ping_qwen(), _ping_deepseek(), _ping_groq(), _ping_tavily())
+    return [r for r in results if r is not None]
+
+
+def _looks_like_quota_exhaustion(text: str) -> bool:
+    return any(sig in text for sig in _QUOTA_EXHAUSTION_SIGNATURES)
 
 
 @dataclass
@@ -175,19 +275,55 @@ async def run_case(case: Case) -> dict:
 
 
 async def main() -> None:
+    print("사전 헬스체크: Qwen/DeepSeek/Groq/Tavily...", flush=True)
+    unhealthy = await check_providers_healthy()
+    if unhealthy:
+        print("=" * 70)
+        print("중단: 실행 전 헬스체크에서 제공자가 이미 죽어있음 - 이 상태로 돌리면")
+        print("통과율이 코드 품질이 아니라 인프라 상태를 반영하게 되어 의미가 없다.")
+        for msg in unhealthy:
+            print(f"  - {msg}")
+        print("=" * 70)
+        sys.exit(1)
+    print("헬스체크 통과 - 4개 제공자 모두 정상. 50개 실행 시작.\n", flush=True)
+
     results = []
+    consecutive_quota_failures = 0
     for i, case in enumerate(CASES):
         if i > 0:
             await asyncio.sleep(2)  # 다나와 crawl-delay 등 연속 호출 부담을 줄인다.
         print(f"=== [{i + 1}/{len(CASES)}] ({case.category}) {case.query} ===", flush=True)
         try:
             r = await run_case(case)
+            case_text = json.dumps(r, ensure_ascii=False)
         except Exception as exc:
-            r = {"category": case.category, "query": case.query, "failures": [f"예외 발생: {type(exc).__name__}: {exc}"]}
+            case_text = f"{type(exc).__name__}: {exc}"
+            r = {"category": case.category, "query": case.query, "failures": [f"예외 발생: {case_text}"]}
         results.append(r)
         for k, v in r.items():
             print(f"  {k}: {v}", flush=True)
         print(flush=True)
+
+        if _looks_like_quota_exhaustion(case_text):
+            consecutive_quota_failures += 1
+        else:
+            consecutive_quota_failures = 0
+
+        # 연속 2건에서 쿼터 소진 신호가 보이면(우연한 1회성 429가 아니라 진짜
+        # 소진일 가능성이 높음) 즉시 재확인하고, 확정되면 중단한다 - 나머지를
+        # 끝까지 돌려봐야 전부 왜곡된 데이터만 쌓인다.
+        if consecutive_quota_failures >= 2:
+            still_unhealthy = await check_providers_healthy()
+            if still_unhealthy:
+                RESULTS_PATH.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+                print("=" * 70)
+                print(f"중단: {i + 1}/{len(CASES)}건까지 실행 후 제공자 쿼터 소진 확인 - 여기서 멈춘다.")
+                for msg in still_unhealthy:
+                    print(f"  - {msg}")
+                print(f"부분 결과 저장: {RESULTS_PATH}")
+                print("=" * 70)
+                sys.exit(1)
+            consecutive_quota_failures = 0
 
     RESULTS_PATH.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
 
