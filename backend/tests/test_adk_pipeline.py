@@ -102,6 +102,38 @@ def test_merge_proposals_filters_generic_listing_url():
     assert _merge_proposals(raw_by_agent) == []
 
 
+def test_merge_proposals_filters_danawa_comparison_page_url():
+    """2026-08-16, 그라운딩 회귀 파일럿에서 발견: Qwen·DeepSeek이 다나와
+    가격비교 페이지 자체(prod.danawa.com/info?pcode=...)를 후보로 제안하면서
+    retailer="다나와"(판매처가 아니라 가격비교 사이트 자신), price=""로
+    채웠다 - 이 페이지는 실제 구매 가능한 판매처로 연결되지 않으므로
+    애초에 후보 풀에 못 들어오게 막는다(진짜 구매 링크인 /bridge/
+    loadingBridge.html은 이 패턴에 안 걸려 그대로 통과한다)."""
+    raw_by_agent = {
+        "gpt": json.dumps([_raw_candidate("위닉스 뽀송 DHC-167IPW", 0, "https://prod.danawa.com/info?pcode=1982936")]),
+        "gemini": None,
+        "deepseek": None,
+    }
+
+    assert _merge_proposals(raw_by_agent) == []
+
+
+def test_merge_proposals_keeps_danawa_bridge_purchase_link():
+    """/bridge/loadingBridge.html은 다나와가 최종 판매처로 리다이렉트하는
+    실제 구매 링크라 가격비교 페이지 필터에 걸리면 안 된다."""
+    bridge_url = "https://prod.danawa.com/bridge/loadingBridge.html?pcode=1&cmpnyc=EE715"
+    raw_by_agent = {
+        "gpt": json.dumps([_raw_candidate("무선 마우스", 12900, bridge_url)]),
+        "gemini": None,
+        "deepseek": None,
+    }
+
+    merged = _merge_proposals(raw_by_agent)
+
+    assert len(merged) == 1
+    assert merged[0]["url"] == bridge_url
+
+
 def test_merge_proposals_filters_candidate_with_empty_url():
     """url이 빈 후보를 그대로 통과시키면, 실제로 살 수 있는 페이지가 없는
     후보가 심사까지 흘러가 judge가 존재하지 않는 URL을 스스로 지어내

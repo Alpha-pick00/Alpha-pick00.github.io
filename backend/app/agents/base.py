@@ -16,6 +16,23 @@ def is_generic_listing_url(url: str) -> bool:
     return bool(_GENERIC_LISTING_URL_PATTERN.search(url))
 
 
+_DANAWA_COMPARISON_PAGE_PATTERN = re.compile(r"^https?://prod\.danawa\.com/info/?(\?|$)", re.IGNORECASE)
+
+
+def is_danawa_comparison_page(url: str) -> bool:
+    """다나와 가격비교 페이지 자체(prod.danawa.com/info?pcode=...)를 가리키는
+    URL인지 판별한다(2026-08-16, 그라운딩 회귀 파일럿에서 발견: "위닉스 뽀송
+    제습기 16L"/"스캇 자전거 헬멧" 검색에서 Qwen·DeepSeek이 독립적으로 이
+    페이지 자체를 후보로 제안하면서 retailer를 "다나와"(판매처가 아니라
+    가격비교 사이트 자신), price를 빈 문자열로 채웠다 - 이 페이지는 여러
+    판매처를 나열만 할 뿐 특정 판매처로 바로 연결되지 않아(진짜 구매 링크는
+    /bridge/loadingBridge.html, 이 패턴에는 안 걸림) 애초에 가격/판매처
+    정보가 있을 수 없는 후보다. challenge가 상품 정체성 일치만 확인하고
+    "실제 구매 가능한 판매처인가"는 안 봐서 verified=True로 통과되는 사례를
+    확인했다 - propose 단계에서 후보 자체를 아예 안 받아들이도록 막는다."""
+    return bool(_DANAWA_COMPARISON_PAGE_PATTERN.match(url))
+
+
 NO_CANDIDATE_ERROR = "적절한 상품 후보를 찾지 못했습니다."
 
 
@@ -32,7 +49,7 @@ def filter_candidates(items: list, max_items: int = 3) -> list[dict]:
         if not isinstance(item, dict):
             continue
         url = (item.get("url") or "").strip()
-        if not url or is_generic_listing_url(url):
+        if not url or is_generic_listing_url(url) or is_danawa_comparison_page(url):
             continue
         if not (item.get("product_name") or "").strip():
             continue
