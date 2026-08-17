@@ -21,9 +21,23 @@ Qwen(DashScope) 무료 티어가 완전히 소진됐는데 나머지 49개를 �
 돌려서, 통과율이 실제 코드 품질이 아니라 인프라 상태를 반영하는 왜곡된
 숫자(17/50 -> 6/50)가 나왔다. 이제 (1) 실행 전 Qwen/DeepSeek/Groq/Tavily
 4개를 최소 호출로 헬스체크해 하나라도 죽어있으면 아예 시작하지 않고,
-(2) 도중에 연속 2건에서 쿼터 소진 신호(429/403/insufficient_quota 등)가
-보이면 즉시 재확인 후 확정되면 중단한다(부분 결과는 저장) - 우연한 1회성
-오류로 끝까지 못 도는 일은 피하되, 진짜 소진이면 나머지를 억지로 안 돈다.
+(2) 도중에 연속 2건이 실패하면 즉시 제공자 헬스체크로 재확인 후 확정되면
+중단한다(부분 결과는 저장) - 우연한 1회성 오류로 끝까지 못 도는 일은
+피하되, 진짜 소진이면 나머지를 억지로 안 돈다.
+
+2026-08-17(같은 날 재발) - qwen-plus로 다운그레이드해 재실행했을 때 Groq
+일일 토큰 한도와 OpenAI 크레딧이 실행 초반부터 거의 즉시 바닥났는데도
+헬스체크가 통과됐다는 이유로 50개를 그대로 끝까지 돌아 2/50이라는 왜곡된
+숫자가 나왔다 - 파이프라인(`debate.run_single_debate`)이 provider의 원본
+429/insufficient_quota 예외를 내부에서 잡아 "적절한 상품 후보를 찾지
+못했습니다"류의 일반 RuntimeError나 ClarifyResponse로 바꿔버려서,
+`case_text`(케이스 결과 문자열)에 원본 에러 문구가 전혀 안 남았기 때문이다
+(`_looks_like_quota_exhaustion`가 case_text를 아무리 뒤져도 매칭될 문자열
+자체가 없었음). 원본 예외 문구에 의존하는 문자열 매칭은 파이프라인이 내부
+예외를 어떻게 감싸는지에 따라 언제든 다시 뚫릴 수 있는 구조적 약점이라,
+"케이스 결과 텍스트에 소진 신호가 보이는가" 대신 "케이스가 (사유 불문)
+연속으로 실패했는가"로 트리거 조건을 바꿨다 - 실패 사유를 해석하려 하지
+않고, 실패가 반복되면 그냥 제공자 상태를 직접 재확인한다.
 
 검사 기준은 3가지 - 전부 이번 세션에서 실제로 겪은 버그 클래스를 겨냥한다:
 1. URL이 비어있거나 가격비교 사이트(다나와) 자체를 가리키면 안 된다 - "구매링크를
@@ -75,16 +89,7 @@ README_HISTORY_END = "<!-- GROUNDING_HISTORY_END -->"
 # 돌아서, 통과율이 실제 코드 품질이 아니라 인프라 상태를 반영하는 왜곡된
 # 숫자가 나왔다(17/50 -> 6/50, 고친 코드 때문이 아니라 3개 제공자 중 사실상
 # DeepSeek만 남았던 탓). 실행 전 4개 제공자를 모두 가볍게 확인하고, 하나라도
-# 죽어있으면 아예 시작하지 않는다. 각 제공자의 실제 429/403 에러 메시지에서
-# 확인한 문자열 그대로 - 새 제공자가 추가되면 여기도 늘려야 한다.
-_QUOTA_EXHAUSTION_SIGNATURES = (
-    "insufficient_quota",
-    "rate_limit_exceeded",
-    "credit_balance_exhausted",
-    "Free quota exhausted",
-    "RateLimitError",
-    "PermissionDeniedError",
-)
+# 죽어있으면 아예 시작하지 않는다.
 
 
 async def _ping_qwen() -> str | None:
@@ -149,10 +154,6 @@ async def check_providers_healthy() -> list[str]:
     신뢰도가 무너진다."""
     results = await asyncio.gather(_ping_qwen(), _ping_deepseek(), _ping_groq(), _ping_tavily())
     return [r for r in results if r is not None]
-
-
-def _looks_like_quota_exhaustion(text: str) -> bool:
-    return any(sig in text for sig in _QUOTA_EXHAUSTION_SIGNATURES)
 
 
 @dataclass
@@ -366,14 +367,13 @@ async def main() -> None:
     print("헬스체크 통과 - 4개 제공자 모두 정상. 50개 실행 시작.\n", flush=True)
 
     results = []
-    consecutive_quota_failures = 0
+    consecutive_failures = 0
     for i, case in enumerate(CASES):
         if i > 0:
             await asyncio.sleep(2)  # 다나와 crawl-delay 등 연속 호출 부담을 줄인다.
         print(f"=== [{i + 1}/{len(CASES)}] ({case.category}) {case.query} ===", flush=True)
         try:
             r = await run_case(case)
-            case_text = json.dumps(r, ensure_ascii=False)
         except Exception as exc:
             case_text = f"{type(exc).__name__}: {exc}"
             r = {"category": case.category, "query": case.query, "failures": [f"예외 발생: {case_text}"]}
@@ -382,15 +382,22 @@ async def main() -> None:
             print(f"  {k}: {v}", flush=True)
         print(flush=True)
 
-        if _looks_like_quota_exhaustion(case_text):
-            consecutive_quota_failures += 1
+        # 실패 사유 문자열을 신뢰하지 않는다 - 파이프라인이 provider의 원본
+        # 429/insufficient_quota 예외를 내부에서 잡아 일반 RuntimeError나
+        # clarify로 바꿔버리면 실패 텍스트에 소진 신호가 전혀 안 남는다(실제
+        # 겪은 사례). 대신 "사유 불문 연속 실패"를 트리거로 삼고, 실제 소진
+        # 여부는 항상 헬스체크로 직접 재확인한다.
+        if r["failures"]:
+            consecutive_failures += 1
         else:
-            consecutive_quota_failures = 0
+            consecutive_failures = 0
 
-        # 연속 2건에서 쿼터 소진 신호가 보이면(우연한 1회성 429가 아니라 진짜
-        # 소진일 가능성이 높음) 즉시 재확인하고, 확정되면 중단한다 - 나머지를
-        # 끝까지 돌려봐야 전부 왜곡된 데이터만 쌓인다.
-        if consecutive_quota_failures >= 2:
+        # 연속 2건이 실패하면(우연한 1회성 실패가 아니라 진짜 인프라 문제일
+        # 가능성이 높음) 즉시 제공자 헬스체크로 재확인하고, 확정되면 중단한다
+        # - 나머지를 끝까지 돌려봐야 전부 왜곡된 데이터만 쌓인다. 헬스체크가
+        # 정상으로 나오면(즉 실패가 진짜 코드/그라운딩 이슈였다면) 카운터만
+        # 리셋하고 계속 돈다.
+        if consecutive_failures >= 2:
             still_unhealthy = await check_providers_healthy()
             if still_unhealthy:
                 RESULTS_PATH.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -401,7 +408,7 @@ async def main() -> None:
                 print(f"부분 결과 저장: {RESULTS_PATH}")
                 print("=" * 70)
                 sys.exit(1)
-            consecutive_quota_failures = 0
+            consecutive_failures = 0
 
     RESULTS_PATH.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
 
