@@ -1,7 +1,6 @@
 # αlpha Pick
 
-https://alpha-pick00.github.io/
-
+alpha-pick-jet.vercel.app
 ---
 
 ## 1️⃣ 프로젝트 개요
