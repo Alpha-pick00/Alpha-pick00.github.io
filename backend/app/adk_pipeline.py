@@ -3,8 +3,10 @@
 정제(Groq) → 검색 → 제안(Qwen·Groq·DeepSeek 병렬, 각자 최선 1개) →
 필터링+병합(fusion.dedup 재사용) → 검증(DeepSeek) → 매칭/합성 → 심사(Groq)
 순서로 실행된다 — `debate.py`의 run_single_debate/run_single_debate_stream이
-이 모듈의 run()/run_stream()을 호출한다. (제안 슬롯 이름은 여전히 "gpt"/"gemini"
-다 - 스키마의 AgentName 리터럴이라 실제 백엔드 모델이 바뀌어도 그대로 둔다.)
+이 모듈의 run()/run_stream()을 호출한다. (제안 슬롯 이름은 "gpt"/"groq" -
+"gpt" 슬롯은 실제로는 Qwen이 돌지만 리네임 비용이 커서 식별자를 그대로 뒀고,
+"groq" 슬롯은 2026-08-18에 실제 쓰는 모델명으로 리네임했다 - 원래 이름은
+"gemini"였다.)
 
 SequentialAgent/ParallelAgent는 google-adk 2.6.3 기준 deprecated(대체 예정인
 Workflow가 아직 LlmAgent의 sub-agent로 못 쓰여 미완성 상태)이지만, 실제로는
@@ -109,7 +111,7 @@ def _refined_query_text(state: dict) -> str:
 
 # ---------------------------------------------------------------------------
 # 커스텀(순수 Python) 노드 — ADK LlmAgent가 아니라 직접 상태를 읽고 쓴다.
-# (_SearchNode는 예외적으로 내부에서 Gemini 분류를 한 번 호출한다 — 그 노드
+# (_SearchNode는 예외적으로 내부에서 카테고리 분류를 한 번 호출한다 — 그 노드
 # docstring 참고.)
 # ---------------------------------------------------------------------------
 
@@ -117,7 +119,7 @@ def _refined_query_text(state: dict) -> str:
 class _SearchNode(BaseAgent):
     """정제된 질의로 search_module.search()를 호출해 원본 결과 + 프롬프트용
     포맷 텍스트를 상태에 저장한다. 이 섹션의 다른 노드와 달리 Tavily 호출 전에
-    카테고리 분류(Gemini) 호출이 하나 더 낀다 — 분류 결과를 검색어에 얹어
+    카테고리 분류(Groq) 호출이 하나 더 낀다 — 분류 결과를 검색어에 얹어
     검색엔진 랭킹을 카테고리 쪽으로 미세 조정하기 위함(_augment_search_query
     참고). 이 호출은 이 노드 안에서만 쓰고 상태에 저장하지 않는다 — clarify
     단계의 카테고리 분류(debate.py::_extract_clarify_options)는 실제 검색
@@ -149,12 +151,12 @@ class _DanawaFetchNode(BaseAgent):
     """다나와 실측 가격표를 propose 3개 모델과 나란히(동시에) 조회한다 —
     PRESERVED FROM seungmin/lsm의 run_single_debate_price_table_variant(PART 4-2)를
     ADK 파이프라인으로 포팅(2026-08-16, README "한계점 및 향후 과제" 후속작업).
-    같은 ParallelAgent(propose_parallel) 소속이라 gpt/gemini/deepseek LlmAgent와
+    같은 ParallelAgent(propose_parallel) 소속이라 gpt/groq/deepseek LlmAgent와
     동시에 실행되므로 지연시간이 추가되지 않는다.
 
     price_table_module.fetch_price_tables()는 원래도 예외를 던지지 않지만,
     이 노드도 다른 커스텀 노드(_SearchNode 등)와 같은 방어 패턴을 따라 한 번 더
-    감싼다 — 다나와 조회가 실패해도 gpt/gemini/deepseek 후보만으로 파이프라인이
+    감싼다 — 다나와 조회가 실패해도 gpt/groq/deepseek 후보만으로 파이프라인이
     계속 진행된다.
 
     A등급(구매 링크 생성 가능) 최저가 offer가 있는 대표 가격표(pick_primary -
@@ -219,7 +221,7 @@ class _DanawaFetchNode(BaseAgent):
 class _CoupangCheckNode(BaseAgent):
     """challenge 단계에 쿠팡 검색 결과를 독립 교차 확인 신호로 추가한다
     (사용자 요청, 2026-08-16: "그라운딩 성능을 높여줘"). propose_parallel
-    소속이라 gpt/gemini/deepseek/danawa와 동시 실행되어 지연시간이 추가되지
+    소속이라 gpt/groq/deepseek/danawa와 동시 실행되어 지연시간이 추가되지
     않는다. 다나와처럼 가격을 추출해 후보로 올리지는 않는다 - 쿠팡 페이지를
     직접 파싱하지 않고(과거 15개 리테일러를 다나와 하나로 좁힌 이유였던
     "스니펫만으로 파싱하면 엉뚱한 상품/가격이 섞이는 문제"를 재현하지 않기
@@ -260,7 +262,7 @@ class _FilterMergeNode(BaseAgent):
         state = ctx.session.state
         raw_by_agent = {
             "gpt": state.get("gpt_raw"),
-            "gemini": state.get("gemini_raw"),
+            "groq": state.get("groq_raw"),
             "deepseek": state.get("deepseek_raw"),
             "danawa": state.get("danawa_raw"),
         }
@@ -497,10 +499,10 @@ def _skip_refine_if_already_specific(callback_context, llm_request) -> LlmRespon
     """정제(refine)는 파이프라인에서 검색이 시작되기 전에 걸리는 첫 LLM 왕복이라,
     여기를 건너뛰면 그만큼 전체 응답 지연이 그대로 줄어든다(사용자 요청,
     2026-08-15: "순차단계 줄이자"). REFINE_QUERY_INSTRUCTIONS 자체가 "질의가
-    이미 구체적이면 그대로 반환하라"고 하므로, 그 판단을 Gemini에 매번 왕복해
+    이미 구체적이면 그대로 반환하라"고 하므로, 그 판단을 매번 모델에 왕복해
     묻는 대신 이미 있는 needs_clarification() 휴리스틱(브랜드/스펙 없이 짧은
     질의나 "사고싶어"류 모호한 구매의도 문구만 True)으로 로컬에서 먼저 걸러
-    낸다. 애매하면(True) 여기서 손대지 않고 실제 Gemini 정제를 그대로 태운다 -
+    낸다. 애매하면(True) 여기서 손대지 않고 실제 정제(Groq)를 그대로 태운다 -
     오탐(정제가 실제로 필요한데 건너뜀)의 대가가 "약간 덜 다듬어진 검색어"
     정도라 위험하지 않다."""
     original_query = callback_context.state.get("original_query", "")
@@ -511,7 +513,7 @@ def _skip_refine_if_already_specific(callback_context, llm_request) -> LlmRespon
 
 
 def _on_refine_model_error(callback_context, llm_request, error) -> LlmResponse:
-    """refine의 Gemini 호출이 실패하면 정제를 포기하고 원본 질의를 그대로 쓴다 —
+    """refine의 모델(Groq) 호출이 실패하면 정제를 포기하고 원본 질의를 그대로 쓴다 —
     다듬지 않은 질의로라도 검색을 계속하는 게 파이프라인 전체를 죽이는 것보다
     낫다."""
     logger.warning("refine 단계 모델 호출 실패, 원본 질의로 폴백", exc_info=error)
@@ -520,14 +522,26 @@ def _on_refine_model_error(callback_context, llm_request, error) -> LlmResponse:
     return _model_error_fallback_response(fallback.model_dump_json())
 
 
-def _on_propose_model_error(callback_context, llm_request, error) -> LlmResponse:
-    """propose 3개 중 하나가 실패하면 그 모델의 후보를 빈 배열로 대체한다 —
-    _merge_proposals가 파싱 실패/누락을 이미 각 에이전트 단위로 건너뛰도록 돼
-    있으므로, 나머지 2개 모델의 후보만으로 정상 진행된다."""
+def _on_propose_model_error(callback_context, llm_request, error) -> LlmResponse | None:
+    """propose 3개(gpt/groq/deepseek) 중 하나라도 모델 호출에 실패하면 그
+    실패를 그대로 흘려보낸다(None 반환) - ADK는 이 콜백이 None을 반환하면
+    원래 예외를 그대로 raise한다(base_llm_flow._call_llm_async 참고). 그
+    예외는 run_stream()의 바깥 try/except가 잡아 pipeline_failed=True로
+    처리하고, proposals가 빈 채로 기존 clarify/relaxed fallback/
+    NO_CANDIDATE_ERROR 경로로 이어진다 - 즉 2/3만으로 최종 답을 내지 않는다.
+
+    (2026-08-18, 사용자 요청: "3개중 하나라도 빠지면 결과를 내지 않도록
+    해야지 왜 3개를 안쓰고 2개만해서 결과를 내") 원래는 실패한 슬롯만 빈
+    배열("[]")로 대체해 나머지 2개로 계속 진행했다 - 3개 모델이 독립적으로
+    같은 상품을 골랐는지(proposed_by 합의)가 그라운딩 신뢰도 신호로 쓰이는
+    구조라, 2/3만으로 낸 답은 원래 설계한 신뢰도보다 낮은데도 겉보기엔
+    구분이 안 됐다. 이제 하나라도 빠지면 아예 정직하게 실패로 처리한다."""
     logger.warning(
-        "%s propose 단계 모델 호출 실패, 이 모델 없이 진행", callback_context.agent_name, exc_info=error
+        "%s propose 단계 모델 호출 실패 - 3개 전부 성공해야 하므로 파이프라인을 그대로 실패시킨다",
+        callback_context.agent_name,
+        exc_info=error,
     )
-    return _model_error_fallback_response("[]")
+    return None
 
 
 def _groq_model(model_name: str) -> LiteLlm:
@@ -641,10 +655,11 @@ def _build_judge_agent() -> LlmAgent:
         name="judge",
         # judge는 2026-08-16부터 Claude가 아니라 Groq(openai/gpt-oss-120b)다
         # (사용자 요청: "deepseek Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" -
-        # Anthropic엔 상시 무료 API 티어가 없다). propose 쪽 gemini 슬롯도 같은
-        # gpt-oss 계열(20b)이지만 judge는 그보다 큰 120b를 따로 써서 최소한의
-        # 판단력 격차를 둔다 - Groq 카탈로그에 구조화 출력(json_schema)을 지원하는
-        # 모델이 gpt-oss 계열뿐이라 propose·judge가 완전히 다른 계보를 쓰긴 어렵다.
+        # Anthropic엔 상시 무료 API 티어가 없다). propose 쪽 groq 슬롯도 같은
+        # gpt-oss 계열이지만(2026-08-18부터 120b 공유 - config.py 주석 참고),
+        # judge는 계속 120b를 쓴다 - Groq 카탈로그에 구조화 출력(json_schema)을
+        # 지원하는 모델이 gpt-oss 계열뿐이라 propose·judge가 완전히 다른 계보를
+        # 쓰긴 어렵다.
         model=_groq_model(settings.groq_judge_model),
         instruction=instruction,
         output_schema=judge_module.JudgeVerdict,
@@ -655,7 +670,7 @@ def _build_judge_agent() -> LlmAgent:
 
 def _build_pipeline() -> SequentialAgent:
     gpt_raw = "gpt"
-    gemini_raw = "gemini"
+    groq_raw = "groq"
     deepseek_raw = "deepseek"
 
     propose_parallel = ParallelAgent(
@@ -677,17 +692,18 @@ def _build_pipeline() -> SequentialAgent:
                     api_key=settings.qwen_api_key,
                 ),
             ),
-            # "gemini" 슬롯은 2026-08-16부터 Groq(gpt-oss-20b)가 담당한다
-            # (사용자 요청: "deepseek Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" -
-            # Gemini 프로젝트가 403으로 막혀있기도 했다). name/output_key는 그대로
-            # "gemini"라 스키마의 AgentName 리터럴이나 이 파일 다른 곳의 "gemini"
-            # 참조를 안 건드린다.
-            _build_propose_agent(gemini_raw, _groq_model(settings.groq_model)),
+            # 이 슬롯은 2026-08-16부터 Groq가 담당한다(사용자 요청: "deepseek
+            # Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" - Gemini 프로젝트가
+            # 403으로 막혀있기도 했다). name/output_key는 원래 "gemini"였지만
+            # 2026-08-18("Gemini 이제 안쓰니까 이름 제대로 바꿔서 코드 반영해")
+            # 실제 쓰는 모델명을 따라 "groq"로 리네임했다(스키마 AgentName,
+            # 프론트엔드, 테스트 전반의 참조도 함께 바꿨다).
+            _build_propose_agent(groq_raw, _groq_model(settings.groq_model)),
             _build_propose_agent(deepseek_raw, LiteLlm(model=f"deepseek/{settings.deepseek_model}")),
             # 다나와 A등급 실측가 - 2026-08-16, PRESERVED FROM seungmin/lsm의
             # run_single_debate_price_table_variant(PART 4-2)를 라이브 ADK
             # 파이프라인으로 포팅(README "한계점 및 향후 과제" 후속작업). LLM이
-            # 아니라 커스텀 BaseAgent지만 같은 ParallelAgent 소속이라 gpt/gemini/
+            # 아니라 커스텀 BaseAgent지만 같은 ParallelAgent 소속이라 gpt/groq/
             # deepseek와 동시에 실행된다(지연시간 추가 없음).
             _DanawaFetchNode(name="danawa"),
             # 쿠팡 교차 확인(2026-08-16, "그라운딩 성능을 높여줘") - 후보를 만들지

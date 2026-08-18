@@ -32,14 +32,17 @@ class Settings:
     qwen_model: str = os.environ.get("QWEN_MODEL", "qwen-max")
     deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
-    # "gemini"/judge 슬롯은 2026-08-16부터 Groq(무료 API)이 담당한다(사용자 요청:
+    # "groq"/judge 슬롯은 2026-08-16부터 Groq(무료 API)이 담당한다(사용자 요청:
     # "deepseek Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" - Gemini는 프로젝트가
     # 403으로 막혀있었고 Claude는 애초에 상시 무료 티어가 없다). Groq도 OpenAI
     # 호환 엔드포인트라 gpt.py/deepseek.py와 같은 패턴(AsyncOpenAI+base_url)을
-    # 그대로 쓴다. agent="gemini" 식별자 자체는 안 바꿨다(gpt와 동일한 이유).
+    # 그대로 쓴다. agent 식별자는 원래 "gemini"였지만 2026-08-18("Gemini
+    # 이제 안쓰니까 이름 제대로 바꿔서 코드 반영해") 실제 쓰는 모델명을 따라
+    # "groq"로 리네임했다(gpt 슬롯과 달리 - Qwen으로 바뀐 뒤에도 "gpt" 식별자를
+    # 유지한 건 리네임 비용이 훨씬 컸기 때문).
     groq_api_key: str | None = os.environ.get("GROQ_API_KEY")
     groq_api_base: str = os.environ.get("GROQ_API_BASE", "https://api.groq.com/openai/v1")
-    # 카테고리분류/OCR 텍스트 정리/propose의 "gemini" 슬롯이 공통으로 쓰는 범용
+    # 카테고리분류/OCR 텍스트 정리/propose의 "groq" 슬롯이 공통으로 쓰는 범용
     # 모델. 원래는 Groq 무료(on-demand) 티어의 분당 토큰(TPM) 한도가 가장 넉넉한
     # llama-3.3-70b-versatile을 썼는데(검색 결과 12건을 그대로 프롬프트에 넣으면
     # 이 한도를 매번 초과했다 - agents/base.py의 _SNIPPET_MAX_CHARS로 기본 해결),
