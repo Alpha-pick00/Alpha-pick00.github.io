@@ -824,11 +824,36 @@ async def run_single_debate_stream(
         yield event
 
 
+async def _danawa_results_as_search_results(query: str, limit: int) -> list[SearchResult]:
+    """Tavily(search_module.search, danawa.com 도메인 한정)가 이 질의를 못 찾을
+    때 쓰는 대체 검색 소스(사용자 리포트, 2026-08-18: "다나와에 검색하면
+    나오는데 뭐가 문제인거야?" - 실제로 다나와 자체 검색엔 있는 상품이 Tavily
+    색인엔 없어서 대량구매 경로가 제안을 하나도 못 만든 사례가 있었다).
+    check_clarify_facets 등 다른 경로가 이미 쓰는 다나와 직접 검색을 재사용해,
+    같은 원리로 후보 검색 결과를 채운다."""
+    try:
+        items = await price_table_module._search_danawa_items(query, limit=limit)
+    except Exception:
+        return []
+    return [
+        SearchResult(
+            title=item["product_name"],
+            url=f"https://prod.danawa.com/info/?pcode={item['pcode']}",
+            snippet=item["product_name"],
+            score=None,
+        )
+        for item in items
+    ]
+
+
 async def run_bulk_debate(query: str) -> BulkDecideResponse | DecideResponse | ClarifyResponse:
     try:
         results = await search_module.search(query, max_results=10)
     except Exception:
         results = []
+
+    if not results:
+        results = await _danawa_results_as_search_results(query, price_table_module.MAX_DANAWA_URLS)
 
     proposals: list[BulkProposal] = list(
         await asyncio.gather(
@@ -838,7 +863,17 @@ async def run_bulk_debate(query: str) -> BulkDecideResponse | DecideResponse | C
         )
     )
 
-    decision = await judge.organize_options(query, proposals)
+    try:
+        decision = await judge.organize_options(query, proposals)
+    except RuntimeError:
+        # 대량구매로 분류됐지만(숫자+단위 휴리스틱, is_bulk_query) 제안을
+        # 하나도 못 찾은 경우 - 검색 자체가 안 됐거나(위 다나와 폴백도 실패)
+        # is_bulk_query()가 오판했을 수 있다(사용자 리포트, 2026-08-18: OCR로
+        # 읽은 지저분한 텍스트가 숫자+단위를 포함해 대량구매로 잘못 분류됨).
+        # 그대로 raw 예외를 흘려보내지 말고 단일상품 파이프라인으로 한 번 더
+        # 시도한다 - 검색 결과 자체가 없으면 거기서도 결국 실패하지만, 최소한
+        # NO_CANDIDATE_ERROR 같은 정돈된 한글 메시지로 끝난다.
+        return await run_single_debate(query)
 
     if len(decision.options) <= 1:
         # is_bulk_query()는 "숫자+단위가 있으면 대량구매성"이라는 근사치
