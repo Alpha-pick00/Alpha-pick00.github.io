@@ -258,6 +258,53 @@ def test_apply_challenge_empty_candidates_returns_empty_list():
     assert _apply_challenge([], ChallengeResult(verdicts=[])) == []
 
 
+def test_apply_challenge_uses_refreshed_price_when_verdict_provides_it():
+    """2026-08-19, 사용자 리포트("실제로 사이트 들어갔을 때는 다른 가격을
+    가져오는 문제") - challenge 직전 _ExtractPagesNode가 이미 라이브로 재조회한
+    후보 페이지 원문을 DeepSeek가 읽고 refreshed_price_krw를 채워주면, 그
+    갱신된 가격이 새 네트워크 호출 없이 최종 Proposal.price에 반영돼야 한다."""
+    candidates = [_merged_candidate(COUPANG_URL, ["gpt"])]
+    challenge = ChallengeResult(
+        verdicts=[
+            ChallengeVerdict(
+                url=COUPANG_URL, verified=True, note="상품 일치", refreshed_price_krw=15000
+            )
+        ]
+    )
+
+    proposals = _apply_challenge(candidates, challenge)
+
+    assert proposals[0].price == "15,000원"
+    assert "재조회 시점 가격으로 갱신됨" in proposals[0].challenge_note
+
+
+def test_apply_challenge_keeps_original_price_when_verdict_has_no_refreshed_price():
+    candidates = [_merged_candidate(COUPANG_URL, ["gpt"])]
+    challenge = ChallengeResult(verdicts=[ChallengeVerdict(url=COUPANG_URL, verified=True, note="통과")])
+
+    proposals = _apply_challenge(candidates, challenge)
+
+    assert proposals[0].price == "12,900원"
+    assert proposals[0].challenge_note == "통과"
+
+
+def test_apply_challenge_ignores_refreshed_price_for_danawa_sourced_candidate():
+    """danawa 출신 후보는 원래 가격 자체가 이미 구조화된 실측 스크래핑이라
+    DeepSeek 검증(및 refreshed_price_krw)을 아예 안 거친다 - 만약 verdict에
+    같은 url로 refreshed_price_krw가 실려와도 무시돼야 한다."""
+    candidates = [_merged_candidate(COUPANG_URL, ["danawa"])]
+    challenge = ChallengeResult(
+        verdicts=[
+            ChallengeVerdict(url=COUPANG_URL, verified=False, note="무시돼야 함", refreshed_price_krw=99999)
+        ]
+    )
+
+    proposals = _apply_challenge(candidates, challenge)
+
+    assert proposals[0].price == "12,900원"
+    assert proposals[0].verified is True
+
+
 def test_apply_challenge_drops_expired_danawa_candidate_entirely():
     """가격비교가 중지된(다나와가 서비스 종료로 표시하는) 페이지는 verified=False로
     남기지 않고 결과에서 아예 빠져야 한다 — "가격미확인" 카드로 노출되면 안 된다."""

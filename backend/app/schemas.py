@@ -53,6 +53,12 @@ class ChallengeVerdict(BaseModel):
     url: str | None = None
     verified: bool
     note: str = ""
+    # 2026-08-19("실시간으로 판매처 페이지를... 가져오지 않는 이상") - challenge
+    # 직전 _ExtractPagesNode가 이미 후보 페이지를 라이브로 재조회해두는데, 그동안
+    # 이 재조회 원문이 그라운딩 검증(verified/note)에만 쓰이고 가격 자체는
+    # 갱신되지 않았다 - 이미 지불한 네트워크 비용을 가격 신선도에도 활용한다.
+    # 재조회 원문에서 명확히 확인 안 되면(추측 금지) None으로 둔다.
+    refreshed_price_krw: int | None = None
 
 
 class ChallengeResult(BaseModel):
