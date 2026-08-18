@@ -129,9 +129,10 @@ flowchart LR
 
 | 팀원 | 주요 역할 |
 | --- | --- |
-| parkikk (patrick01053457926@gmail.com) | 백엔드 멀티에이전트 토론 엔진, 검색 품질(Tavily 연동/필터링), 소셜 로그인, 배포(AWS/Docker/nginx), 프론트엔드 UI/UX 전반 |
+| parkminsung45 | 백엔드 멀티에이전트 토론 엔진, 검색 품질(Tavily 연동/필터링), 소셜 로그인, 배포(AWS/Docker/nginx), 프론트엔드 UI/UX 전반 |
 | tmdals3000 | 검색어 자동완성(cold-start) 기능, 멀티턴 대화 기능 |
 | lou0-ux | OCR 텍스트 추출 파이프라인(Google Vision + Groq 정제) |
+| Seojeong Woo | 서버 인스턴스 관리 , 데이터베이스 구축, 리서치 |
 
 ### 시간순 변경 이력
 
