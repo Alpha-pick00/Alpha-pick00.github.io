@@ -10,7 +10,14 @@ import asyncio
 from fastapi.testclient import TestClient
 
 from app import decision_cache
-from app.debate import check_clarify_facets, run_clarify, run_danawa_only_debate_stream, run_debate, run_debate_stream
+from app.debate import (
+    _strip_query_answered_options,
+    check_clarify_facets,
+    run_clarify,
+    run_danawa_only_debate_stream,
+    run_debate,
+    run_debate_stream,
+)
 from app.intent import is_non_product_chitchat, needs_clarification
 from app.main import app
 from app.schemas import ClarifyFacet, Decision, DecideResponse, SearchResult
@@ -1091,6 +1098,68 @@ def test_check_clarify_facets_returns_facets_for_ambiguous_query(monkeypatch):
 
     assert result.mode == "clarify"
     assert result.options.facets == [ClarifyFacet(label="카테고리", options=["탄산음료"])]
+
+
+def test_strip_query_answered_options_removes_value_already_in_query():
+    """사용자 리포트(2026-08-18 "스탠리 텀블러 검색했는데 물어보는 게 반복되고
+    많다") 회귀 테스트 - 검색어에 이미 있는 단어("텀블러")를 facet이 선택지로
+    또 보여주면 이미 답한 걸 다시 묻는 것처럼 느껴진다."""
+    facets = [
+        ClarifyFacet(
+            label="제품분류",
+            options=["텀블러", "보틀", "머그"],
+            options_by_selection={"473ml": ["텀블러", "보틀"], "709ml": ["텀블러"]},
+        )
+    ]
+
+    result = _strip_query_answered_options("스탠리 텀블러", facets)
+
+    assert result == [
+        ClarifyFacet(
+            label="제품분류",
+            options=["보틀", "머그"],
+            options_by_selection={"473ml": ["보틀"]},
+        )
+    ]
+
+
+def test_strip_query_answered_options_drops_facet_left_with_under_two_values():
+    """필터링 후 서로 다른 값이 1개 이하로 남으면 그 기준 자체가 더 이상 좁혀주는
+    게 없으므로 facet 전체를 뺀다."""
+    facets = [ClarifyFacet(label="제품분류", options=["텀블러", "보틀"])]
+
+    result = _strip_query_answered_options("스탠리 텀블러 보틀", facets)
+
+    assert result == []
+
+
+def test_strip_query_answered_options_leaves_untouched_facet_with_only_one_option():
+    """필터링으로 걸러진 게 하나도 없으면, 그 facet이 원래부터 옵션 1개뿐이었어도
+    이 함수가 임의로 지우면 안 된다(그건 추출 쪽 책임)."""
+    facets = [ClarifyFacet(label="시리즈", options=["삼성전자 갤럭시S25 256GB"])]
+
+    result = _strip_query_answered_options("핸드폰 없는브랜드", facets)
+
+    assert result == facets
+
+
+def test_check_clarify_facets_strips_query_redundant_option_end_to_end(monkeypatch):
+    async def _fake_search_danawa(query, limit=3):
+        return [
+            {"pcode": "1", "product_name": "스탠리 퀜처 텀블러 887ml", "total_mall_count": None},
+            {"pcode": "2", "product_name": "스탠리 아이스플로우 보틀 473ml", "total_mall_count": None},
+        ]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+
+    async def _fake_extract_facets(query, names):
+        return [ClarifyFacet(label="제품분류", options=["텀블러", "보틀"])]
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
+
+    result = asyncio.run(check_clarify_facets("스탠리 텀블러"))
+
+    assert result.options.facets == []
 
 
 def test_check_clarify_facets_uses_wider_search_limit_than_the_fast_path(monkeypatch):

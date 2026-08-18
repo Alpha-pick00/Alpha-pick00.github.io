@@ -652,6 +652,49 @@ async def _extract_facets(
     return facets
 
 
+def _normalize_for_query_match(text: str) -> str:
+    return re.sub(r"\s+", "", text).lower()
+
+
+def _strip_query_answered_options(query: str, facets: list[ClarifyFacet]) -> list[ClarifyFacet]:
+    """사용자가 검색어에 이미 쓴 단어를 facet 선택지로 또 보여주는 문제(2026-08
+    사용자 리포트 "스탠리 텀블러 검색했는데 물어보는 게 반복되고 많다") - "텀블러"를
+    검색했는데 "제품분류" facet이 선택지로 "텀블러"를 또 보여주는 식이라 이미 답한
+    걸 다시 묻는 것처럼 느껴진다. FACET_CLARIFY_INSTRUCTIONS에 이미 답한 개념은
+    값으로 넣지 말라고 지시했지만 DeepSeek이 안정적으로 안 지켜(실측: "스탠리
+    텀블러"/"나이키 반팔티" 둘 다 재현) 여기서 한 번 더 거른다. 질의를 공백 제거
+    + 소문자로 정규화해 그 안에 그대로 부분 문자열로 포함되는 옵션만 제거한다 -
+    "반팔티"처럼 질의에 있는 그대로의 표현만 잡고, "반팔 티셔츠"처럼 표현이 달라진
+    동의어까지는 못 잡는다(그건 프롬프트 쪽 개선 영역으로 남겨둔다)."""
+    normalized_query = _normalize_for_query_match(query)
+    result: list[ClarifyFacet] = []
+    for facet in facets:
+        kept = [
+            opt
+            for opt in facet.options
+            if _normalize_for_query_match(opt) not in normalized_query
+        ]
+        if len(kept) == len(facet.options):
+            # 아무것도 안 걸러졌으면 원래 facet을 그대로 둔다 - 옵션이 원래부터
+            # 1개뿐인 경우까지 이 필터가 건드릴 이유는 없다(그건 이 함수의 책임이
+            # 아니라 추출 쪽 문제).
+            result.append(facet)
+            continue
+        if len(dict.fromkeys(kept)) < 2:
+            continue
+        options_by_selection = None
+        if facet.options_by_selection:
+            filtered = {
+                selector: [v for v in values if v in kept]
+                for selector, values in facet.options_by_selection.items()
+            }
+            options_by_selection = {k: v for k, v in filtered.items() if v} or None
+        result.append(
+            ClarifyFacet(label=facet.label, options=kept, options_by_selection=options_by_selection)
+        )
+    return result
+
+
 async def check_clarify_facets(
     query: str, base_query: str | None = None, persona: dict[str, str] | None = None
 ) -> ClarifyResponse:
@@ -693,6 +736,7 @@ async def check_clarify_facets(
 
     static_facets = facet_cache.lookup(query)
     if static_facets is not None:
+        static_facets = _strip_query_answered_options(query, static_facets)
         return ClarifyResponse(query=query, options=ClarifyOptions(facets=static_facets))
 
     search_query = base_query if base_query and base_query.strip() else query
@@ -703,6 +747,7 @@ async def check_clarify_facets(
         items = _filter_items_by_extra_terms(items, query, base_query)
     names = [item["product_name"] for item in items]
     facets = await _extract_facets(query, names, persona)
+    facets = _strip_query_answered_options(query, facets)
     return ClarifyResponse(query=query, options=ClarifyOptions(facets=facets))
 
 
