@@ -11,7 +11,12 @@ import httpx
 import pytest
 
 from fetchers import danawa_search
-from fetchers.danawa_search import DanawaSearchBlocked, _DomainThrottle, parse_search_html
+from fetchers.danawa_search import (
+    DanawaSearchBlocked,
+    _DomainThrottle,
+    parse_category_breakdown,
+    parse_search_html,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -34,6 +39,29 @@ def _item_html(pcode: str, name_inner_html: str, mall_rows: list[tuple[str, int]
 
 def _search_html(items_html: str) -> str:
     return f"<html><body><ul class='product_list'>{items_html}</ul></body></html>"
+
+
+def _category_html(name: str, count: int, subs: list[tuple[str, int]]) -> str:
+    subs_html = "".join(
+        f'<li><a><span class="tit">{sub_name}</span><span class="count">{sub_count:,}</span></a></li>'
+        for sub_name, sub_count in subs
+    )
+    return f"""
+    <div class="main_cate_item">
+      <div class="mcl_wrap">
+        <h4 class="mcl_tit"><a>{name}</a></h4>
+        <span class="count">{count:,}</span>
+      </div>
+      <div class="layer_cate_depth"><ul class="depth_list">{subs_html}</ul></div>
+    </div>
+    """
+
+
+def _category_search_html(items_html: str) -> str:
+    return (
+        "<html><body><div id='SearchOption_CategoryArea' class='main_cate_area'>"
+        f"<div class='main_cate_list'>{items_html}</div></div></body></html>"
+    )
 
 
 # -- 실제 fixture(B-2/B-3a에서 확보한 진짜 검색결과 HTML)로 파싱 검증 -----------------
@@ -100,6 +128,33 @@ def test_extract_total_mall_count_none_without_pricelist():
     html = _search_html('<li class="prod_item"><a class="btn_view_zoom" data-product-code="1"></a><p class="prod_name"><a>상품A</a></p></li>')
     items = parse_search_html(html)
     assert items[0]["total_mall_count"] is None
+
+
+# -- parse_category_breakdown(대분류/중분류 카테고리 집계) -------------------------
+
+
+def test_parse_category_breakdown_extracts_group_and_subcategory_counts():
+    html = _category_search_html(
+        _category_html("태블릿/휴대폰", 202586, [("휴대폰 주변용품", 77372), ("휴대폰", 20469)])
+        + _category_html("생활/주방", 84602, [("수납/생활잡화", 73201)])
+    )
+    groups = parse_category_breakdown(html)
+    assert [g["name"] for g in groups] == ["태블릿/휴대폰", "생활/주방"]
+    assert groups[0]["count"] == 202586
+    assert groups[0]["subcategories"] == [
+        {"name": "휴대폰 주변용품", "count": 77372},
+        {"name": "휴대폰", "count": 20469},
+    ]
+    assert groups[1]["subcategories"] == [{"name": "수납/생활잡화", "count": 73201}]
+
+
+def test_parse_category_breakdown_no_result_text_returns_empty():
+    html = f"<html><body>{danawa_search.NO_RESULT_TEXT}</body></html>"
+    assert parse_category_breakdown(html) == []
+
+
+def test_parse_category_breakdown_missing_area_returns_empty():
+    assert parse_category_breakdown("<html><body>카테고리 영역 없음</body></html>") == []
 
 
 # -- 도메인별 rate limiter (시간 mock) ---------------------------------------------
@@ -218,3 +273,57 @@ def test_search_danawa_no_result_text_returns_empty_without_error(monkeypatch):
 
     items = asyncio.run(danawa_search.search_danawa("테스트 쿼리 결과없음 케이스"))
     assert items == []
+
+
+def test_search_danawa_categories_shares_cache_with_search_danawa(monkeypatch):
+    """search_danawa()와 search_danawa_categories()는 같은 페이지를 한 번만
+    받아와야 한다(_fetch_entry 공유) - 둘 다 부르는 실제 호출자
+    (app.debate.check_clarify_facets)가 10초 Crawl-delay를 두 번 태우지
+    않기 위한 계약."""
+    items_html = _item_html("1", "상품1")
+    category_html = _category_html("카테고리A", 100, [("서브A", 10), ("서브B", 5)])
+    fixture_html = (
+        "<html><body>"
+        f"<div id='SearchOption_CategoryArea' class='main_cate_area'>"
+        f"<div class='main_cate_list'>{category_html}</div></div>"
+        f"<ul class='product_list'>{items_html}</ul>"
+        "</body></html>"
+    )
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(200, text=fixture_html)
+
+    _patch_client(monkeypatch, handler)
+
+    items = asyncio.run(danawa_search.search_danawa("카테고리 공유 테스트 쿼리", limit=3))
+    categories = asyncio.run(danawa_search.search_danawa_categories("카테고리 공유 테스트 쿼리"))
+
+    assert len(items) == 1
+    assert categories == [
+        {
+            "name": "카테고리A",
+            "count": 100,
+            "subcategories": [{"name": "서브A", "count": 10}, {"name": "서브B", "count": 5}],
+        }
+    ]
+    assert call_count == 1
+
+
+def test_search_danawa_categories_never_fetches_on_its_own(monkeypatch):
+    """search_danawa_categories()는 캐시 전용이다 - 같은 query로
+    search_danawa()를 먼저 부른 적이 없으면(캐시 미스) 스스로 네트워크
+    요청을 내지 않고 조용히 빈 리스트만 반환해야 한다. 그렇지 않으면
+    (fetchers.danawa_search.search_danawa만 monkeypatch하는 기존 테스트들처럼)
+    이 함수를 호출하는 쪽이 캐시를 우회한 가짜 search_danawa 뒤에서 실제
+    네트워크 요청을 새로 내버리는 회귀가 생긴다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("search_danawa_categories가 직접 네트워크 요청을 내면 안 된다")
+
+    _patch_client(monkeypatch, handler)
+
+    categories = asyncio.run(danawa_search.search_danawa_categories("캐시에 없는 쿼리"))
+    assert categories == []
