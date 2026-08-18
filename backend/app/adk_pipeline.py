@@ -435,7 +435,17 @@ def _apply_challenge(
     에이전트와 병합됐든 단독이든)는 DeepSeek 검증 결과를 안 보고 verified=True로
     강제한다 - 이미 실측 확인된 가격/구매링크를 텍스트 기반 challenge LLM에게
     다시 판단하게 하는 건 불필요하고, verdict가 안 붙으면 verified=None(미검증)
-    으로 표시돼 실측 데이터가 오히려 검증 안 된 것처럼 보이는 문제도 막는다."""
+    으로 표시돼 실측 데이터가 오히려 검증 안 된 것처럼 보이는 문제도 막는다.
+
+    가격 신선도(2026-08-19, 사용자 리포트 "실제로 사이트 들어갔을 때는 다른
+    가격을 가져오는 문제") - danawa 출신이 아닌 후보(주로 propose 단계 LLM이
+    검색 캐시 스니펫을 읽고 추측한 price_krw, 최대 6시간 묵을 수 있음)는
+    verdict.refreshed_price_krw가 있으면 그걸로 price를 덮어쓴다. 이 값은 새
+    네트워크 호출이 아니라 challenge 직전 _ExtractPagesNode가 이미 라이브로
+    재조회해 둔 candidate_pages 원문에서 나온다 - 그동안 그라운딩 검증에만
+    쓰이고 버려지던 데이터를 가격 갱신에도 재사용하는 것. danawa 출신 후보는
+    원래 가격 자체가 이미 구조화된 실측 스크래핑이라(대신 최대 1시간 캐시)
+    텍스트 기반 재추출이 오히려 덜 정확할 수 있어 건드리지 않는다."""
     verdicts_by_url = {v.url: v for v in challenge.verdicts if v.url}
 
     proposals = []
@@ -446,6 +456,7 @@ def _apply_challenge(
             continue
 
         proposed_by = candidate.get("proposed_by") or []
+        price_krw = candidate.get("price_krw")
         if "danawa" in proposed_by:
             verified: bool | None = True
             challenge_note = "다나와 실측 가격표에서 확인된 A등급(구매 링크 검증됨) 후보"
@@ -455,6 +466,13 @@ def _apply_challenge(
                 verdict = challenge.verdicts[i]
             verified = verdict.verified if verdict else None
             challenge_note = verdict.note if verdict else None
+            if verdict is not None and verdict.refreshed_price_krw is not None:
+                price_krw = verdict.refreshed_price_krw
+                challenge_note = (
+                    f"{challenge_note} (재조회 시점 가격으로 갱신됨)"
+                    if challenge_note
+                    else "재조회 시점 가격으로 갱신됨"
+                )
 
         # 같은 상품이 여러 모델에서 조금씩 다른 문구로 제안되면 reasons가 여러 개
         # 쌓인다 — 전부 이어붙이면 근거가 아니라 벽글이 되므로 최대 2개만 보여준다.
@@ -463,7 +481,7 @@ def _apply_challenge(
             Proposal(
                 agent=proposed_by[0] if proposed_by else "gpt",
                 product_name=candidate.get("product_name"),
-                price=_format_price_krw(candidate.get("price_krw")),
+                price=_format_price_krw(price_krw),
                 retailer=candidate.get("retailer"),
                 url=candidate.get("url"),
                 reasoning=" / ".join(reasons) if reasons else None,
