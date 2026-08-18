@@ -1,5 +1,6 @@
 import json
 import re
+from urllib.parse import urlsplit
 
 from ..schemas import SearchResult
 
@@ -14,6 +15,30 @@ def is_generic_listing_url(url: str) -> bool:
     """검색/카테고리 목록 페이지처럼 특정 상품 하나를 가리키지 않는 URL인지 판별.
     프롬프트로 LLM에게 피하라고만 하면 종종 무시되므로, 응답을 받은 뒤 코드에서 한 번 더 걸러낸다."""
     return bool(_GENERIC_LISTING_URL_PATTERN.search(url))
+
+
+def is_danawa_comparison_page(url: str) -> bool:
+    """다나와 가격비교 페이지 자체를 가리키는 URL인지 판별한다(2026-08-16,
+    그라운딩 회귀 파일럿에서 발견: "위닉스 뽀송 제습기 16L"/"스캇 자전거
+    헬멧" 검색에서 Qwen·DeepSeek이 독립적으로 이 페이지 자체를 후보로
+    제안하면서 retailer를 "다나와"(판매처가 아니라 가격비교 사이트 자신),
+    price를 빈 문자열로 채웠다 - 이 페이지는 여러 판매처를 나열만 할 뿐
+    특정 판매처로 바로 연결되지 않아 애초에 가격/판매처 정보가 있을 수
+    없는 후보다. challenge가 상품 정체성 일치만 확인하고 "실제 구매 가능한
+    판매처인가"는 안 봐서 verified=True로 통과되는 사례를 확인했다 -
+    propose 단계에서 후보 자체를 아예 안 받아들이도록 막는다.
+
+    (2026-08-17 확장) 처음엔 prod.danawa.com/info 경로만 정규식으로 걸렀는데,
+    재검증 파일럿에서 같은 문제의 다른 변형(m.danawa.com/product/product.html,
+    모바일 페이지)이 그대로 통과되는 걸 확인했다 - 이 앱 전체의 기존 원칙
+    (app.price_table._is_price_comparison_domain/_is_danawa_bridge_passthrough)
+    과 동일하게, "다나와 도메인이면서 /bridge/(실제 구매 리다이렉트) 경로가
+    아닌 모든 페이지"로 일반화했다 - 특정 URL 모양을 하나씩 allowlist하는
+    대신 이 앱의 도메인 판단 기준 자체를 재사용한다."""
+    host = urlsplit(url).netloc.lower()
+    if not (host == "danawa.com" or host.endswith(".danawa.com")):
+        return False
+    return "/bridge/" not in urlsplit(url).path
 
 
 NO_CANDIDATE_ERROR = "적절한 상품 후보를 찾지 못했습니다."
@@ -32,7 +57,7 @@ def filter_candidates(items: list, max_items: int = 3) -> list[dict]:
         if not isinstance(item, dict):
             continue
         url = (item.get("url") or "").strip()
-        if not url or is_generic_listing_url(url):
+        if not url or is_generic_listing_url(url) or is_danawa_comparison_page(url):
             continue
         if not (item.get("product_name") or "").strip():
             continue
@@ -341,12 +366,12 @@ CHALLENGE_INSTRUCTIONS = (
     "일부 후보에는 '실제 페이지 재조회 원문'이 함께 제공됩니다 — 이는 검색 당시 "
     "잘린 스니펫보다 더 최신이고 완전한 정보이므로, 스니펫과 내용이 다르면 "
     "재조회 원문을 우선 신뢰해 판단하세요. "
-    "일부 경우에는 '쿠팡 교차 확인 검색 결과'가 추가로 제공됩니다 — 검색 결과와는 "
-    "별도로 쿠팡에서 같은 상품을 검색한 참고 자료입니다. 후보와 일치하는 상품이 "
-    "쿠팡에서도 보이면 그라운딩 신뢰도가 더 높다는 뜻으로 참고하세요. 쿠팡에 "
-    "없다고 해서 곧바로 false로 판단하지 마세요(품절·검색 누락일 수 있음) — "
-    "원 검색 결과나 재조회 원문과 명백히 모순될 때만 이 신호를 근거로 우려를 "
-    "표시하세요. "
+    "일부 경우에는 '쿠팡 교차 확인 검색 결과'나 '네이버쇼핑 교차 확인 검색 결과'가 "
+    "추가로 제공됩니다 — 검색 결과와는 별도로 다른 쇼핑몰에서 같은 상품을 검색한 "
+    "참고 자료입니다. 후보와 일치하는 상품이 그쪽에서도 보이면 그라운딩 신뢰도가 "
+    "더 높다는 뜻으로 참고하세요. 둘 중 하나 또는 둘 다에 없다고 해서 곧바로 "
+    "false로 판단하지 마세요(품절·검색 누락일 수 있음) — 원 검색 결과나 재조회 "
+    "원문과 명백히 모순될 때만 이 신호를 근거로 우려를 표시하세요. "
     "반드시 입력된 후보와 같은 개수, 같은 순서로 아래 JSON 배열 형식으로만 답하세요. "
     "다른 텍스트나 코드펜스를 덧붙이지 마세요.\n\n"
     '[{"url": "...", "verified": true, "note": "..."}, ...]\n\n'
@@ -378,6 +403,7 @@ def build_challenge_prompt(
     search_results: list[SearchResult],
     candidate_pages: dict[str, str] | None = None,
     coupang_results: list[SearchResult] | None = None,
+    naver_results: list[SearchResult] | None = None,
 ) -> str:
     candidates_block = _format_candidates_block(candidates, candidate_pages)
     results_block = format_results_block(search_results)
@@ -387,6 +413,8 @@ def build_challenge_prompt(
     )
     if coupang_results:
         prompt += f"\n\n쿠팡 교차 확인 검색 결과(참고용):\n{format_results_block(coupang_results)}"
+    if naver_results:
+        prompt += f"\n\n네이버쇼핑 교차 확인 검색 결과(참고용):\n{format_results_block(naver_results)}"
     return prompt
 
 

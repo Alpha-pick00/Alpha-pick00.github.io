@@ -706,11 +706,37 @@ async def check_clarify_facets(
     return ClarifyResponse(query=query, options=ClarifyOptions(facets=facets))
 
 
+def _facet_options_for_query(query: str, facet: ClarifyFacet) -> list[str]:
+    """options_by_selection(_attach_facet_crossfilter가 이미 계산해둔, 다른
+    facet 값을 고르면 이 facet이 어떻게 좁혀지는지)의 셀렉터 키가 질의
+    텍스트에 이미 그대로 들어있으면 - 그 축은 사용자가 이미 답한 것이므로 -
+    그 선택에 대응하는 좁혀진 옵션만 남긴다(2026-08-16, 그라운딩 회귀 파일럿
+    50개 중 발견: "햇반 백미 210g 24개"처럼 용량·수량을 이미 구체적으로
+    적었는데도 브랜드 facet의 원본 옵션(CJ제일제당/시아스/하림)이 안 좁혀진
+    채 그대로 남아 불필요하게 되물었다 - crossfilter 데이터 자체는
+    "210g 24개" 선택 시 CJ제일제당 하나로 좁혀진다는 걸 이미 알고 있었는데
+    _facet_resolved/_is_ambiguous_facets가 그 데이터를 안 쓰고 있었다).
+    매치되는 셀렉터가 여럿이면(서로 다른 축이 각각 질의에 있으면) 교집합을
+    쓴다. 매치가 하나도 없거나 교집합이 비면(모순되는 신호) 원본 그대로
+    돌려준다 - 잘못 좁혀서 정말 필요한 되묻기를 건너뛰는 것보다, 안전하게
+    그대로 두는 쪽이 낫다."""
+    by_selection = facet.options_by_selection or {}
+    matched = [set(options) for selector, options in by_selection.items() if selector.casefold() in query.casefold()]
+    if not matched:
+        return facet.options
+    narrowed = set.intersection(*matched)
+    return [o for o in facet.options if o in narrowed] or facet.options
+
+
 def _facet_resolved(query: str, facet: ClarifyFacet) -> bool:
     """이 facet의 옵션 중 하나라도 이미 질의 텍스트에 그대로 들어있으면
     (=사용자가 이미 답한 값이면) True - _strip_resolved_options가 브랜드/제품에
-    쓰던 텍스트 매칭 판정을 라벨이 고정되지 않은 facet에 대해 일반화한 것."""
-    return any(o.casefold() in query.casefold() for o in facet.options)
+    쓰던 텍스트 매칭 판정을 라벨이 고정되지 않은 facet에 대해 일반화한 것.
+    (2026-08-16 확장) 또는 다른 축의 선택으로 crossfilter가 이 facet을 옵션
+    1개 이하로 좁혔으면(=사실상 답이 하나로 정해졌으면)도 True."""
+    if any(o.casefold() in query.casefold() for o in facet.options):
+        return True
+    return len(_facet_options_for_query(query, facet)) <= 1
 
 
 def _resolved_facet_count(query: str, facets: list[ClarifyFacet]) -> int:

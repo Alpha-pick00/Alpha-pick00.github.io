@@ -1,0 +1,382 @@
+[
+  {
+    "category": "가전/디지털",
+    "query": "삼성전자 비스포크 냉장고 4도어",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "가전/디지털",
+    "query": "LG 트롬 세탁기 24kg",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "가전/디지털",
+    "query": "다이슨 에어랩 컴플리트",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "가전/디지털",
+    "query": "필립스 에어프라이어 XXL",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "가전/디지털",
+    "query": "위닉스 뽀송 제습기 16L",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "컴퓨터/주변기기",
+    "query": "로지텍 MX Master 3S 무선마우스",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "컴퓨터/주변기기",
+    "query": "삼성전자 오디세이 G9 모니터",
+    "product_name": "삼성전자 오디세이 Neo G9 G95NC LS57CG950",
+    "retailer": "G마켓",
+    "price": "2,391,260원",
+    "url": "https://prod.danawa.com/bridge/loadingBridge.html?cate1=860&cate2=13735&cate3=14883&cate4=58976&pcode=27805787&cmpnyc=EE128&safe_trade=4&fee_type=T&link_pcode=4778497343&package=0&setpc=0&r=17868919857333&deliveryCheckType=addDeliveryTopProd",
+    "verified": true,
+    "price_source": "danawa_offer",
+    "failures": []
+  },
+  {
+    "category": "컴퓨터/주변기기",
+    "query": "애플 매직키보드",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "컴퓨터/주변기기",
+    "query": "레이저 데스에더 V3 게이밍마우스",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "컴퓨터/주변기기",
+    "query": "LG 그램 16인치 2024",
+    "product_name": "LG전자 2024 그램16 16ZD90SU-GX56K WIN11 16GB램 (SSD 1TB)",
+    "retailer": "다나와",
+    "price": "",
+    "url": "https://m.danawa.com/product/product.html?code=45320081",
+    "verified": true,
+    "price_source": "llm_guess",
+    "failures": [
+      "URL이 비어있거나 가격비교 사이트 자체를 가리킴: 'https://m.danawa.com/product/product.html?code=45320081'"
+    ]
+  },
+  {
+    "category": "모바일/웨어러블",
+    "query": "아이폰 16 프로 256GB",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "모바일/웨어러블",
+    "query": "갤럭시 워치7 44mm",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "모바일/웨어러블",
+    "query": "애플워치 시리즈10",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "모바일/웨어러블",
+    "query": "갤럭시 버즈3 프로",
+    "product_name": "삼성전자 갤럭시 버즈3 프로 SM-R630N (정품)",
+    "retailer": "11번가",
+    "price": "238,520원",
+    "url": "https://m.11st.co.kr/products/ma/9185234936",
+    "verified": true,
+    "price_source": "danawa_offer",
+    "failures": []
+  },
+  {
+    "category": "모바일/웨어러블",
+    "query": "샤오미 미밴드9",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "뷰티/화장품",
+    "query": "설화수 자음생크림",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "뷰티/화장품",
+    "query": "랑콤 제니피끄 세럼",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "뷰티/화장품",
+    "query": "아이오페 레티놀 엑스퍼트",
+    "product_name": "아이오페 레티놀 엑스퍼트 0.3% 링클 코렉터 20ml (기획세트)",
+    "retailer": "SSG",
+    "price": "81,375원",
+    "url": "https://prod.danawa.com/bridge/loadingBridge.html?cate1=9875&cate2=228061&cate3=228199&cate4=0&pcode=105096827&cmpnyc=TN118&safe_trade=4&fee_type=T&link_pcode=1000566141095&package=0&setpc=0&r=17868923027706",
+    "verified": true,
+    "price_source": "danawa_offer",
+    "failures": []
+  },
+  {
+    "category": "뷰티/화장품",
+    "query": "헤라 블랙쿠션",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "뷰티/화장품",
+    "query": "조성아뷰티 파운데이션",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "식품/음료",
+    "query": "햇반 백미 210g 24개",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "식품/음료",
+    "query": "농심 신라면 멀티팩 40개",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "식품/음료",
+    "query": "남양 프렌치카페 카누",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "식품/음료",
+    "query": "동서 맥심 모카골드 커피믹스",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "식품/음료",
+    "query": "오뚜기 진라면 순한맛",
+    "product_name": "오뚜기 진라면 순한맛 120g (1개)",
+    "retailer": "11번가",
+    "price": "590원",
+    "url": "https://m.11st.co.kr/products/ma/8912453766",
+    "verified": true,
+    "price_source": "danawa_offer",
+    "failures": []
+  },
+  {
+    "category": "생활용품/주방",
+    "query": "락앤락 밀폐용기 세트",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "생활용품/주방",
+    "query": "테팔 인덕션 프라이팬",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "생활용품/주방",
+    "query": "쿠쿠 전기밥솥 10인용",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "생활용품/주방",
+    "query": "다우니 섬유유연제 대용량",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "생활용품/주방",
+    "query": "3M 극세사 걸레",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "패션/의류",
+    "query": "노스페이스 눕시 패딩",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "패션/의류",
+    "query": "나이키 에어포스1",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "패션/의류",
+    "query": "아디다스 삼바 운동화",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "패션/의류",
+    "query": "유니클로 히트텍 이너웨어",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "패션/의류",
+    "query": "뉴발란스 993",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "유아동/출산",
+    "query": "하기스 매직컴포트 기저귀",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "유아동/출산",
+    "query": "궁중비책 로얄 기저귀",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "유아동/출산",
+    "query": "페리페라 유아용 물티슈",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "유아동/출산",
+    "query": "아프리카 버클 카시트",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "유아동/출산",
+    "query": "닥터브라운 젖병",
+    "product_name": "닥터브라운 내로우넥 옵션스 플러스 PP 젖병 250ml (3개)",
+    "retailer": "롯데ON",
+    "price": "31,510원",
+    "url": "https://prod.danawa.com/bridge/loadingBridge.html?cate1=222154&cate2=222187&cate3=222241&cate4=222568&pcode=21475985&cmpnyc=EE309&safe_trade=4&fee_type=T&link_pcode=LO2531464671&package=0&setpc=0&r=17868928368152",
+    "verified": true,
+    "price_source": "danawa_offer",
+    "failures": []
+  },
+  {
+    "category": "스포츠/레저",
+    "query": "데카트론 요가매트",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "스포츠/레저",
+    "query": "윌슨 테니스라켓",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "스포츠/레저",
+    "query": "코베아 캠핑 버너",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "스포츠/레저",
+    "query": "스캇 자전거 헬멧",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "스포츠/레저",
+    "query": "언더아머 러닝화",
+    "product_name": "언더아머 UA 로그 4 러닝화 3026998-101",
+    "retailer": "옥션",
+    "price": "51,210원",
+    "url": "https://prod.danawa.com/bridge/loadingBridge.html?cate1=1825&cate2=221626&cate3=223432&cate4=0&pcode=68787230&cmpnyc=EE715&safe_trade=4&fee_type=T&link_pcode=F301367666&package=0&setpc=0&r=17868929908027",
+    "verified": true,
+    "price_source": "danawa_offer",
+    "failures": []
+  },
+  {
+    "category": "반려동물용품",
+    "query": "로얄캐닌 강아지사료",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "반려동물용품",
+    "query": "하림펫푸드 고양이간식",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "반려동물용품",
+    "query": "국민사료 츄르",
+    "failures": [
+      "단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"
+    ]
+  },
+  {
+    "category": "반려동물용품",
+    "query": "페티벨 강아지 배변패드",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  },
+  {
+    "category": "반려동물용품",
+    "query": "캐치웰 고양이모래",
+    "failures": [
+      "예외 발생: RuntimeError: 적절한 상품 후보를 찾지 못했습니다."
+    ]
+  }
+]

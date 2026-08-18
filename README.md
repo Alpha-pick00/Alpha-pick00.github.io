@@ -14,9 +14,10 @@ https://alpha-pick00.github.io/
 
 > 2026-08 통합 병합 이후 구조. 프론트는 GPT가 실시간으로 응답을 생성하는 대화형 멀티턴
 > UI(`ChatTurn`)로, 백엔드는 ADK 기반 멀티에이전트 오케스트레이션과 다나와 실측 가격
-> 연동을 함께 갖췄다. Human-in-the-loop도 두 갈래(카테고리 기반 고정 축 + AI 상세검색
-> facet)를 상황에 따라 병행한다. 자세한 배경은 [주요 의사결정 사항](#주요-의사결정-사항)
-> 참고.
+> 연동을 함께 갖췄다. Human-in-the-loop 백엔드 추출 로직은 facet 기반 파이프라인
+> 하나로 통합돼 있다(`/decide/clarify`·ADK 내부 안전망 공유). 그라운딩은 다나와
+> 실측가 + 쿠팡 교차 확인 신호로 이중화돼 있다. 자세한 배경은
+> [주요 의사결정 사항](#주요-의사결정-사항) 참고.
 
 ```mermaid
 flowchart LR
@@ -30,7 +31,7 @@ flowchart LR
         DECIDE["POST /decide/stream<br/>(AI 오케스트레이션)"]
         CLARIFYF["POST /decide/clarify<br/>(AI 상세검색 · facet)"]
         DANAWAONLY["POST /decide/danawa-only[/stream]<br/>(LLM 미사용 실험 경로)"]
-        CHAT["POST /clarify/ask · /clarify/match<br/>(대화형 봇 질문/답장)"]
+        CHAT["POST /clarify/ask<br/>(대화형 봇 질문 생성)"]
         OCR["POST /ocr/extract"]
         AUTH["/auth/*"]
         HIST["/history"]
@@ -45,6 +46,8 @@ flowchart LR
             GPT["Qwen"]
             GEMINI["Groq"]
             DEEPSEEK["DeepSeek"]
+            DANAWAP["다나와 실측가<br/>(A등급 최저가)"]
+            COUPANGP["쿠팡 교차확인<br/>(후보 아님 · 참고 신호만)"]
         end
         MERGE["병합 · 중복 제거<br/>(최저가 매물 기준 통합)"]
         CHALLENGE["교차 검증<br/>(DeepSeek)"]
@@ -81,7 +84,8 @@ flowchart LR
     CAT -- "축 관련성 판정<br/>(용량/개수는 카테고리별로 다름)" --> SEARCH
     SEARCH -- "브랜드/제품/용량/개수 모호<br/>(skip_clarify 없으면)" --> DECIDE
     SEARCH --> PROPOSE
-    GPT & GEMINI & DEEPSEEK --> MERGE --> CHALLENGE --> JUDGE
+    GPT & GEMINI & DEEPSEEK & DANAWAP --> MERGE --> CHALLENGE --> JUDGE
+    COUPANGP -.->|참고 신호| CHALLENGE
     JUDGE -- 최종 추천 --> DECIDE
 
     CLARIFYF --> DSEARCH --> DANAWA
@@ -105,7 +109,7 @@ flowchart LR
 | AI / 제안 · 검증 · 심사 | Qwen(DashScope) · Groq(Llama) · DeepSeek — 병렬 제안(모델별 최선 1개) / DeepSeek — 교차 검증(challenge) / Groq(GPT-OSS) — 최종 심사(judge) |
 | 검색 | Tavily Search API (다나와로 도메인 한정) + 임베딩 기반 의미 유사도 검색 캐시 |
 | 다나와 실측 가격 연동 | 다나와 직접 검색/상세페이지 페치(`httpx` + `BeautifulSoup4`/`lxml`), 내부 AJAX 엔드포인트를 통한 최저가 판매처 브릿지 URL 해석 |
-| Human-in-the-loop | ① 카테고리 기반 고정 축(브랜드·제품·용량·개수, Groq 16종 분류 연동) ② AI 상세검색 facet(DeepSeek, 상호 교차 필터링) — 상황에 따라 병행, 대화형 질문/답장은 Qwen이 실시간 생성 |
+| Human-in-the-loop | DeepSeek가 상품명 목록에서 facet(라벨 자유, 상호 교차 필터링)을 추출 — `/decide/clarify`(다나와 직접 검색)와 ADK 파이프라인 내부 안전망(Tavily 결과) 두 진입점이 하나의 공유 추출 파이프라인을 씀. 되묻는 질문 문장은 Qwen이 실시간 생성(`/clarify/ask`) |
 | 이미지 인식 | Google Cloud Vision (텍스트 추출) → Groq (정제 · 검색어 추출) |
 | 인증 | Google / Kakao / Naver OAuth2 + JWT 기반 세션 |
 | 저장소 | SQLite (검색 기록 · 자동완성 인덱스 · 검색 캐시) |
@@ -128,6 +132,24 @@ flowchart LR
 | parkikk (patrick01053457926@gmail.com) | 백엔드 멀티에이전트 토론 엔진, 검색 품질(Tavily 연동/필터링), 소셜 로그인, 배포(AWS/Docker/nginx), 프론트엔드 UI/UX 전반 |
 | tmdals3000 | 검색어 자동완성(cold-start) 기능, 멀티턴 대화 기능 |
 | lou0-ux | OCR 텍스트 추출 파이프라인(Google Vision + Groq 정제) |
+
+### 시간순 변경 이력
+
+날짜는 실제 커밋 기준(`git log`). 아래는 그날의 핵심만 압축한 타임라인이고,
+"왜 그렇게 했는지"의 근거는 바로 아래 [주요 의사결정 사항](#주요-의사결정-사항)과
+[문제 해결 내역](#문제-해결-내역-troubleshooting)에 항목별로 자세히 남아있다.
+
+| 날짜 | 도입 / 변경 / 개선 |
+| --- | --- |
+| 2026-08-04 ~ 06 | Figma Make로 뽑은 포트폴리오 템플릿(Cherry-Pick)을 실 프로젝트 구조로 전환(→ Étiquette 리브랜드). FastAPI 백엔드 스캐폴딩 + GPT·Gemini·DeepSeek 멀티에이전트 구매 의사결정 엔진 최초 구현 |
+| 2026-08-07 | Google·Kakao·Naver 소셜 로그인, 계정별 검색 기록 사이드바, OCR(Google Vision + Gemini 정제) 이미지 검색 파이프라인 추가. 검색 소스를 네이버쇼핑 → Google Merchant Center로 교체. AWS GPU 인스턴스 + nip.io 기반 배포 최초 구축 |
+| 2026-08-08 ~ 09 | "How We Curate"(멀티에이전트 토론 흐름 설명) 섹션, README 프로젝트 리포트 섹션 신설 |
+| 2026-08-10 | 다나와 실측 가격 어댑터 최초 구현(판매처별 가격표 파싱, STEP 1~5 라이브 검증) · 쿼리 정규화 검색 캐시 도입 · `fusion.dedup` 후보 병합 가드(가격 호환성 + 이름 유사도) 추가 · Étiquette → αlpha Pick 리브랜드 |
+| 2026-08-11 | 다나와 A등급(구매 링크 생성 가능) 후보를 judge 풀에 직접 승격(PART 4-2) · 동일 상품 판정 기준을 판매처+가격 → 상품명으로 전환(STEP 6) · **Google ADK 기반 역할 분리 멀티에이전트 파이프라인 + 의미 기반 검색 캐시 도입(현재 아키텍처의 골격)** · Human-in-the-loop 최초 도입 |
+| 2026-08-12 | 카테고리 기반 HITL 축 최적화(Gemini 16종 분류로 용량/개수 관련성 판정) · 다나와 최저가 URL 해석(브릿지 엔드포인트) + 대화형 HITL(LLM이 되묻는 문장 생성) 추가 |
+| 2026-08-13 | "gpt" 에이전트 슬롯을 OpenAI → Qwen(DashScope)으로 전환 · 완전 무관 후보뿐일 때의 relaxed fallback 최초 추가 · ChatGPT식 멀티턴 대화 스레드(`ChatTurn`)로 프론트 전환 · `skip_clarify`로 재질문 반복 버그 수정 · 죽은 코드/미사용 npm 의존성 1차 정리 |
+| 2026-08-14 | Gemini·Claude → Groq 무료 API 전면 전환 · `/decide/clarify`와 ADK 내부 안전망의 facet 추출 로직 통합 · "용기형태" facet 구매유형 오분류 수정 · 쿠팡 교차 확인(challenge 3번째 그라운딩 신호) 추가 · 깨진 쿠팡 구매링크 노출 버그 3건(연쇄 원인) 수정 · 액세서리(핸드폰 케이스 등) 검색 품질 개선 · 대규모 죽은 코드 정리 · README 대폭 갱신 |
+| 2026-08-16 | relaxed fallback을 challenge 재검증으로 게이팅해 하드닝(그라운딩 우회 경로 차단) · `Decision.verified` 필드 추가로 최종 응답의 그라운딩 검증 여부를 API 전체에 노출 · 네이버쇼핑을 쿠팡과 동일 패턴의 2번째 소프트 교차 확인 소스로 추가 · 알려진 상품 세트 기반 그라운딩 정확도 회귀 스크립트(`scripts/grounding_regression.py`) 추가 |
 
 ### 주요 의사결정 사항
 
@@ -153,6 +175,7 @@ flowchart LR
 - **facet 크로스필터를 하이퍼그래프 incidence 구조로 재구성**: `_attach_facet_crossfilter`는 사실상 이미 하이퍼그래프였다 - 상품 하나(하이퍼엣지)가 브랜드·시리즈·용량 같은 여러 facet 값(정점)을 동시에 묶는데, 이걸 facet 쌍마다 선택지 값마다 상품명 전체를 매번 재스캔하는 브루트포스로 계산했다. `_build_facet_value_incidence`(facet 값 -> 등장하는 상품 인덱스 집합)를 한 번만 만들어, "같은 상품에 같이 등장하는가" 판정을 집합 교집합 유무로 바꿨다 - 원래 판정과 수학적으로 동치라 `options_by_selection` 결과는 그대로다(기존 테스트로 검증). 이 incidence를 재사용해 `_facet_centrality`(평균 degree)로 `_FACET_ORDER_HINTS`가 못 잡는 facet들의 정렬을 LLM이 낸 임의 순서 대신 "다른 값들과 얼마나 폭넓게 공존하는가" 기준으로 다시 가른다 - 단, 힌트가 이미 잡은 facet(카테고리/브랜드/용량 등)은 중심성을 아예 안 본다(표본이 작은 질의에서 통계적 신호가 약해질 위험을 원천 차단, `_facet_sort_key`). numpy 등 새 의존성 없이 순수 `set` 연산으로 구현 - 표본 규모(다나와 직접검색 상한 ~20~30개, Tavily 상한 12개)에서 충분히 빠르다.
 - **사용하지 않는 코드 일괄 정리**: 병합 과정에서 "나중에 필요할 수도" 있어 보존만 해두고 실제로는 어디서도 안 불리는 코드가 누적돼 있어 전수 조사 후 제거했다. (1) 레거시 직접-구현 경로 `run_single_debate_price_table_variant`(그 전용 헬퍼 `_top_proposal`, `agents/gpt.py`·`gemini.py`·`deepseek.py`의 `propose()`, `agents/judge.py`의 `decide()`/`LEGACY_JUDGE_INSTRUCTIONS`, `price_table.build_danawa_candidates`)는 다나와 실측가 주입이 `adk_pipeline`으로 포팅된 뒤(위 항목) 자기 테스트 말고는 어디서도 안 불렸다 - 여전히 살아있는 `pick_primary`/`enrich_decision`/`exclude_price_comparison_site_as_final_pick` 등은 그대로 둔다. (2) 고정 4축 전용 `_strip_category_irrelevant_options`(위 facet 통합 항목에서 "보존만" 해둔 그 함수) - facet 추출 프롬프트가 이미 그 역할을 대신한다고 판단해 최종 제거. (3) `intent.has_count_spec`/`has_volume_spec` - 호출자가 아예 없었다(정규식 자체는 `BULK_SPEC_PATTERN`에 합쳐져 여전히 쓰인다). (4) `fetchers/danawa.with_total_mall_count` - "N몰" 총 판매처 수를 상세페이지 결과에 병합하는 함수인데, 추출(`danawa_search._extract_total_mall_count`)만 있고 실제 파이프라인 어디에도 병합 호출이 없어 `PriceTable.total_mall_count`가 라이브에서 항상 None이었다 - `build_price_table`의 `is_partial`/`price_label` 분기 자체(입력만 주어지면 정상 동작)는 남겨뒀다. (5) `price_table.py`의 도달 불가능한 중복 `return decision` 한 줄. (6) 프론트: `/demo/gradient-chat-input` 라우트와 그 전용 shadcn/ui 스캐폴드(`components/ui/*` 전체, `GradientChatInputDemo.tsx`) - 지금 `Hero.tsx`에 내장된 검색창 이전의 프로토타입으로 보이며 어떤 내비게이션에서도 연결되지 않았다(그 전용 npm 의존성 `@radix-ui/react-slot`/`class-variance-authority`/`clsx`/`tailwind-merge`도 함께 제거). (7) `api.ts`의 `decideDanawaOnlyStream`(SSE 클라이언트, 대응 컴포넌트가 없어 미사용)과 `matchClarifyOption`/`ClarifyMatchResponse` - 채팅으로 clarify에 답하는 기능은 2026-08-15에 버튼 전용으로 이미 대체됐는데(`FixedAxisClarifyCard` 주석 참고) 그 서버 엔드포인트(`/clarify/match`, `agents/gpt.match_clarify_reply`, `CLARIFY_MATCH_INSTRUCTIONS`)는 안 지워져 있었다 - 함께 제거. (8) `SearchResults`의 `onReset` prop - 유일한 렌더 지점(`Hero.tsx`)이 넘긴 적이 없어 내부 `ResetLink` 분기가 전부 죽어 있었다(에러 카드 자체 `onReset`은 살아있는 별개 prop이라 그대로 둠). (9) `About`/`Services`/`HowWeCurate`의 미사용 `useInView`/`isInView` - 실제 리빌 애니메이션은 Framer Motion의 `whileInView`가 담당해 이 값은 아무 데도 안 읽혔다. `/decide/danawa-only`·`/decide/danawa-only/stream` 엔드포인트는 프론트에서 아직 안 쓴다고 스스로 문서화돼 있어(향후 사용 의도가 명시적) 이번엔 손대지 않았다.
 - **쿠팡 검색을 challenge 단계의 3번째 그라운딩 소스로 추가**: 그라운딩(존재하지 않는 상품/가격을 지어내지 않기 위한 검증)이 지금까지 다나와 하나에만 의존했다 - propose도 다나와 한정 Tavily 검색에 근거하고, challenge(DeepSeek)도 같은 검색 결과 + 다나와 재조회 원문만 대조했다. `search.search_coupang()`(Tavily를 `coupang.com`으로만 스코프해 별도 호출, `_tavily_search`에 `domains` 파라미터를 추가해 구현)로 독립된 두 번째 쇼핑몰 신호를 얹었다 - `_CoupangCheckNode`가 propose_parallel 소속으로 gpt/gemini/deepseek/danawa와 동시 실행돼 지연시간 추가가 없다. 과거 15개 리테일러를 다나와 하나로 좁힌 이유(페이지 구조가 달라 스니펫만으로 파싱하면 엉뚱한 상품/가격이 섞임)를 반복하지 않도록, 쿠팡 페이지를 파싱해 새 propose 후보를 만들지는 않는다 - Tavily 스니펫 그대로를 `build_challenge_prompt`에 참고 자료로만 얹는다. `CHALLENGE_INSTRUCTIONS`에는 이 신호를 소프트하게(쿠팡에 없다고 곧바로 verified=false 처리하지 말라) 쓰라고 명시했다 - 니치 상품이 쿠팡 재고/검색에 없을 수 있어 오탐 우려를 막기 위함. 원래는 "구글 검색으로 존재하지 않는 상품이면 아예 검색을 막고 싶다"는 요청이었으나, 하드 게이트는 국내 상품(네이버 인덱싱이 구글보다 나은 경우가 많음) 오탐 위험과 API 비용이 커서 challenge 단계의 소프트 교차 확인 신호로 범위를 좁혔다.
+- **그라운딩 3종 강화(relaxed fallback 하드닝 · 네이버쇼핑 추가 · 회귀 스크립트)**: "무조건 그라운딩/환각 방지을 향상시켜야해"(사용자 요청, 2026-08-16) - 세 가지를 함께 적용했다. (1) **relaxed fallback 하드닝**: judge가 후보를 하나도 못 골랐을 때의 안전망(`gpt.pick_most_relevant`)은 지금까지 challenge/CMPNYC_MAP 검증을 전부 우회한 채 Qwen 단독 판단을 그대로 최종 응답으로 냈다 - 바로 위 "깨진 쿠팡 구매링크" 버그의 근본 원인이 이 경로였다. `_verify_relaxed_verdict`가 이 경로가 고른 후보도 정상 candidate와 동일한 `build_challenge_prompt`/DeepSeek 검증에 태우도록(파이프라인 세션 밖에서 재사용할 수 있게 `deepseek.challenge_candidates`를 새로 뽑음) 바꿨다 - 명백히 우려(verified=false)로 판정되면 그 후보는 폐기하고 넓힌 질의로 한 번 더 시도, 그마저 실패하면 정직하게 포기(NO_CANDIDATE_ERROR)한다. 검증 인프라 자체가 실패(API 오류 등)하면 verified=None으로 두고 응답은 내보내되 reasoning에 "낮은 확신" 캐비어를 붙인다 - 인프라 장애 때문에 이미 찾은 유일한 후보를 버리지는 않는다는 기존 원칙을 유지. `Decision`에 `verified: bool | None` 필드를 새로 추가해 판단 여부를 API 전체(fallback 경로뿐 아니라 `_build_decision`의 정상 judge 경로도 matched proposal의 값을 그대로 물려받도록)에 노출했다. (2) **네이버쇼핑을 2번째 소프트 교차 확인 소스로 추가**: 쿠팡 하나만으로는 다나와 외 교차 확인 대상이 한 곳뿐이라 "다나와 단일 실측 소스 의존도"가 완전히 해소되지 않았다 - `search.search_naver()`/`_NaverCheckNode`를 쿠팡과 완전히 동일한 패턴(페이지 파싱 없이 Tavily 스니펫만 참고 신호로 전달, propose_parallel 소속이라 지연시간 추가 없음)으로 추가하고 `build_challenge_prompt`/`CHALLENGE_INSTRUCTIONS`도 두 소스를 함께 다루도록 확장했다. (3) **그라운딩 정확도 회귀 스크립트**: README "한계점 및 향후 과제"에 있던 "정량적 지표 기반의 자동화된 평가 체계는 부재"를 부분적으로 메운다 - `scripts/grounding_regression.py`가 브랜드/모델이 구체적인 알려진 질의 세트로 실제 라이브 파이프라인을 돌려, URL이 가격비교 사이트 자체를 가리키거나 `verified=False`인 응답이 그대로 노출되는지를 자동으로 검출한다. 다른 `scripts/*.py`(예: `live_smoke_test.py`)와 같은 이유로 pytest 스위트에는 넣지 않았다 - 진짜 네트워크 호출이라 비용/지연시간이 크고 외부 서비스 상태에 결과가 흔들릴 수 있어, 수동/릴리스 전 체크리스트로만 쓴다.
 
 ### 문제 해결 내역 (Troubleshooting)
 
@@ -165,6 +188,10 @@ flowchart LR
 - **"용기형태" facet에 구매유형 값이 섞임(2026-08-14 사용자 리포트)**: 음료 검색의 AI 상세검색에서 "용기형태" 기준 선택지로 "업소용"이 나오는 등(정상이라면 페트/캔 등이 나와야 함), facet 추출 프롬프트가 "용기형태"의 의미를 정의하지 않아 DeepSeek이 상품명 속 구매유형 수식어(업소용 · 가정용 · 벌크 등)를 물리적 용기 형태로 잘못 분류하던 문제 → 프롬프트에 "용기형태"는 페트/캔/유리병 등 물리적 형태만, 구매 방식은 별도 "구매유형" 기준으로 분류하라고 명시하고, `extract_facets_from_names`에서 "용기형태" 라벨의 값 중 알려진 비-용기형태 값을 한 번 더 걸러내는 코드 레벨 안전망 추가
 - **"핸드폰 케이스" 검색 품질 저하 3종(2026-08-14 사용자 리포트)**: (1) 구매유형 facet에 상품명에 근거가 전혀 없는 "해외"/"중고"가 뜸, (2) 특징 facet 값이 이상하게 뽑힘, (3) 검색 결과에 옛날 모델이 섞여 나옴 → 원인은 두 갈래. (1)·(2)는 "용기형태" 버그와 같은 근본 원인 — facet 추출 프롬프트가 "구매유형"/"특징" 라벨의 의미를 정의하지 않아, DeepSeek이 상품명이 아니라 "스마트폰 시장엔 해외구매·중고가 흔하다"는 사전 지식으로 값을 지어냄. "용기형태" 때와 동일한 이중 방어(프롬프트에 두 라벨의 정의와 "상품명에 근거 단어가 있을 때만" 원칙 명시 + `extract_facets_from_names`에 "구매유형" 값을 정품/리퍼/중고/전시품/병행수입/해외구매 등 알려진 어휘로만 걸러내는 화이트리스트 필터, 용기형태의 블랙리스트와 반대 방향)로 적용. (3)은 다른 원인 — 에이전트 후보 병합(`fusion.dedup.merge_candidates`)이 상품명 유사도(token_set_ratio)만으로 동일 상품을 판정해, "아이폰6 케이스"와 "아이폰15 케이스"처럼 공통 토큰이 많은 서로 다른 모델이 같은 그룹으로 합쳐지고 그 그룹의 대표가 최저가 멤버로 뽑히는 바람에 구형 모델이 대표로 노출될 수 있었음. 다나와 실측가 매칭(`app.price_table.enrich_decision`)에는 이미 있던 모델/규격/수량/구매유형 토큰 충돌 가드(`_product_name_matches`)가 정작 후보 병합 단계에는 안 붙어 있던 것 → 그 가드 로직을 `app.spec_match`(신설, 순환 참조 회피 목적)로 뽑아 `price_table.py`와 `fusion/dedup.py`가 공유하도록 하고, 알파벳이 안 섞인 한글+숫자 모델 세대 표기(아이폰6/15처럼 GB · M2 같은 영숫자 혼합 토큰 규칙으로는 못 잡던 패턴)를 잡는 전용 패턴을 추가
 - **깨진 쿠팡 구매링크가 최종 추천으로 노출됨(2026-08-16 사용자 리포트 "구매링크를 안띄워주는거야")**: 실제 클릭해보니 쿠팡이 "사용권한이 제한된 페이지입니다" 접근 제한 에러를 반환 - 서로 다른 상품(아이폰16/코카콜라/갤럭시버즈3)에서 전부 재현되고 사용자 본인 브라우저로 직접 열어봐도 동일해, 특정 상품이 아니라 다나와의 쿠팡 제휴 코드(cmpnyc=`TP40F`) 자체가 막힌 것으로 확인 → `fetchers/danawa_mall_map.py`의 `TP40F` 항목 `url_rule`을 `"bridge_passthrough"`에서 `None`으로 내려 A등급(링크 검증됨)에서 제외(domain은 사실이라 trust 등급에는 계속 반영). 이 과정에서 연쇄적으로 두 개의 추가 버그를 더 찾아 함께 고쳤다: (1) `price_table._is_danawa_bridge_passthrough()`가 URL 경로(`/bridge/`)만 보고 "이미 검증된 링크"로 믿어서, judge 구조화 출력이 실패했을 때의 relaxed fallback(`gpt.pick_most_relevant`)이 Tavily 원문 스니펫에서 그대로 베낀 깨진 쿠팡 bridge_url을 아무도 안 거르고 통과시켰다 - cmpnyc가 CMPNYC_MAP에서 지금도 실제로 `bridge_passthrough`인지까지 확인하도록 강화. (2) `app/danawa.py`(별도의 "다나와 자체 AJAX로 최저가 재해석" 모듈, `fetchers/danawa.py`와는 다른 파일)의 `_extract_pcode()`가 URL 경로를 안 가려서, 파이프라인이 이미 A등급 판매처(예: 롯데ON)로 올바르게 확정한 `/bridge/` 구매 링크까지 "아직 안 풀린 비교 페이지"로 착각해 재해석 대상으로 삼았다 - 그 AJAX 엔드포인트는 CMPNYC_MAP을 전혀 모른 채 다나와 자신의 "객관적 최저가"(링크 작동 여부 무관, 그래서 매번 쿠팡)만 보고 이미 올바른 링크를 조용히 덮어쓰고 있었다 → `/bridge/` 경로는 이미 해석 완료된 링크로 보고 재해석 대상에서 제외
+- **다나와 실측가 후보가 검색어와 무관한 상품을 추천함(2026-08-16, 그라운딩 회귀 파일럿 50개 중 발견)**: "아이폰 16 프로 256GB"를 검색했는데 최종 추천이 "태블리스 iPad 10세대 애플펜슬 홀더 힐링커버 케이스"(아이패드 액세서리)로 나왔다 - `verified: true`, `price_source: "danawa_offer"`였던 걸 보면 LLM 환각이 아니라 `_DanawaFetchNode`(다나와 실측가 주입 경로)에서 나온 값이었다. 원인은 `price_table.pick_primary()`가 여러 다나와 후보 페이지 중 **offer(판매처) 개수가 가장 많은** 페이지를 고를 뿐 검색어와의 관련성은 전혀 확인하지 않는다는 것 - 액세서리류는 판매처가 워낙 많아 offer 수만으로는 진짜 아이폰 페이지보다 "더 풍부해" 보일 수 있다. 게다가 `_apply_challenge`는 danawa 출신 후보를 "이미 실측 검증됐다"는 이유로 DeepSeek 그라운딩 검증 자체를 건너뛰고 무조건 `verified=True`로 강제하므로, 상품 자체가 틀렸어도 걸러낼 안전망이 없었다(같은 파일의 `_is_single_product_family`가 정확히 이런 경우를 걸러내는 가드인데, `/decide/danawa-only` 전용 경로에만 연결돼 있고 라이브 ADK 파이프라인의 `_DanawaFetchNode`에는 애초에 안 붙어 있었다) → `_DanawaFetchNode`가 `pick_primary()`로 고른 대표 페이지를 후보로 만들기 전에, `enrich_decision`이 이미 쓰던 `_product_name_matches`(fuzzy 유사도 + 모델/수량 충돌 가드)를 검색어 자체와 대조하도록 추가 - 이름이 안 맞으면 애초에 후보를 만들지 않는다(danawa_tables 전체는 그대로 보존해 `enrich_decision` 등 이름-매칭 가드가 이미 있는 후처리는 영향 없음). 이 버그는 사용자 리포트가 아니라 알려진 상품 세트로 만든 회귀 파일럿에서 처음으로 잡혔다 - 아래 "그라운딩 정확도 회귀 스크립트" 결정 참고.
+- **구체적인 검색어인데도 불필요하게 되묻기(clarify)가 뜸(2026-08-16, 그라운딩 회귀 파일럿 50개 중 25건에서 재현)**: "햇반 백미 210g 24개"처럼 브랜드·용량·개수를 이미 다 적은 질의인데도 "브랜드" 축을 다시 물었다. 원인은 `_facet_resolved`(이미 답한 축인지 판정)가 facet의 원본 옵션 값이 질의 텍스트에 문자 그대로 있는지만 봤다는 것 - "햇반"은 제품 브랜드명이고 facet이 뽑은 실제 옵션은 제조사명("CJ제일제당")이라 문자열이 서로 달라 매칭에 실패했다. 정작 `_attach_facet_crossfilter`가 이미 계산해둔 `options_by_selection`을 보면 "210g 24개"를 선택하면 브랜드가 CJ제일제당 하나로 좁혀진다는 걸 알고 있었는데, `_facet_resolved`가 그 정보를 안 쓰고 있었다 → `_facet_resolved`에 crossfilter 기반 판정을 추가(`_facet_options_for_query`) - 질의에 이미 들어있는 다른 축의 선택값(들)으로 이 facet이 옵션 1개 이하로 좁혀지면 "이미 답함"으로 취급한다. 매치되는 셀렉터가 여럿이면 교집합을 쓰고, 교집합이 비거나(모순되는 신호) 매치가 아예 없으면 안전하게 원본 옵션 그대로 둔다(잘못 좁혀서 진짜 필요한 되묻기를 건너뛰는 것보다 낫다).
+- **최종 추천의 판매처가 "다나와" 자신, 가격은 빈 문자열로 노출됨(2026-08-16, 그라운딩 회귀 파일럿 50개 중 3건 재현: 위닉스 제습기·데카트론 요가매트·스캇 헬멧)**: 세 케이스 모두 Qwen과 DeepSeek이 독립적으로 같은 후보를 제안했는데, `url`이 다나와 가격비교 페이지 자체(`prod.danawa.com/info?pcode=...`)였고 `retailer: "다나와"`(판매처가 아니라 가격비교 사이트 자신), `price: ""`였다. 이 페이지는 여러 판매처를 나열만 할 뿐 특정 판매처로 연결되지 않는데(진짜 구매 링크는 `/bridge/loadingBridge.html`), challenge가 상품 정체성 일치만 확인하고 "실제 구매 가능한 판매처인가"는 안 봐서 `verified=True`로 통과됐다 - `exclude_price_comparison_site_as_final_pick`의 pcode 재매칭도 이 pcode가 `_DanawaFetchNode`가 가져온 가격표 목록에 없어 못 걸렀다(세 케이스 다 A등급 판매처 자체가 danawa_tables에 없었던 것으로 보임) → 근본 원인을 후처리가 아니라 입구에서 막기로 했다: `agents/base.py`에 `is_danawa_comparison_page()` 추가, `filter_candidates`(propose 3개 + danawa 공통 필터)와 relaxed fallback(`gpt.pick_most_relevant`)의 URL 검증에 함께 연결해 이 패턴의 후보 자체를 애초에 안 받는다(`/bridge/loadingBridge.html`은 이 패턴에 안 걸려 정상 구매 링크는 그대로 통과). 이 결과, 세 질의 모두 잘못된 확신 대신 정직하게 되묻기/폴백으로 넘어가는 것으로 확인됐다 - 틀린 답보다 "모른다"가 낫다는 이 프로젝트의 기존 원칙과 일치한다.
+- **다나와 가격비교 페이지 필터가 모바일 URL 변형을 놓침(2026-08-17, 50개 재검증 파일럿에서 발견)**: 위 항목의 `is_danawa_comparison_page()`가 처음엔 `prod.danawa.com/info` 경로만 정규식으로 걸렀는데, "LG 그램 16인치 2024" 질의에서 같은 문제의 모바일 페이지 변형(`m.danawa.com/product/product.html?code=...`)이 그대로 통과해 다시 `retailer: "다나와"`/`price: ""`로 노출됐다 → 특정 URL 모양을 하나씩 allowlist하는 대신, 이 앱이 이미 쓰던 도메인 판단 기준(`price_table._is_price_comparison_domain`/`_is_danawa_bridge_passthrough`와 동일한 원칙: "다나와 도메인이면서 `/bridge/`가 아닌 모든 경로")으로 일반화했다. 같은 재검증에서 아이폰→아이패드류 상품 불일치(환각) 재발은 0건으로 확인 - 이번엔 순수하게 URL 패턴 커버리지 문제였다.
 
 ---
 
@@ -206,7 +233,8 @@ sequenceDiagram
     participant B as 백엔드(ADK 파이프라인)
     participant Cache as 검색 캐시(의미 기반)
     participant T as Tavily
-    participant P as 제안 에이전트(Qwen·Groq·DeepSeek)
+    participant P as 제안 에이전트(Qwen·Groq·DeepSeek·다나와실측)
+    participant CP as 쿠팡(교차확인 · 참고신호)
     participant D as DeepSeek(교차 검증)
     participant J as Groq(심사)
     participant DW as 다나와(브릿지 URL 해석)
@@ -228,9 +256,11 @@ sequenceDiagram
         Note over B: skip_clarify=true → 내부 애매함 판정을 건너뛰고<br/>바로 제안 단계로 진행(재질문 방지)
     end
     B->>P: 검색 결과 + 질의 전달 (병렬, 모델별 최선 1개)
-    P-->>B: 상품 후보 제안 (근거 포함)
+    P-->>B: 상품 후보 제안 (근거 포함, 다나와는 실측가)
+    B->>CP: 병렬로 쿠팡 한정 검색(후보 아님)
+    CP-->>B: 참고용 검색 결과
     B->>B: 후보 병합 · 중복 제거(최저가 매물 기준)
-    B->>D: 병합된 후보 교차 검증 요청
+    B->>D: 병합된 후보 + 쿠팡 참고 결과로 교차 검증 요청
     D-->>B: 검증 결과(verified 여부 · note)
     B->>J: 검증된 후보 심사 요청
     J-->>B: 최종 추천 + 선정 근거
@@ -258,6 +288,36 @@ sequenceDiagram
 - AI 상세검색(facet) 다중 라운드 시 base_query를 유지해 다나와 검색 캐시(1시간, 10초 crawl-delay)를 재사용하도록 개선해 드릴다운 응답속도 단축
 - 다나와 실측 최저가를 별도로 확보해 LLM 추정 가격 · URL의 오차를 줄이고, 최종 URL이 다나와 가격비교 페이지 자체로 남지 않도록 실제 구매처 브릿지 URL로 항상 변환
 - 멀티턴 대화 흐름에서 후속 턴에 `skip_clarify`를 적용해, 이미 답한 조건에 대해 파이프라인이 다시 되묻는 무한 재질문을 제거
+
+### 그라운딩 회귀 실험 기록
+
+`scripts/grounding_regression.py`(카테고리별 50개 질의, [주요 의사결정 사항](#주요-의사결정-사항)의
+"그라운딩 3종 강화" 참고)를 돌릴 때마다의 통과율 추이. "정답"은 사람이 매긴 가격/상품이 아니라
+구조적 검증(실제 구매 링크인지 · 그라운딩 검증 통과 여부 · 상품명 키워드 일치)만 자동 채점한다.
+
+<!-- GROUNDING_HISTORY_START -->
+실행할 때마다 이 표/그래프가 자동으로 갱신된다(`scripts/grounding_regression.py`가
+`scripts/grounding_regression_history.json`에 결과를 추가하고 이 구간을 재생성한다 -
+수동으로 이 마커(`GROUNDING_HISTORY_START`/`_END`) 사이를 직접 편집하지 말 것,
+다음 실행 때 덮어써진다).
+
+| 날짜 | 통과율 | 통과/전체 | 내용 | 인프라 참고 |
+| --- | --- | --- | --- | --- |
+| 2026-08-16 | 34% | 17/50 | PR #21~24(그라운딩 하드닝) 적용 전 베이스라인 - 아이폰→아이패드 환각, 과다 되묻기, 구매링크 미해석 버그를 이 실행에서 처음 발견 | Groq 일일 토큰 한도가 약 36/50 지점에서 소진(1~35번은 인프라 정상, 이후는 노이즈 가능) |
+| 2026-08-17 | 12% | 6/50 | PR #21~24(그라운딩 하드닝) 적용 후 재검증 - 아이폰→아이패드류 환각 재발 0건 확인, 다나와 URL 필터의 모바일 변형 누락을 새로 발견(PR #25로 수정) | Qwen(DashScope) 무료 티어가 실행 초반부터 거의 소진되어 3개 제공자 중 사실상 DeepSeek만 남음 - 통과율(12%)은 코드 품질이 아니라 인프라 상태를 반영, 참고용으로만 볼 것 |
+
+```mermaid
+xychart-beta
+    title "그라운딩 회귀 파일럿 통과율 추이(%)"
+    x-axis ["2026-08-16", "2026-08-17"]
+    y-axis "통과율 (%)" 0 --> 100
+    bar [34, 12]
+    line [34, 12]
+```
+
+그래프의 특정 지점이 유독 낮다고 코드가 나빠졌다는 뜻은 아닐 수 있다 -
+표의 "인프라 참고" 칸에 그 실행에서 제공자 쿼터 문제가 있었는지 항상 같이 본다.
+<!-- GROUNDING_HISTORY_END -->
 
 ### 코드 정리 및 GitHub 관리
 
