@@ -439,7 +439,37 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
     setOcrBusy(true);
     try {
       const { ocr, cleaned } = await extractOcr(file);
-      const extractedText = (cleaned?.search_query || cleaned?.cleaned_text || ocr.text || '').trim();
+
+      if (cleaned?.search_query?.trim()) {
+        await sendMessage(cleaned.search_query.trim());
+        return;
+      }
+
+      // Groq 정제가 정상적으로 돌았는데도(에러 없음) search_query가 빈
+      // 문자열이면, LLM이 "상품을 하나로 특정할 수 없다"고 일부러 포기한
+      // 것이다(cleanup.py 프롬프트: "상품을 특정할 수 없으면 search_query를
+      // 빈 문자열로 두세요" - 지어내지 말라는 지시). 이럴 때 다음 폴백인
+      // cleaned_text로 넘어가면, 정리는 됐지만 "상품 하나로 좁히기"는 안 된
+      // 텍스트(사진에 같이 찍힌 다른 물건 글자까지 포함될 수 있음)가 그대로
+      // 검색어가 되어버린다(사용자 리포트, 2026-08-18: 캔 사진에 옆에 있던
+      // 노트북 스티커·젤리 봉지 글자까지 검색어에 섞여 나옴). LLM의 "모르겠다"
+      // 판단을 존중해 지저분한 텍스트로 검색하는 대신 정직하게 다시 찍어달라고
+      // 안내한다 - API 호출 자체가 실패한 경우(cleaned.error 있음)는 여기
+      // 해당 안 되고 아래 폴백 체인으로 그대로 넘어간다.
+      if (cleaned && !cleaned.error) {
+        appendTurn(activeConversationId, {
+          ...newTurn('(이미지)', ''),
+          status: 'error',
+          errorMessage: '사진에서 특정 상품을 찾기 어려워요. 상품만 잘 보이게 다시 찍어주시겠어요?',
+        });
+        return;
+      }
+
+      // 여기부터는 Groq 정제 호출 자체가 실패한 경우(cleaned가 null이거나
+      // error가 있음) - cleanup.py가 재시도 후에도 실패하면 이미 로컬 규칙
+      // 필터를 거친 cleaned_text를 주므로, 그마저 없을 때만 원본 ocr.text로
+      // 폴백한다.
+      const extractedText = (cleaned?.cleaned_text || ocr.text || '').trim();
       if (!extractedText) {
         appendTurn(activeConversationId, {
           ...newTurn('(이미지)', ''),

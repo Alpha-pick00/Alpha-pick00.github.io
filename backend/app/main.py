@@ -64,10 +64,14 @@ app = FastAPI(title="αlpha Pick Purchase Decision API", lifespan=lifespan)
 # 인증이 없는 API라 origin을 넓게 열어도 데이터 유출 위험은 없지만, "*"로 두면 아무 사이트나
 # 이 API(유료 LLM 호출)를 자기 페이지에 박아 넣고 우리 예산을 소모시킬 수 있어 알려진
 # origin으로만 제한한다.
+# 2026-08-18("Vercel로 배포해줘") - GitHub Pages와 별개로 Vercel에도 같은 프론트엔드를
+# 배포했다. Vercel은 배포마다 고유 URL도 발급하지만(예: alpha-pick-<해시>-<팀>.vercel.app),
+# 실사용자는 고정 프로덕션 별칭만 쓰므로 그 하나만 허용한다.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://alpha-pick00.github.io",
+        "https://alpha-pick-jet.vercel.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
@@ -364,7 +368,7 @@ async def decide_clarify(
 
 @app.post("/decide/danawa-only", response_model=DecideResponse | BulkDecideResponse)
 async def decide_danawa_only(request: DecideRequest) -> DecideResponse | BulkDecideResponse:
-    """임시 실험 엔드포인트 - LLM 호출 0번(gpt/gemini/deepseek 제안, judge 결정
+    """임시 실험 엔드포인트 - LLM 호출 0번(gpt/groq/deepseek 제안, judge 결정
     전부 생략), 다나와 실측 가격표만으로 규칙 기반 추천. LLM API 비용 절감
     목적의 로컬 테스트 경로라 /decide와 별도로 둔다 - 프론트엔드는 아직
     이 경로를 쓰지 않는다. 검색어가 서로 다른 상품에 걸쳐 있으면(예: "노트북")

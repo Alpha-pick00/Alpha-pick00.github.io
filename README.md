@@ -1,7 +1,6 @@
 # αlpha Pick
 
-https://alpha-pick00.github.io/
-
+alpha-pick-jet.vercel.app
 ---
 
 ## 1️⃣ 프로젝트 개요
@@ -113,7 +112,7 @@ flowchart LR
 | 이미지 인식 | Google Cloud Vision (텍스트 추출) → Groq (정제 · 검색어 추출) |
 | 인증 | Google / Kakao / Naver OAuth2 + JWT 기반 세션 |
 | 저장소 | SQLite (검색 기록 · 자동완성 인덱스 · 검색 캐시) |
-| 배포 | Docker, nginx, certbot, AWS GPU 인스턴스, nip.io / GitHub Pages(Frontend), GitHub Actions(CI) |
+| 배포 | Docker, nginx, certbot, AWS GPU 인스턴스, nip.io(Backend) / GitHub Pages, Vercel(Frontend), GitHub Actions(CI) |
 
 ### 주제 선정 배경
 
@@ -152,7 +151,7 @@ flowchart LR
 | 2026-08-14 | Gemini·Claude → Groq 무료 API 전면 전환 · `/decide/clarify`와 ADK 내부 안전망의 facet 추출 로직 통합 · "용기형태" facet 구매유형 오분류 수정 · 쿠팡 교차 확인(challenge 3번째 그라운딩 신호) 추가 · 깨진 쿠팡 구매링크 노출 버그 3건(연쇄 원인) 수정 · 액세서리(핸드폰 케이스 등) 검색 품질 개선 · 대규모 죽은 코드 정리 · README 대폭 갱신 |
 | 2026-08-16 | relaxed fallback을 challenge 재검증으로 게이팅해 하드닝(그라운딩 우회 경로 차단) · `Decision.verified` 필드 추가로 최종 응답의 그라운딩 검증 여부를 API 전체에 노출 · 네이버쇼핑을 쿠팡과 동일 패턴의 2번째 소프트 교차 확인 소스로 추가 · 알려진 상품 세트 기반 그라운딩 정확도 회귀 스크립트(`scripts/grounding_regression.py`) 추가 · 다나와 실측가 후보에 검색어 관련성 가드 추가(아이폰→아이패드 오추천 버그 수정) · facet crossfilter로 이미 좁혀진 축은 되묻지 않도록 수정(불필요한 clarify 다발 버그) · 다나와 가격비교 페이지 자체를 최종 후보로 받아들이던 버그 수정 |
 | 2026-08-17 | 다나와 가격비교 페이지 필터를 도메인 기반으로 일반화(모바일 URL 변형 누락 대응) · 그라운딩 회귀 스크립트에 실행 전 제공자 헬스체크 + 도중 연속 실패 시 즉시 중단 안전장치 추가 · README에 그라운딩 회귀 실험 이력을 표+그래프로 자동 갱신하는 기능 추가 · 배포 저장소를 Prototype-1- 하나로 일원화(구 Alpha-pick00.github.io가 비공개/개명되며 배포 대상에서 제외, Pages 활성화 + 누락 환경변수 설정 + 죽은 배포 터널 재기동) · 안전장치의 쿼터 소진 감지가 파이프라인 내부 예외 삼킴에 뚫리는 문제 발견 후 문자열 매칭 → 연속 실패 기반 헬스체크 재확인 방식으로 재설계 |
-| 2026-08-18 | 배포 터널 재소진 + 구 GitHub Pages URL 404 확인 후 터널 재기동·`VITE_API_URL` 갱신·재배포로 복구 |
+| 2026-08-18 | 배포 터널 재소진 + 구 GitHub Pages URL 404 확인 후 터널 재기동·`VITE_API_URL` 갱신·재배포로 복구 · "gemini" 슬롯 기본 Groq 모델을 llama-3.3-70b-versatile → gpt-oss-20b로 교체(TPD 소진 회피) · 프론트엔드를 Vercel에도 배포하고 백엔드를 기존 AWS 인스턴스에 최신 코드로 재배포(저장소 재동기화, nginx+TLS를 새 인스턴스 IP로 재발급), CORS에 Vercel 도메인 추가 |
 
 ### 주요 의사결정 사항
 
@@ -182,6 +181,8 @@ flowchart LR
 - **실험 안전장치 도입 및 재설계(사전 헬스체크 + 도중 중단)**: 50개 재검증 파일럿 도중 Qwen 무료 티어가 완전히 소진됐는데도 나머지를 그대로 끝까지 돌려 통과율이 코드 품질이 아니라 인프라 상태를 반영하는 왜곡된 숫자(17/50 → 6/50)가 나온 사고 이후, 사용자가 "앞으로는 테스트할 때 토큰 다 쓰면 나한테 말하고 중지해줘 - LLM 모델 하나라도 빠지면 실험하는게 의미가 없어"(2026-08-17)라고 명시적으로 요구했다. 처음엔 (1) 실행 전 Qwen/DeepSeek/Groq/Tavily 4개를 최소 호출로 헬스체크하고 (2) 도중 케이스 결과 텍스트에 429/`insufficient_quota` 등 소진 신호 문자열이 연속으로 보이면 재확인 후 중단하는 방식으로 구현했는데, Qwen을 `qwen-max` → `qwen-plus`로 다운그레이드해 재실행했을 때 Groq 일일 한도와 OpenAI 크레딧이 초반부터 바닥났음에도 다시 50개가 끝까지 돌아 2/50이라는 왜곡된 결과가 나왔다 - 아래 [문제 해결 내역](#문제-해결-내역-troubleshooting) 참고. 원인은 `debate.run_single_debate`가 provider의 원본 429/`insufficient_quota` 예외를 내부에서 잡아 일반 `RuntimeError`나 clarify 응답으로 바꿔버려, 케이스 결과 텍스트에 원본 에러 문구가 전혀 안 남았기 때문 - 원본 예외 문구 매칭은 파이프라인이 내부 예외를 어떻게 감싸는지에 종속돼 언제든 다시 뚫릴 수 있는 구조적 약점이라 판단해, "실패 텍스트에 소진 신호가 보이는가" 대신 "케이스가 사유 불문 연속 2건 실패했는가"를 트리거로 바꾸고 그때마다 헬스체크로 제공자 상태를 직접 재확인하도록 재설계했다(파이프라인이 예외를 어떻게 감싸든 영향받지 않음). 오염된 2/50 결과는 히스토리/README에서 되돌렸다.
 - **README 그라운딩 실험 이력 자동 갱신**: "앞으로 진행되는 모든 실험은 Readme에 기록해주고 날짜별로 성능 개선 결과를 그래프로 시각적으로 확인할 수 있게 추가해줘"(사용자 요청, 2026-08-17) - `scripts/grounding_regression_history.json`에 완주한 실행마다 날짜/통과율/맥락/인프라 참고를 append하고, README의 `GROUNDING_HISTORY_START`/`_END` 마커 사이를 표 + Mermaid `xychart-beta` 그래프로 매번 재생성한다(수동 편집 시 다음 실행에서 덮어써짐). 사전 헬스체크 실패나 도중 중단으로 끝까지 못 돈 실행은 "완주한 실험"이 아니므로 기록하지 않는다 - 추세 그래프를 의미 없는 부분 실행 데이터로 흐리지 않기 위함.
 - **배포 저장소를 Prototype-1- 하나로 일원화**: 기존에 프론트엔드 배포(GitHub Pages)와 코드 변경사항 PR을 서로 다른 두 저장소(`Alpha-pick00.github.io`, `Prototype-1-`)에 나눠 반영하고 있었는데, 사용자가 `Alpha-pick00.github.io`를 비공개로 전환하고 이름도 바꾸면서 "앞으로 모든 변경사항은 Prototype-1-에 반영해"(2026-08-17)라고 지시했다 - `Prototype-1-`에서 GitHub Pages를 활성화(리포 이름이 `<계정>.github.io` 형식이 아니라 배포 URL이 `https://alpha-pick00.github.io/Prototype-1-/`로 바뀜), 당시 비어있던 배포 환경변수(`VITE_API_URL` 등)를 설정하고, 죽어있던 배포용 Cloudflare 터널을 재기동해 정식으로 단일화했다.
+- **gemini 슬롯 기본 Groq 모델을 gpt-oss-20b로 교체**: "llama 모델 전부 GPT-oss 무료 모델로 바꿔줘"(사용자 요청, 2026-08-18) - 그라운딩 회귀 파일럿에서 `llama-3.3-70b-versatile`의 일일 토큰(TPD) 한도가 실행 초반부터 반복적으로 소진되는 문제를 관측한 뒤, refine/judge가 이미 쓰는 gpt-oss 계열(별도 쿼터 풀)로 통일했다 - propose의 "gemini" 슬롯·카테고리 분류·OCR 텍스트 정리가 이 설정(`GROQ_MODEL`)을 공유한다.
+- **프론트엔드를 Vercel에도 배포하고 백엔드를 AWS 인스턴스로 이전**: 사용자가 Vercel 배포 + "서버 인스턴스는 AWS 기반으로 사용"을 요청(2026-08-18) - 기존 Cloudflare Quick Tunnel(반복적으로 죽는 문제가 있었음, 위 항목들 참고)을 벗어나 이전에 course에서 준비했던 AWS EC2 인스턴스(`backend/deploy/DEPLOY.md` 참고)로 백엔드를 정식 이전했다. 인스턴스가 재부팅되며 IP가 바뀌어 있어(고정 IP 미설정) nginx/TLS를 새 IP의 nip.io 도메인으로 재발급했고, 저장소 clone이 완전히 다른 옛 저장소(`Cherry-Pick00/alpha-pick`)를 가리키고 있어 `Prototype-1-`로 재연결 후 최신 main까지 동기화했다. 프론트엔드는 GitHub Pages를 유지한 채 Vercel에 추가로 배포(같은 Vite 빌드, `VITE_API_URL`만 새 AWS 도메인으로 설정)하고, CORS 허용 origin에 Vercel 도메인을 추가했다.
 
 ### 문제 해결 내역 (Troubleshooting)
 
@@ -201,6 +202,9 @@ flowchart LR
 - **쿼터 소진 안전장치가 파이프라인의 내부 예외 삼킴에 뚫림(2026-08-17)**: Qwen을 `qwen-plus`로 다운그레이드해 50개 그라운딩 파일럿을 재실행했는데, 사전 헬스체크는 통과했지만 실행 초반부터 Groq 일일 토큰 한도와 OpenAI 크레딧이 거의 즉시 바닥났다. 그런데도 안전장치(연속 2건에서 케이스 결과 텍스트에 429/`insufficient_quota` 등 문자열이 보이면 중단)가 작동하지 않고 50개가 그대로 끝까지 돌아 2/50이라는 왜곡된 결과가 나왔다 - 원인은 `debate.run_single_debate`가 provider의 원본 429 예외를 내부에서 잡아 `RuntimeError("적절한 상품 후보를 찾지 못했습니다")`나 clarify 응답으로 감싸버려서, 감지 로직이 스캔하던 케이스 결과 텍스트에 원본 에러 문구가 애초에 존재하지 않았기 때문이다(문자열 매칭 자체가 매칭될 대상이 없었음) → 원본 예외 문구에 의존하는 감지 방식은 파이프라인이 내부 예외를 어떻게 감싸는지에 따라 언제든 재발할 수 있는 구조적 약점이라 판단해, "실패 사유가 소진처럼 보이는가"가 아니라 "케이스가 사유 불문 연속 2건 실패했는가"를 트리거로 바꾸고 그때마다 헬스체크로 제공자 상태를 직접 재확인하도록 재설계했다 - 이제 파이프라인이 예외를 어떻게 감싸든 영향받지 않는다. 오염된 2/50 결과는 `grounding_regression_history.json`/README 히스토리 섹션에서 되돌리고, 이제 쓰이지 않는 문자열 매칭 헬퍼(`_looks_like_quota_exhaustion`)도 함께 제거했다(PR #28).
 - **구 GitHub Pages URL이 404, 배포 API 터널이 재차 다운(2026-08-18)**: 사용자가 `https://alpha-pick00.github.io/`가 안 뜬다고 리포트 → 원인 두 가지가 겹쳐 있었다. (1) 이 URL은 리포지토리 이름이 `<계정>.github.io`일 때만 유효한 GitHub Pages 규칙인데, 배포 저장소를 `Prototype-1-`로 일원화하면서 이 이름 규칙이 깨져 영구히 404가 됐다 - 올바른 현재 URL은 `https://alpha-pick00.github.io/Prototype-1-/`. (2) 그 올바른 URL조차 응답이 없었는데, 로컬 백엔드(`uvicorn`)는 정상이었지만 이를 외부에 노출하는 Cloudflare Quick Tunnel이 "control stream encountered a failure" 재연결 루프에 빠진 채 죽어있었다(trycloudflare.com Quick Tunnel은 익명 무료 티어라 별도 알림 없이 언제든 끊길 수 있음 - 이번이 두 번째 재발). 죽은 터널 프로세스를 종료하고 새 터널을 기동해 새 URL을 받은 뒤, GitHub Actions 변수 `VITE_API_URL`을 갱신하고 "Deploy to GitHub Pages" 워크플로를 재실행해 새 URL이 빌드 번들에 반영된 것까지 확인했다. 근본적으로 재발을 막으려면 익명 Quick Tunnel 대신 계정에 연결된 Named Tunnel(도메인 필요, 재시작에도 URL 고정)로 교체해야 한다 - 아직 미착수.
 - **새로 발급받은 Qwen 키가 기존 워크스페이스 엔드포인트에서 거부됨(2026-08-18)**: `qwen-max`로 복귀하며 새 API 키로 교체를 시도했는데, 지금 쓰는 커스텀 Aliyun MaaS 워크스페이스 엔드포인트(`QWEN_API_BASE`)에서 `403 Workspace endpoint access denied`(키 형식은 인식되지만 이 워크스페이스 접근 권한이 없음)가, DashScope 표준 `compatible-mode` 엔드포인트에서는 `401 invalid_api_key`(그 엔드포인트 자체에서 키를 못 알아봄)가 났다 - 즉 새 키는 지금 워크스페이스와 다른 워크스페이스 소속으로 보이며, 맞는 `QWEN_API_BASE`가 무엇인지는 발급 콘솔에서 직접 확인해야 알 수 있어 추측으로 바꿀 수 없다 → 백엔드를 깨진 채로 두지 않기 위해 직전까지 정상 동작하던 키 + `qwen-plus`로 롤백했다. 다음에 새 키로 교체할 때는 키뿐 아니라 그 키가 속한 워크스페이스의 엔드포인트 URL도 함께 받아야 한다.
+- **OCR 정제/카테고리분류/propose "gemini" 슬롯이 전부 404로 실패(2026-08-18 사용자 리포트, "구글 비전에서는 제대로 읽었었는데 텍스트를 찾지 못했습니다")**: 처음엔 이미지 용량 초과나 API 키 문제로 의심했으나(실제로 Vision 쪽은 그 문제가 맞아 키 교체 + 응답 최상위 에러 미검출 버그를 함께 고쳤다), 이 세 슬롯의 실패는 원인이 달랐다 - 키를 새로 발급받아도 `openai.NotFoundError: The model 'llama-3.3-70b-versatile' does not exist or you do not have access to it`가 그대로 재현됐다. `client.models.list()`로 이 계정이 실제로 쓸 수 있는 모델 목록을 직접 조회해보니 해당 모델이 아예 없었다 - Groq가 2026-06-17에 폐기를 공지하고 2026-08-16에 무료/개발자 티어에서 실제로 서비스를 끊은 것이었다(공식 마이그레이션 권장: `openai/gpt-oss-120b` 또는 `qwen/qwen3.6-27b`). `qwen/qwen3.6-27b`는 두 가지 이유로 배제했다: (1) "gpt" 슬롯이 이미 Qwen(DashScope)이라 3개 병렬 제안 에이전트 중 2개가 같은 모델 계열이 되어 모델 다양성이 깨짐 (2) 실측해보니 답변에 `<think>...</think>` 추론 블록을 붙이는데 그 안에 JSON 형태 텍스트가 섞여 나와, 이 코드베이스의 정규식 기반 `parse_json_object`(첫 `{`~마지막 `}` 그리디 매칭)가 엉뚱한 범위를 잡아 `json.JSONDecodeError: Extra data`로 파싱이 깨졌다(실측 확인) → `groq_model` 기본값을 이미 refine 전용으로 검증된 `openai/gpt-oss-20b`로 교체(JSON 프롬프트로 직접 재현 테스트해 think 블록 없이 깨끗하게 파싱됨을 확인) - refine과 TPM 한도를 나눠 쓰는 운영상 트레이드오프는 남지만, Qwen 다양성 문제도 파싱 문제도 없는 유일한 실측 검증된 선택지였다. **(후속, 같은 날)** 이 트레이드오프가 실제로 문제가 됐다 - refine과 gpt-oss-20b를 공유한 상태로 50개 그라운딩 회귀 파일럿을 돌리자 43번째 케이스 근처에서 gpt-oss-20b의 일일 토큰(TPD) 한도 자체가 바닥났다(TPM이 아니라 TPD 충돌이었다는 점에서 최초 우려와는 다른 방식으로 현실화). propose는 output_schema를 안 써서 구조화 출력 제약과 무관하게 아무 모델이나 쓸 수 있으므로, `groq_judge_model`과 같은 `openai/gpt-oss-120b`로 다시 옮겼다(judge는 후보가 1개면 스킵되는 경우가 많아 refine보다는 상시 부담이 적을 것으로 예상 - 아직 실측 검증 전). gpt-oss-120b도 같은 gpt-oss 계열이라 think 블록 파싱 문제는 이 파일럿에서 재현되지 않았다.
+- **AWS 재배포 직후 실제 검색이 전부 실패(2026-08-18)**: Vercel+AWS 배포를 마치고 `/decide`로 실제 스모크 테스트를 돌렸는데 "적절한 상품 후보를 찾지 못했습니다"가 났다. 컨테이너 로그를 보니 Qwen/Groq/DeepSeek 호출까지는 정상 진행됐지만 Tavily가 `432`(플랜 사용량 한도 초과)를 반환해 다나와/쿠팡/네이버 검색이 전부 실패했고, 그 결과 후보 풀이 0건으로 병합돼 정직하게 실패로 끝난 것이었다(그라운딩 원칙대로 후보 없이 지어내지 않음) - 배포 인프라(nginx/TLS/CORS/Docker) 자체는 정상이었고, 순수하게 Tavily 키가 다시 소진된 것으로 직접 핑 테스트(432 재현)로 확인했다. 로컬과 AWS가 같은 `TAVILY_API_KEY`를 공유해 두 환경 다 동시에 막힌다 - 새 키를 받으면 양쪽 `.env`에 반영해야 한다.
+- **Vercel GitHub 연동 프리뷰 빌드가 매번 실패(2026-08-18)**: `frontend/` 안에서 `vercel link`+`vercel deploy`로 수동 배포했을 때는 정상이었는데, 이후 PR을 올리자 Vercel의 GitHub 연동 프리뷰 빌드가 `sh: line 1: vite: command not found`로 매번 실패했다 - CLI로 수동 배포할 때는 `frontend/`에서 직접 실행해 그 디렉터리가 곧 빌드 루트였지만, GitHub 연동 빌드는 저장소 전체를 클론한 뒤 Vercel 프로젝트 설정의 Root Directory를 기준으로 진입하는데, 그 설정이 비어있어(수동 CLI 배포는 이 설정을 안 거침) 리포 루트에서 `vite build`를 시도해 실패한 것이었다 → Vercel API(`PATCH /v9/projects/:id`)로 `rootDirectory: "frontend"`를 설정해 해결. 이후 수동 CLI 배포는 반대로 리포 루트에서 실행해야 이 설정과 일치한다(`frontend/`에서 실행하면 "frontend/frontend"를 찾으려 해서 실패) - 리포 루트에도 `.vercel/project.json`을 복사해 두 방식 모두 되게 했다.
 
 ---
 
@@ -314,14 +318,15 @@ sequenceDiagram
 | --- | --- | --- | --- | --- |
 | 2026-08-16 | 34% | 17/50 | PR #21~24(그라운딩 하드닝) 적용 전 베이스라인 - 아이폰→아이패드 환각, 과다 되묻기, 구매링크 미해석 버그를 이 실행에서 처음 발견 | Groq 일일 토큰 한도가 약 36/50 지점에서 소진(1~35번은 인프라 정상, 이후는 노이즈 가능) |
 | 2026-08-17 | 12% | 6/50 | PR #21~24(그라운딩 하드닝) 적용 후 재검증 - 아이폰→아이패드류 환각 재발 0건 확인, 다나와 URL 필터의 모바일 변형 누락을 새로 발견(PR #25로 수정) | Qwen(DashScope) 무료 티어가 실행 초반부터 거의 소진되어 3개 제공자 중 사실상 DeepSeek만 남음 - 통과율(12%)은 코드 품질이 아니라 인프라 상태를 반영, 참고용으로만 볼 것 |
+| 2026-08-18 | 10% | 5/50 | 새 Tavily 키 교체 + gemini 슬롯 gpt-oss-20b 전환 후 재검증 | 43번째 케이스 근처부터 gpt-oss-20b 일일 토큰(TPD) 한도 소진(refine과 같은 모델을 공유해 예상보다 빨리 소진 - PR #34로 judge와 공유하는 gpt-oss-120b로 재조정) - 1~42번은 인프라 정상이라 그 구간의 과다 clarify/후보 없음 실패는 실제 파이프라인 동작을 반영, 43번 이후는 노이즈 가능 |
 
 ```mermaid
 xychart-beta
     title "그라운딩 회귀 파일럿 통과율 추이(%)"
-    x-axis ["2026-08-16", "2026-08-17"]
+    x-axis ["2026-08-16", "2026-08-17", "2026-08-18"]
     y-axis "통과율 (%)" 0 --> 100
-    bar [34, 12]
-    line [34, 12]
+    bar [34, 12, 10]
+    line [34, 12, 10]
 ```
 
 그래프의 특정 지점이 유독 낮다고 코드가 나빠졌다는 뜻은 아닐 수 있다 -

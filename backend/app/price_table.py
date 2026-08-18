@@ -568,6 +568,37 @@ def _find_table_by_pcode(
     return None
 
 
+async def resolve_danawa_comparison_url(
+    url: str, tables: list[tuple[PriceTable, danawa.DanawaResult]]
+) -> tuple[str, int, str] | None:
+    """다나와 가격비교 페이지 URL(prod.danawa.com/info?pcode=...)을 pcode
+    일치로 이미 페치된 A등급(링크 검증됨) 최저가 오퍼로 해석한다
+    (resolved_url, price_krw, retailer) - pcode 불일치·A등급 오퍼 없음 등으로
+    해석 실패하면 None(호출부는 이 경우 원래 URL을 그대로 쓰거나 후보 자체를
+    버려야 한다 - 안 검증된 값을 지어내지 않기 위함).
+
+    원래 exclude_price_comparison_site_as_final_pick 안에만 있던 로직을 뽑아냈다
+    (2026-08-18) - propose 단계 병합(_merge_proposals)에서도 같은 해석이
+    필요해졌다: Qwen/Groq/DeepSeek이 다나와 검색 결과에서 고를 수 있는 URL은
+    거의 전부 이 가격비교 페이지 형태뿐인데, 해석 없이 필터링(agents/base.py
+    ::is_danawa_comparison_page)만 하면 세 제안자가 후보를 사실상 못 만들어
+    후보 풀이 자주 0건이 됐다."""
+    pcode = _query_param(url, "pcode")
+    if pcode is None:
+        return None
+    match = _find_table_by_pcode(tables, pcode)
+    if match is None:
+        return None
+    _, raw_result = match
+    offer = cheapest_linkable_raw_offer(raw_result)
+    if offer is None:
+        return None
+    resolved_url = await resolve_purchase_url(offer)
+    if resolved_url is None:
+        return None
+    return resolved_url, offer["price_krw"], offer["seller"]
+
+
 async def exclude_price_comparison_site_as_final_pick(
     decision: Decision,
     proposals: list[Proposal],
@@ -587,19 +618,14 @@ async def exclude_price_comparison_site_as_final_pick(
         return decision
 
     if _is_danawa_domain(decision.url):
-        pcode = _query_param(decision.url, "pcode")
-        match = _find_table_by_pcode(tables, pcode) if pcode else None
-        if match is not None:
-            _, raw_result = match
-            offer = cheapest_linkable_raw_offer(raw_result)
-            if offer is not None:
-                resolved_url = await resolve_purchase_url(offer)
-                if resolved_url is not None:
-                    decision.price = f"{offer['price_krw']:,}원"
-                    decision.retailer = offer["seller"]
-                    decision.url = resolved_url
-                    decision.price_source = "danawa_offer"
-                    return decision
+        resolved = await resolve_danawa_comparison_url(decision.url, tables)
+        if resolved is not None:
+            resolved_url, price_krw, retailer = resolved
+            decision.price = f"{price_krw:,}원"
+            decision.retailer = retailer
+            decision.url = resolved_url
+            decision.price_source = "danawa_offer"
+            return decision
 
     for proposal in proposals:
         if proposal.error is not None or not proposal.url or not proposal.product_name:

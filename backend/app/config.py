@@ -32,24 +32,33 @@ class Settings:
     qwen_model: str = os.environ.get("QWEN_MODEL", "qwen-max")
     deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
-    # "gemini"/judge 슬롯은 2026-08-16부터 Groq(무료 API)이 담당한다(사용자 요청:
+    # "groq"/judge 슬롯은 2026-08-16부터 Groq(무료 API)이 담당한다(사용자 요청:
     # "deepseek Qwen 빼고 싹 다 무료 모델로 바꾸려고 해" - Gemini는 프로젝트가
     # 403으로 막혀있었고 Claude는 애초에 상시 무료 티어가 없다). Groq도 OpenAI
     # 호환 엔드포인트라 gpt.py/deepseek.py와 같은 패턴(AsyncOpenAI+base_url)을
-    # 그대로 쓴다. agent="gemini" 식별자 자체는 안 바꿨다(gpt와 동일한 이유).
+    # 그대로 쓴다. agent 식별자는 원래 "gemini"였지만 2026-08-18("Gemini
+    # 이제 안쓰니까 이름 제대로 바꿔서 코드 반영해") 실제 쓰는 모델명을 따라
+    # "groq"로 리네임했다(gpt 슬롯과 달리 - Qwen으로 바뀐 뒤에도 "gpt" 식별자를
+    # 유지한 건 리네임 비용이 훨씬 컸기 때문).
     groq_api_key: str | None = os.environ.get("GROQ_API_KEY")
     groq_api_base: str = os.environ.get("GROQ_API_BASE", "https://api.groq.com/openai/v1")
-    # 카테고리분류/OCR 텍스트 정리/propose의 "gemini" 슬롯이 공통으로 쓰는 범용
-    # 모델. Groq 무료(on-demand) 티어의 분당 토큰(TPM) 한도가 모델마다 6000~12000인데,
-    # 검색 결과 12건을 그대로 프롬프트에 넣으면(스니펫 트리밍 전 기준) 이 한도를
-    # 매번 초과했다(agents/base.py의 _SNIPPET_MAX_CHARS 참고 - 그 트리밍으로 기본
-    # 해결). groq/compound(-mini)는 TPM은 넉넉하지만 내부적으로 여러 모델에 요청을
-    # 위임하는 에이전틱 모델이라 그 하위 모델들의 rate limit을 그대로 물려받아
-    # 오히려 더 불안정했다 - 순수 모델 중 TPM이 가장 넉넉한 걸 쓴다.
-    # 2026-08-18: llama-3.3-70b-versatile이 Groq에서 완전히 내려가(계정
-    # /v1/models 조회에도 안 잡힘) 모든 호출이 404로 죽는 게 확인돼, judge와
-    # 같은 openai/gpt-oss-120b(비-에이전틱, 큰 컨텍스트)로 교체 - 실측으로
-    # 확인 완료.
+    # 카테고리분류/OCR 텍스트 정리/propose의 "groq" 슬롯이 공통으로 쓰는 범용
+    # 모델. 원래는 Groq 무료(on-demand) 티어의 분당 토큰(TPM) 한도가 가장 넉넉한
+    # llama-3.3-70b-versatile을 썼는데(검색 결과 12건을 그대로 프롬프트에 넣으면
+    # 이 한도를 매번 초과했다 - agents/base.py의 _SNIPPET_MAX_CHARS로 기본 해결),
+    # 2026-08-18 llama-3.3-70b-versatile이 Groq에서 완전히 내려가(계정
+    # /v1/models 조회에도 안 잡힘) 모든 호출이 404로 죽는 게 확인됐고("llama
+    # 모델 전부 GPT-oss 무료 모델로 바꿔줘") - 그라운딩 회귀 파일럿에서
+    # gpt-oss-20b(refine과 같은 모델)로 한 번 바꿨는데, 그러자 refine + propose +
+    # 카테고리분류 + OCR이 전부 gpt-oss-20b의 같은 20만 토큰/일 예산을 나눠 쓰게
+    # 돼 오히려 더 빨리(같은 파일럿의 43번째 케이스 근처) 소진됐다 - 바로 아래
+    # groq_refine_model과 겹치지 않게 gpt-oss-120b(judge와 공유)로 옮겼다.
+    # propose는 output_schema를 안 쓰므로(순수 JSON 배열 텍스트를 직접 파싱)
+    # 애초에 구조화 출력 지원 여부와 무관하게 아무 모델이나 쓸 수 있다 - judge와
+    # 공유하는 이 조합이 refine과 공유하는 것보다 실제로 더 나은지는 다음
+    # 파일럿으로 다시 확인해야 한다(judge는 후보가 1개면 스킵되지만 propose는
+    # 매 질의 항상 실행돼, 어느 쪽이 덜 부딪히는지는 아직 추정일 뿐 실측하지
+    # 않았다).
     groq_model: str = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
     # refine은 프롬프트가 원본 질의 하나뿐이라 작지만, ADK가 output_schema를
     # response_format=json_schema로 요청한다 - groq/compound-mini는 이를 지원하지

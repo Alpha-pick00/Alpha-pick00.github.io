@@ -10,7 +10,7 @@ from . import decision_cache
 from . import facet_cache
 from . import price_table as price_table_module
 from . import search as search_module
-from .agents import deepseek, gemini, gpt, judge
+from .agents import deepseek, gpt, groq, judge
 from .agents.base import NO_CANDIDATE_ERROR, is_generic_listing_url
 from .config import settings
 from .intent import is_bulk_query, is_non_product_chitchat, needs_clarification
@@ -147,7 +147,7 @@ async def _search_danawa_urls_with_fallback(
 async def run_danawa_only_debate(
     query: str, base_query: str | None = None
 ) -> DecideResponse | BulkDecideResponse:
-    """LLM API 비용 절감을 위한 임시 로컬 실험 경로 - gpt/gemini/deepseek
+    """LLM API 비용 절감을 위한 임시 로컬 실험 경로 - gpt/groq/deepseek
     제안도, judge 최종 결정도 전부 건너뛴다. LLM 호출 0번. 다나와 실측
     가격표(다나와 직접검색만)에서 A등급(구매 링크 생성 가능) offer를
     규칙 기반으로 최종 추천으로 쓴다.
@@ -824,21 +824,56 @@ async def run_single_debate_stream(
         yield event
 
 
+async def _danawa_results_as_search_results(query: str, limit: int) -> list[SearchResult]:
+    """Tavily(search_module.search, danawa.com 도메인 한정)가 이 질의를 못 찾을
+    때 쓰는 대체 검색 소스(사용자 리포트, 2026-08-18: "다나와에 검색하면
+    나오는데 뭐가 문제인거야?" - 실제로 다나와 자체 검색엔 있는 상품이 Tavily
+    색인엔 없어서 대량구매 경로가 제안을 하나도 못 만든 사례가 있었다).
+    check_clarify_facets 등 다른 경로가 이미 쓰는 다나와 직접 검색을 재사용해,
+    같은 원리로 후보 검색 결과를 채운다."""
+    try:
+        items = await price_table_module._search_danawa_items(query, limit=limit)
+    except Exception:
+        return []
+    return [
+        SearchResult(
+            title=item["product_name"],
+            url=f"https://prod.danawa.com/info/?pcode={item['pcode']}",
+            snippet=item["product_name"],
+            score=None,
+        )
+        for item in items
+    ]
+
+
 async def run_bulk_debate(query: str) -> BulkDecideResponse | DecideResponse | ClarifyResponse:
     try:
         results = await search_module.search(query, max_results=10)
     except Exception:
         results = []
 
+    if not results:
+        results = await _danawa_results_as_search_results(query, price_table_module.MAX_DANAWA_URLS)
+
     proposals: list[BulkProposal] = list(
         await asyncio.gather(
             gpt.propose_bulk(query, results),
-            gemini.propose_bulk(query, results),
+            groq.propose_bulk(query, results),
             deepseek.propose_bulk(query, results),
         )
     )
 
-    decision = await judge.organize_options(query, proposals)
+    try:
+        decision = await judge.organize_options(query, proposals)
+    except RuntimeError:
+        # 대량구매로 분류됐지만(숫자+단위 휴리스틱, is_bulk_query) 제안을
+        # 하나도 못 찾은 경우 - 검색 자체가 안 됐거나(위 다나와 폴백도 실패)
+        # is_bulk_query()가 오판했을 수 있다(사용자 리포트, 2026-08-18: OCR로
+        # 읽은 지저분한 텍스트가 숫자+단위를 포함해 대량구매로 잘못 분류됨).
+        # 그대로 raw 예외를 흘려보내지 말고 단일상품 파이프라인으로 한 번 더
+        # 시도한다 - 검색 결과 자체가 없으면 거기서도 결국 실패하지만, 최소한
+        # NO_CANDIDATE_ERROR 같은 정돈된 한글 메시지로 끝난다.
+        return await run_single_debate(query)
 
     if len(decision.options) <= 1:
         # is_bulk_query()는 "숫자+단위가 있으면 대량구매성"이라는 근사치

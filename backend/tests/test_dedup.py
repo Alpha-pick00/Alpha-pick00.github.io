@@ -34,7 +34,7 @@ def test_same_shared_listing_url_with_conflicting_prices_stays_separate():
 def test_same_url_identical_price_merges():
     entries = [
         ("gpt", _candidate("무선 마우스", price_krw=12900, url="https://coupang.com/vp/products/1")),
-        ("gemini", _candidate("무선 마우스", price_krw=12900, url="https://coupang.com/vp/products/1")),
+        ("groq", _candidate("무선 마우스", price_krw=12900, url="https://coupang.com/vp/products/1")),
     ]
 
     merged = merge_candidates(entries)
@@ -47,7 +47,7 @@ def test_same_url_identical_price_merges():
 def test_same_url_small_price_difference_within_tolerance_merges():
     entries = [
         ("gpt", _candidate("무선 마우스", price_krw=12900, url="https://coupang.com/vp/products/1")),
-        ("gemini", _candidate("무선 마우스", price_krw=13200, url="https://coupang.com/vp/products/1")),
+        ("groq", _candidate("무선 마우스", price_krw=13200, url="https://coupang.com/vp/products/1")),
     ]
 
     merged = merge_candidates(entries)
@@ -59,7 +59,7 @@ def test_same_url_small_price_difference_within_tolerance_merges():
 def test_same_url_one_missing_price_merges_and_adopts_known_price():
     entries = [
         ("gpt", _candidate("무선 마우스", price_krw=None, url="https://coupang.com/vp/products/1")),
-        ("gemini", _candidate("무선 마우스", price_krw=12900, url="https://coupang.com/vp/products/1")),
+        ("groq", _candidate("무선 마우스", price_krw=12900, url="https://coupang.com/vp/products/1")),
     ]
 
     merged = merge_candidates(entries)
@@ -73,7 +73,7 @@ def test_same_seller_and_price_but_unrelated_name_stays_separate():
     섞일 수 있어, 상품명이 최소한 무관하지 않은지(token_set_ratio>=60) 확인해야 한다."""
     entries = [
         ("gpt", _candidate("쿠쿠 IH 압력밥솥 6인용", price_krw=99000, retailer="11번가", url="https://11st.co.kr/products/1")),
-        ("gemini", _candidate("다이슨 슈퍼소닉 헤어드라이어", price_krw=99000, retailer="11번가", url="https://11st.co.kr/products/2")),
+        ("groq", _candidate("다이슨 슈퍼소닉 헤어드라이어", price_krw=99000, retailer="11번가", url="https://11st.co.kr/products/2")),
     ]
 
     merged = merge_candidates(entries)
@@ -92,7 +92,7 @@ def test_tracking_params_only_difference_merges():
             ),
         ),
         (
-            "gemini",
+            "groq",
             _candidate("무선 마우스", price_krw=12900, url="https://coupang.com/vp/products/1/"),
         ),
     ]
@@ -100,7 +100,7 @@ def test_tracking_params_only_difference_merges():
     merged = merge_candidates(entries)
 
     assert len(merged) == 1
-    assert merged[0]["proposed_by"] == ["gpt", "gemini"]
+    assert merged[0]["proposed_by"] == ["gpt", "groq"]
 
 
 def test_empty_entries_returns_empty_list():
@@ -115,7 +115,7 @@ def test_different_iphone_model_cases_stay_separate_despite_high_name_similarity
     구형 모델이 최신 모델 제안을 밀어낼 수 있다."""
     entries = [
         ("gpt", _candidate("아이폰15 케이스 투명 젤리", price_krw=9900, retailer="쿠팡", url="https://coupang.com/vp/products/1")),
-        ("gemini", _candidate("아이폰6 케이스 투명 젤리", price_krw=1900, retailer="11번가", url="https://11st.co.kr/products/2")),
+        ("groq", _candidate("아이폰6 케이스 투명 젤리", price_krw=1900, retailer="11번가", url="https://11st.co.kr/products/2")),
     ]
 
     merged = merge_candidates(entries)
@@ -130,7 +130,7 @@ def test_purchase_type_conflict_keeps_new_and_used_case_separate():
     매칭에만 적용돼 있었다)."""
     entries = [
         ("gpt", _candidate("갤럭시S25 정품 케이스", price_krw=15000, retailer="쿠팡", url="https://coupang.com/vp/products/1")),
-        ("gemini", _candidate("갤럭시S25 중고 케이스", price_krw=3000, retailer="11번가", url="https://11st.co.kr/products/2")),
+        ("groq", _candidate("갤럭시S25 중고 케이스", price_krw=3000, retailer="11번가", url="https://11st.co.kr/products/2")),
     ]
 
     merged = merge_candidates(entries)
@@ -145,7 +145,7 @@ def test_same_product_different_retailers_picks_cheapest_price_and_matching_url(
     판매처의 값이 섞일 수 있다."""
     entries = [
         ("gpt", _candidate("에어팟 프로 2세대", price_krw=259000, retailer="쿠팡", url="https://coupang.com/vp/products/1")),
-        ("gemini", _candidate("에어팟 프로 2세대", price_krw=239000, retailer="11번가", url="https://11st.co.kr/products/2")),
+        ("groq", _candidate("에어팟 프로 2세대", price_krw=239000, retailer="11번가", url="https://11st.co.kr/products/2")),
         ("deepseek", _candidate("에어팟 프로 2세대", price_krw=259000, retailer="G마켓", url="https://gmarket.co.kr/products/3")),
     ]
 
