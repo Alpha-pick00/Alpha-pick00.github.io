@@ -77,6 +77,17 @@ class DanawaSearchItem(TypedDict):
     total_mall_count: int | None
 
 
+class DanawaSubCategory(TypedDict):
+    name: str
+    count: int
+
+
+class DanawaCategoryGroup(TypedDict):
+    name: str
+    count: int
+    subcategories: list[DanawaSubCategory]
+
+
 def _has_class(tag: str, class_name: str) -> str:
     """BeautifulSoup의 `tag.class_name` CSS 선택자와 동일한(토큰 단위) class
     매칭을 XPath로 표현한다. `contains(@class, ...)`만 쓰면 예를 들어
@@ -160,6 +171,58 @@ def parse_search_html(html: str, limit: int = 5) -> list[DanawaSearchItem]:
     return items
 
 
+def _parse_count(text: str) -> int | None:
+    digits = re.sub(r"[^0-9]", "", text or "")
+    return int(digits) if digits else None
+
+
+def parse_category_breakdown(html: str) -> list[DanawaCategoryGroup]:
+    """검색결과 페이지에 함께 내려오는 실측 카테고리 집계(대분류별 건수 +
+    중분류별 건수, div#SearchOption_CategoryArea)를 파싱한다.
+
+    B-3d 실측(2026-08-18, 사용자 리포트 "샤오미로 검색하면 AI 상세검색
+    카테고리에 휴대폰이 안 나온다") - li.prod_item 상품명 표본(parse_search_html,
+    최대 90개)은 다나와 검색 순위 상위에 쏠려 있어서, 특정 대분류 상품이 표본에
+    아예 안 걸리면 그 카테고리는 영원히 못 본다(실측: "샤오미" 상위 40개가 전부
+    생활가전/액세서리라 휴대폰이 하나도 없었다 - 실제로는 다나와에 있다,
+    "샤오미 스마트폰"으로 검색하면 바로 나온다). 이 집계는 표본이 아니라 다나와
+    자체 카테고리 색인(대분류당 수만 건 단위)이라 표본 편향에서 자유롭다."""
+    if NO_RESULT_TEXT in html:
+        return []
+
+    doc = lxml_html.fromstring(html)
+    groups: list[DanawaCategoryGroup] = []
+
+    for item_el in doc.xpath(_has_class("div", "main_cate_item")):
+        wraps = item_el.xpath(_has_class("div", "mcl_wrap"))
+        if not wraps:
+            continue
+        name_links = wraps[0].xpath(_has_class("h4", "mcl_tit") + "/a")
+        count_spans = wraps[0].xpath(_has_class("span", "count"))
+        if not name_links or not count_spans:
+            continue
+        name = _text_with_spaces(name_links[0])
+        count = _parse_count(count_spans[0].text_content())
+        if not name or count is None:
+            continue
+
+        subcategories: list[DanawaSubCategory] = []
+        for li in item_el.xpath(_has_class("ul", "depth_list") + "/li"):
+            sub_titles = li.xpath(_has_class("span", "tit"))
+            sub_counts = li.xpath(_has_class("span", "count"))
+            if not sub_titles or not sub_counts:
+                continue
+            sub_name = _text_with_spaces(sub_titles[0])
+            sub_count = _parse_count(sub_counts[0].text_content())
+            if not sub_name or sub_count is None:
+                continue
+            subcategories.append({"name": sub_name, "count": sub_count})
+
+        groups.append({"name": name, "count": count, "subcategories": subcategories})
+
+    return groups
+
+
 # ---------------------------------------------------------------------------
 # 네트워크 계층 - TTL 캐시 + 도메인별(값이 다른) 요청 간격 제한.
 # fetchers.danawa의 동일 패턴을 따르되, search.danawa.com만 10초로 분리한다.
@@ -169,6 +232,7 @@ def parse_search_html(html: str, limit: int = 5) -> list[DanawaSearchItem]:
 @dataclass
 class _CacheEntry:
     items: list[DanawaSearchItem]
+    categories: list[DanawaCategoryGroup]
     expires_at: float
 
 
@@ -178,7 +242,7 @@ class _TTLCache:
         self._store: dict[str, _CacheEntry] = {}
         self._lock = asyncio.Lock()
 
-    async def get(self, key: str) -> list[DanawaSearchItem] | None:
+    async def get(self, key: str) -> _CacheEntry | None:
         async with self._lock:
             entry = self._store.get(key)
             if entry is None:
@@ -186,11 +250,15 @@ class _TTLCache:
             if entry.expires_at < time.monotonic():
                 del self._store[key]
                 return None
-            return entry.items
+            return entry
 
-    async def set(self, key: str, items: list[DanawaSearchItem]) -> None:
+    async def set(
+        self, key: str, items: list[DanawaSearchItem], categories: list[DanawaCategoryGroup]
+    ) -> None:
         async with self._lock:
-            self._store[key] = _CacheEntry(items=items, expires_at=time.monotonic() + self._ttl)
+            self._store[key] = _CacheEntry(
+                items=items, categories=categories, expires_at=time.monotonic() + self._ttl
+            )
 
 
 class _DomainThrottle:
@@ -269,7 +337,7 @@ async def search_danawa(query: str, limit: int = 5) -> list[DanawaSearchItem]:
     cache_key = _normalize_query(query)
     cached = await _cache.get(cache_key)
     if cached is not None:
-        return cached[:limit]
+        return cached.items[:limit]
 
     url = SEARCH_URL_TEMPLATE.format(query=quote(query))
     domain = urlsplit(url).netloc.lower()
@@ -296,5 +364,20 @@ async def search_danawa(query: str, limit: int = 5) -> list[DanawaSearchItem]:
         return []
 
     items = parse_search_html(resp.text, limit=SEARCH_PAGE_PARSE_LIMIT)
-    await _cache.set(cache_key, items)
+    categories = parse_category_breakdown(resp.text)
+    await _cache.set(cache_key, items, categories)
     return items[:limit]
+
+
+async def search_danawa_categories(query: str) -> list[DanawaCategoryGroup]:
+    """같은 검색결과 페이지에서 얻은 카테고리 집계(대분류/중분류별 건수)를
+    반환한다 - 이 함수 스스로는 절대 네트워크 요청을 내지 않는다(캐시 전용).
+    반드시 같은 query로 search_danawa()를 먼저 호출해 캐시를 채워둔 뒤
+    불러야 한다(app.debate.check_clarify_facets가 items를 먼저 가져온
+    뒤에만 이 함수를 부르는 식으로 이 순서를 지킨다) - 캐시에 없으면(아직
+    안 불렀거나, 만료됐거나, search_danawa 자체가 실패해 캐시되지 않았으면)
+    조용히 빈 리스트를 반환한다. 이 함수가 스스로 다시 요청을 낸다면
+    search_danawa()가 이미 낸 요청과 별개로 10초 Crawl-delay를 한 번 더
+    태우게 되므로 절대 그렇게 하지 않는다."""
+    cached = await _cache.get(_normalize_query(query))
+    return cached.categories if cached is not None else []

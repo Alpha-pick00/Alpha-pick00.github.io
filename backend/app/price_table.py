@@ -200,6 +200,22 @@ async def _search_danawa_items(query: str, limit: int = MAX_DANAWA_URLS) -> list
         return []
 
 
+async def _search_danawa_categories(query: str) -> list[danawa_search.DanawaCategoryGroup]:
+    """AI 상세검색 "카테고리" facet의 실측 출처(app.debate.check_clarify_facets) -
+    _search_danawa_items와 같은 페이지/캐시를 공유하므로(danawa_search._fetch_entry)
+    같은 query에 대해 이미 _search_danawa_items를 호출했다면 추가 네트워크
+    요청이 없다. 호출부가 items가 비어있을 때(검색 실패/차단)는 아예 부르지
+    않으므로, 여기서 다시 막히거나 실패해도 예외 없이 빈 리스트만 반환한다."""
+    try:
+        return await danawa_search.search_danawa_categories(query)
+    except danawa_search.DanawaSearchBlocked:
+        logger.warning("danawa category breakdown search blocked for query=%r", query)
+        return []
+    except Exception:
+        logger.exception("danawa category breakdown search crashed for query=%r", query)
+        return []
+
+
 async def _search_danawa_urls(query: str, limit: int = MAX_DANAWA_URLS) -> list[str]:
     """search.danawa.com 직접 검색(B-3)으로 pcode를 찾아 상세페이지 URL로
     바꾼다. 성능 실측용 임시 배선 - Tavily 경로와 합집합으로만 쓰이므로,
