@@ -15,6 +15,7 @@ B-3a 실측으로 확정된 전제 두 가지:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from collections import defaultdict
@@ -34,8 +35,21 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+# 2026-08-18 실측: search.danawa.com이 AWS(데이터센터 IP 대역)를 403으로
+# 차단한다(prod.danawa.com은 같은 IP에서 정상 - 이 검색 엔드포인트만 막힘).
+# 막히지 않은 로컬 회선에 scripts/danawa_search_relay.py를 띄우고 이 값을
+# 그 공개 URL로 설정하면, search_danawa()가 search.danawa.com을 직접 때리는
+# 대신 그 릴레이를 거쳐간다(응답 상태코드/본문을 그대로 대리 전달하므로
+# 파싱 로직은 그대로다). 안 설정돼 있으면(로컬 개발 등, 직접 접근에 문제
+# 없음) 기존처럼 직접 요청한다.
+DANAWA_SEARCH_RELAY_URL = os.environ.get("DANAWA_SEARCH_RELAY_URL")
+
 SEARCH_DOMAIN = "search.danawa.com"
 REQUEST_TIMEOUT = 5.0
+# 릴레이(DANAWA_SEARCH_RELAY_URL) 경유 시 전용 타임아웃 - 릴레이가 자체 10초
+# Crawl-delay를 기다린 뒤에야 응답하므로 REQUEST_TIMEOUT(5초)로는 항상
+# 타임아웃난다. 10초 대기 + 실제 요청 여유분을 더해 15초로 잡는다.
+RELAY_REQUEST_TIMEOUT = 15.0
 MAX_RETRIES = 1  # 403은 이 예산과 무관하게 즉시 포기 - fetchers.danawa와 동일 정책
 
 # robots.txt(search.danawa.com)에 명시된 값. 절대 낮추지 않는다 - 지키지 않으면
@@ -339,14 +353,22 @@ async def search_danawa(query: str, limit: int = 5) -> list[DanawaSearchItem]:
     if cached is not None:
         return cached.items[:limit]
 
-    url = SEARCH_URL_TEMPLATE.format(query=quote(query))
+    if DANAWA_SEARCH_RELAY_URL:
+        url = f"{DANAWA_SEARCH_RELAY_URL.rstrip('/')}/danawa-search?query={quote(query)}"
+        # 릴레이는 자체 10초 Crawl-delay를 기다린 뒤에야 응답하므로(최악의
+        # 경우 대기 + 요청시간 ≈ 12초), 직접 요청용 REQUEST_TIMEOUT(5초)로는
+        # 릴레이 응답을 기다리다 항상 타임아웃난다.
+        request_timeout: float = RELAY_REQUEST_TIMEOUT
+    else:
+        url = SEARCH_URL_TEMPLATE.format(query=quote(query))
+        request_timeout = REQUEST_TIMEOUT
     domain = urlsplit(url).netloc.lower()
 
     await _throttle.wait(domain)
     try:
         async with httpx.AsyncClient(
             headers={"User-Agent": USER_AGENT, "Accept-Language": "ko-KR,ko;q=0.9"},
-            timeout=REQUEST_TIMEOUT,
+            timeout=request_timeout,
             follow_redirects=True,
         ) as client:
             resp, error = await _fetch_html(client, url)

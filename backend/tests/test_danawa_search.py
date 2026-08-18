@@ -215,6 +215,46 @@ def test_search_danawa_returns_items_on_200(monkeypatch):
     assert items[0]["pcode"] == "59537216"
 
 
+def test_search_danawa_routes_through_relay_when_configured(monkeypatch):
+    """DANAWA_SEARCH_RELAY_URL이 설정돼 있으면(2026-08-18: AWS IP가
+    search.danawa.com에서 403으로 차단당해 막히지 않은 로컬 회선의 릴레이를
+    거쳐가게 함) search.danawa.com을 직접 때리지 않고 그 릴레이 URL로
+    요청해야 한다 - 응답 파싱은 그대로다(릴레이가 상태코드/본문을 그대로
+    대리 전달하므로)."""
+    fixture_html = (FIXTURES / "danawa_search_buds3pro.html").read_text(encoding="utf-8")
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, text=fixture_html)
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setattr(danawa_search, "DANAWA_SEARCH_RELAY_URL", "https://relay.example.com")
+
+    items = asyncio.run(danawa_search.search_danawa("릴레이 라우팅 테스트 쿼리", limit=3))
+
+    assert len(items) == 3
+    assert len(seen_urls) == 1
+    assert seen_urls[0].startswith("https://relay.example.com/danawa-search?query=")
+    assert "search.danawa.com" not in seen_urls[0]
+
+
+def test_search_danawa_uses_direct_url_when_relay_not_configured(monkeypatch):
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, text=danawa_search.NO_RESULT_TEXT)
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setattr(danawa_search, "DANAWA_SEARCH_RELAY_URL", None)
+
+    asyncio.run(danawa_search.search_danawa("릴레이 미설정 테스트 쿼리"))
+
+    assert len(seen_urls) == 1
+    assert seen_urls[0].startswith("https://search.danawa.com/dsearch.php")
+
+
 def test_search_danawa_cache_is_not_capped_by_first_callers_limit(monkeypatch):
     """회귀 테스트(2026-08-13: "APLLE 을 선택했을때 시리즈 후보가 너무 적어") -
     같은 query를 먼저 작은 limit(예: 가격표 실측 경로의 3)으로 검색해 캐시해둔
