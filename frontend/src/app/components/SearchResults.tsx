@@ -18,10 +18,12 @@ const fadeUp = {
 
 // agent="gpt" 슬롯은 내부 식별자만 그대로고 실제 모델은 Qwen이다(2026-08-15,
 // "GPT 토큰이 더 이상 없어서 Qwen 성능 제일 좋은 걸로 바꿔줘" - 백엔드
-// agents/gpt.py 참고). 사용자에게 보이는 이름만 여기서 바꾼다.
+// agents/gpt.py 참고). 사용자에게 보이는 이름만 여기서 바꾼다. "gemini" 슬롯은
+// 2026-08-18("Gemini 이제 안쓰니까 이름 제대로 바꿔서 코드 반영해") 식별자
+// 자체를 "groq"로 리네임했다(agents/groq.py 참고) - 표시 이름도 함께 바꿨다.
 const AGENT_LABEL: Record<string, string> = {
   gpt: 'Qwen',
-  gemini: 'Gemini',
+  groq: 'Groq',
   deepseek: 'DeepSeek',
 };
 
@@ -76,7 +78,7 @@ const BrandOptionRow = ({ option }: { option: BrandOption }) => (
 const STAGE_LABEL: Record<DecideStage, string> = {
   refining: '질의를 다듬고 있습니다',
   searching: '다나와에서 검색하고 있습니다',
-  proposing: 'Qwen · Gemini · DeepSeek가 후보를 찾고 있습니다',
+  proposing: 'Qwen · Groq · DeepSeek가 후보를 찾고 있습니다',
   challenging: 'DeepSeek가 근거를 검증하고 있습니다',
   judging: 'Claude가 근거를 비교해 최종 추천을 고르고 있습니다',
 };

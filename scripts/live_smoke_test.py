@@ -1,7 +1,7 @@
 """STEP 5 라이브 스모크 테스트 - 실제 /decide 파이프라인(run_single_debate)을
 5개 쿼리로 딱 1회씩만 실행한다. Tavily/LLM/다나와 전부 진짜 네트워크 요청.
 
-계측은 관찰 전용(observe-only) - gpt/gemini/deepseek.propose와
+계측은 관찰 전용(observe-only) - gpt/groq/deepseek.propose와
 price_table.fetch_price_tables를 시간 측정 래퍼로 감싸되, 반환값은 원본
 그대로 통과시킨다(동작 변경 없음, funnel-telemetry 때와 같은 원칙).
 
@@ -24,7 +24,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app import debate  # noqa: E402
 from app import price_table as price_table_module  # noqa: E402
-from app.agents import deepseek, gemini, gpt  # noqa: E402
+from app.agents import deepseek, gpt, groq  # noqa: E402
 from fetchers import danawa  # noqa: E402
 
 QUERIES = [
@@ -67,7 +67,7 @@ async def _fetch_html_watch(client, url):
 
 # 관찰 전용 계측 - 반환값은 원본 그대로, 동작 변경 없음.
 gpt.propose = _wrap_timed("gpt", gpt.propose)
-gemini.propose = _wrap_timed("gemini", gemini.propose)
+groq.propose = _wrap_timed("groq", groq.propose)
 deepseek.propose = _wrap_timed("deepseek", deepseek.propose)
 price_table_module.fetch_price_tables = _wrap_timed("danawa", price_table_module.fetch_price_tables)
 danawa._fetch_html = _fetch_html_watch
@@ -93,7 +93,7 @@ async def run_one(query: str) -> dict:
             else:
                 grades["C"] += 1
 
-    llm_times = [timings.get(k, 0.0) for k in ("gpt", "gemini", "deepseek")]
+    llm_times = [timings.get(k, 0.0) for k in ("gpt", "groq", "deepseek")]
     llm_max = max(llm_times) if llm_times else 0.0
     danawa_time = timings.get("danawa", 0.0)
 

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 # 선택 대상 풀에 직접 들어간다. 프론트엔드는 AGENT_LABEL[agent] || agent로
 # 렌더링해(frontend/src/app/components/SearchResults.tsx) 모르는 값이 와도
 # 원문 그대로 표시할 뿐 깨지지 않는다 - 확인 후 추가했다.
-AgentName = Literal["gpt", "gemini", "deepseek", "danawa"]
+AgentName = Literal["gpt", "groq", "deepseek", "danawa"]
 AuthProvider = Literal["google", "kakao", "naver"]
 
 

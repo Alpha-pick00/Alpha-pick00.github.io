@@ -10,7 +10,7 @@ from . import decision_cache
 from . import facet_cache
 from . import price_table as price_table_module
 from . import search as search_module
-from .agents import deepseek, gemini, gpt, judge
+from .agents import deepseek, gpt, groq, judge
 from .agents.base import NO_CANDIDATE_ERROR, is_generic_listing_url
 from .config import settings
 from .intent import is_bulk_query, is_non_product_chitchat, needs_clarification
@@ -147,7 +147,7 @@ async def _search_danawa_urls_with_fallback(
 async def run_danawa_only_debate(
     query: str, base_query: str | None = None
 ) -> DecideResponse | BulkDecideResponse:
-    """LLM API 비용 절감을 위한 임시 로컬 실험 경로 - gpt/gemini/deepseek
+    """LLM API 비용 절감을 위한 임시 로컬 실험 경로 - gpt/groq/deepseek
     제안도, judge 최종 결정도 전부 건너뛴다. LLM 호출 0번. 다나와 실측
     가격표(다나와 직접검색만)에서 A등급(구매 링크 생성 가능) offer를
     규칙 기반으로 최종 추천으로 쓴다.
@@ -858,7 +858,7 @@ async def run_bulk_debate(query: str) -> BulkDecideResponse | DecideResponse | C
     proposals: list[BulkProposal] = list(
         await asyncio.gather(
             gpt.propose_bulk(query, results),
-            gemini.propose_bulk(query, results),
+            groq.propose_bulk(query, results),
             deepseek.propose_bulk(query, results),
         )
     )

@@ -490,7 +490,7 @@ def test_exclude_leaves_bridge_passthrough_url_untouched():
         price_source="danawa_offer",
     )
     fallback_proposal = Proposal(
-        agent="gemini",
+        agent="groq",
         product_name="전혀 다른 상품",
         price="99,000원",
         retailer="G마켓",
@@ -520,7 +520,7 @@ def test_exclude_replaces_broken_bridge_passthrough_cmpnyc():
         chosen_agent="gpt",
     )
     fallback_proposal = Proposal(
-        agent="gemini",
+        agent="groq",
         product_name="테스트 상품",
         price="99,000원",
         retailer="G마켓",
@@ -550,7 +550,7 @@ def test_exclude_danawa_falls_back_to_other_proposal_when_no_a_grade_match():
         chosen_agent="gpt",
     )
     fallback_proposal = Proposal(
-        agent="gemini",
+        agent="groq",
         product_name="테스트 상품",
         price="21,000원",
         retailer="G마켓",
@@ -730,7 +730,7 @@ def test_fetch_price_tables_caps_total_urls_at_max_danawa_urls(monkeypatch):
 
 
 def _forbid_llm_calls(monkeypatch):
-    """gpt/gemini/deepseek/judge 중 하나라도 LLM 클라이언트를 만들면 테스트가
+    """gpt/groq/deepseek/judge 중 하나라도 LLM 클라이언트를 만들면 테스트가
     즉시 실패하게 만든다 - "LLM 호출 0번"이라는 계약을 실제로 검증하기 위함.
     개별 함수(propose 등) 대신 각 모듈의 _client()를 막는다 - 그 안의 모든
     LLM 호출이 결국 _client()를 거치므로, 어떤 함수가 호출되든 빠짐없이 잡는다."""
@@ -739,7 +739,7 @@ def _forbid_llm_calls(monkeypatch):
         raise AssertionError("LLM이 호출됐다 - run_danawa_only_debate는 LLM을 절대 부르면 안 된다")
 
     monkeypatch.setattr("app.agents.gpt._client", _boom)
-    monkeypatch.setattr("app.agents.gemini._client", _boom)
+    monkeypatch.setattr("app.agents.groq._client", _boom)
     monkeypatch.setattr("app.agents.deepseek._client", _boom)
     monkeypatch.setattr("app.agents.judge._client", _boom)
 
@@ -884,7 +884,7 @@ def test_decide_danawa_only_endpoint_returns_200_with_no_proposals(monkeypatch):
 
 
 def test_decide_auto_routes_to_danawa_only_when_no_llm_key_configured(monkeypatch):
-    # 일부러 gpt/gemini/deepseek/judge를 mock하지 않는다 - 그 상태로도(=진짜로
+    # 일부러 gpt/groq/deepseek/judge를 mock하지 않는다 - 그 상태로도(=진짜로
     # 안 불려야) 200이 나와야 라우팅이 제대로 됐다는 뜻이다. 잘못 라우팅되면
     # mock 안 된 진짜 LLM 호출이 conftest의 네트워크 차단에 걸려 502가 난다.
     monkeypatch.setattr("app.debate._any_llm_key_configured", lambda: False)

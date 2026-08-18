@@ -368,7 +368,7 @@ async def decide_clarify(
 
 @app.post("/decide/danawa-only", response_model=DecideResponse | BulkDecideResponse)
 async def decide_danawa_only(request: DecideRequest) -> DecideResponse | BulkDecideResponse:
-    """임시 실험 엔드포인트 - LLM 호출 0번(gpt/gemini/deepseek 제안, judge 결정
+    """임시 실험 엔드포인트 - LLM 호출 0번(gpt/groq/deepseek 제안, judge 결정
     전부 생략), 다나와 실측 가격표만으로 규칙 기반 추천. LLM API 비용 절감
     목적의 로컬 테스트 경로라 /decide와 별도로 둔다 - 프론트엔드는 아직
     이 경로를 쓰지 않는다. 검색어가 서로 다른 상품에 걸쳐 있으면(예: "노트북")
