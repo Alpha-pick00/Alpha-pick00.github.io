@@ -34,7 +34,26 @@ async def extract_text(image_bytes: bytes) -> OcrResult:
             )
         latency_ms = int((time.perf_counter() - t0) * 1000)
         data = response.json()
-        result = (data.get("responses") or [{}])[0]
+
+        # 요청 전체가 거부되면(예: 사진 용량 초과, API 키 무효, 쿼터 초과)
+        # "responses" 배열 없이 최상위에 {"error": {...}}만 온다 - 예전 코드는
+        # 이 경우를 안 보고 바로 `(data.get("responses") or [{}])[0]`로 빈 dict를
+        # 만들어버려서, 실제로는 API가 에러를 냈는데도 "텍스트 없음"으로 조용히
+        # 잘못 처리했다(사용자 리포트, 2026-08-14: "구글 비전에서는 제대로
+        # 읽었었는데 텍스트를 찾지 못했습니다 라고 뜸" - 5712x4284 고해상도 사진
+        # 여러 장에서 재현됨, 용량 초과로 요청 전체가 거부됐을 가능성이 높음).
+        top_level_error = data.get("error")
+        if top_level_error:
+            message = top_level_error.get("message") or f"Vision API 오류(status {response.status_code})"
+            return OcrResult(latency_ms=latency_ms, error=message)
+
+        responses = data.get("responses")
+        if not responses:
+            return OcrResult(
+                latency_ms=latency_ms,
+                error=f"Vision API가 예상치 못한 응답을 반환했습니다(status {response.status_code}).",
+            )
+        result = responses[0]
 
         if "error" in result:
             return OcrResult(latency_ms=latency_ms, error=result["error"].get("message"))
