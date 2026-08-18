@@ -39,20 +39,51 @@ Qwen(DashScope) 무료 티어가 완전히 소진됐는데 나머지 49개를 �
 연속으로 실패했는가"로 트리거 조건을 바꿨다 - 실패 사유를 해석하려 하지
 않고, 실패가 반복되면 그냥 제공자 상태를 직접 재확인한다.
 
+2026-08-18("통과율이 코드 품질이 아니라 API 쿼터 상태를 반영하고 있다") -
+history를 보면 통과율이 17/50 -> 6/50 -> 5/50으로 떨어졌지만 세 실행 모두
+infra_note에 "제공자 토큰 한도 소진"이 적혀 있었다. 근본 원인은 실패를 한
+버킷(failures)에 다 몰아넣고 그 버킷 크기로 통과율 분모를 잡았던 것 -
+"진짜 그라운딩 실패"와 "인프라 예외"와 "clarify로 빠짐(애초에 채점 대상이
+아님)"이 전부 같은 숫자로 섞였다. 네 가지를 고쳤다:
+1. 결과를 failures(그라운딩 실패)/errors(인프라 예외)/skipped(clarify 등
+   채점 제외)로 분리하고, 통과율은 failures 기준(passed / (passed+failed))
+   으로만 계산한다 - errors/skipped는 분모에서 뺀다.
+2. clarify로 빠지는 걸 skipped로 처리하는 것과 별개로, run_case가
+   `skip_clarify=True`로 호출해 애초에 안 빠지게 한다(CASES는 전부
+   브랜드·모델이 구체적이라 되묻기 없이 결정까지 가는 게 정상 경로 -
+   되묻기로 빠지면 API 비용만 쓰고 채점 데이터가 0건이 된다).
+3. product_name 판정 기본값을 문자열 `in` 검사(expect_keywords)에서
+   프로덕션이 실제로 쓰는 `price_table._product_name_matches`(rapidfuzz
+   유사도 + 모델/수량 충돌 가드 + 배타 토큰 가드)로 바꿨다 - "레이저
+   데스에더 V3"가 "Razer DeathAdder V3 (정품)"로 나오면 정답인데 표기
+   차이만으로 오답 처리되던 문제(테스트 기준과 프로덕션 매칭 기준이
+   달랐던 게 원인). expect_keywords는 지우지 않고 남겨두되, 명시된
+   케이스에서만 보조 확인(비채점 참고용 note)으로만 쓴다.
+4. 실행마다 결과를 scripts/results/{YYYYMMDD_HHMM}.json으로 쌓고(기존
+   grounding_regression_results.json은 최신 실행의 복사본으로 유지해 다른
+   스크립트가 안 깨지게 한다), 덮어쓰기 전에 직전 결과를 읽어 REGRESSION/
+   FIXED 쿼리 목록을 출력한다 - "몇 건 통과했는지"만으로는 어떤 케이스가
+   새로 깨졌는지 알 수 없었다. errors/skipped로 분류된 케이스는 인프라
+   문제를 회귀로 착각하지 않도록 이 비교에서 제외한다.
+
 검사 기준은 3가지 - 전부 이번 세션에서 실제로 겪은 버그 클래스를 겨냥한다:
 1. URL이 비어있거나 가격비교 사이트(다나와) 자체를 가리키면 안 된다 - "구매링크를
    안띄워주는거야" 버그(다나와 페이지 자체가 최종 URL로 노출됨)의 재발 감지.
 2. decision.verified가 명시적으로 False면 안 된다 - challenge가 이미 "그라운딩
    근거 없음"으로 판정한 답을 그대로 서빙하면 안 된다는, 이번에 하드닝한 원칙
    자체의 회귀 감지(특히 relaxed fallback 경로).
-3. product_name에 질의의 핵심 키워드가 하나도 안 보이면 안 된다 - 완전히 다른
-   상품을 그럴듯하게 골라오는(환각) 경우의 대략적 감지(느슨한 휴리스틱이라
-   "탐지 실패"의 반대 방향, 즉 오탐 쪽으로 관대하게 잡았다 - 정확한 상품 매칭
-   여부까지 판단하려면 사람이 최종 확인해야 한다).
+3. product_name이 질의와 동일 상품으로 매칭되지 않으면 안 된다 -
+   `price_table._product_name_matches`(rapidfuzz token_set_ratio + 모델/수량
+   충돌 가드 + 배타 토큰 가드)로 판정한다 - 완전히 다른 상품을 그럴듯하게
+   골라오는(환각) 경우의 감지이면서, 동시에 프로덕션이 실제 다나와 실측가를
+   대조할 때 쓰는 것과 같은 기준이라 "표기만 다른 정답"을 오답으로 잘못 잡지
+   않는다. expect_keywords가 명시된 케이스는 추가로 보조 확인(비채점)도 같이
+   기록한다.
 
-결과는 매 실행마다 scripts/grounding_regression_results.json에 통째로 남긴다 -
-실패 패턴을 프롬프트/임계값 보정에 쓰려면 터미널 출력을 다시 파싱하는 것보다
-정형 데이터로 남기는 편이 낫다.
+결과는 매 실행마다 scripts/results/{YYYYMMDD_HHMM}.json에 통째로 남기고,
+scripts/grounding_regression_results.json은 항상 최신 실행의 복사본으로
+유지한다 - 실패 패턴을 프롬프트/임계값 보정에 쓰려면 터미널 출력을 다시
+파싱하는 것보다 정형 데이터로 남기는 편이 낫다.
 """
 
 from __future__ import annotations
@@ -61,7 +92,7 @@ import asyncio
 import json
 import sys
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -74,10 +105,15 @@ from app import debate  # noqa: E402
 from app.agents import deepseek as deepseek_module  # noqa: E402
 from app.agents import gpt as gpt_module  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.price_table import DANAWA_ROOT_DOMAIN, _is_danawa_bridge_passthrough  # noqa: E402
+from app.price_table import (  # noqa: E402
+    DANAWA_ROOT_DOMAIN,
+    _is_danawa_bridge_passthrough,
+    _product_name_matches,
+)
 from app.schemas import ClarifyResponse  # noqa: E402
 
 RESULTS_PATH = Path(__file__).resolve().parent / "grounding_regression_results.json"
+RESULTS_DIR = Path(__file__).resolve().parent / "results"
 HISTORY_PATH = Path(__file__).resolve().parent / "grounding_regression_history.json"
 README_PATH = Path(__file__).resolve().parent.parent / "README.md"
 README_HISTORY_START = "<!-- GROUNDING_HISTORY_START -->"
@@ -160,6 +196,9 @@ async def check_providers_healthy() -> list[str]:
 class Case:
     category: str
     query: str
+    # 기본 판정은 _product_name_matches(프로덕션과 동일 기준)가 담당한다 -
+    # 이 필드는 지우지 않되, 명시된 케이스에서만 보조 확인(비채점 참고용)으로
+    # 쓴다(2026-08-18).
     expect_keywords: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -242,6 +281,12 @@ def _is_price_comparison_url(url: str) -> bool:
     return host == DANAWA_ROOT_DOMAIN or host.endswith("." + DANAWA_ROOT_DOMAIN)
 
 
+def _case_result(case: Case, status: str, **extra) -> dict:
+    """status: "passed" | "failed" | "error" | "skipped". 세 종류의 채점 제외
+    사유(error/skipped)를 failures와 섞지 않기 위한 공통 생성자(2026-08-18)."""
+    return {"category": case.category, "query": case.query, "status": status, **extra}
+
+
 # --- 실험 기록(2026-08-17, "앞으로 진행되는 모든 실험들도 그래프로 성능 지표 -----
 # Readme로 추가해주고 계속해서 업데이트해줘") - 완주한 실행마다 여기 기록을
 # 남기고 README의 마커 구간을 재생성한다. 중간에 쿼터 소진으로 중단된 실행은
@@ -265,28 +310,46 @@ def _append_history(entry: dict) -> list[dict]:
 
 def _render_history_section(history: list[dict]) -> str:
     """README에 그대로 끼워 넣을 마크다운(표 + mermaid xychart-beta)을 만든다.
-    순수 함수 - 파일 I/O 없이 테스트/미리보기 가능."""
+    순수 함수 - 파일 I/O 없이 테스트/미리보기 가능.
+
+    2026-08-18: 통과율 분모를 total에서 scored(= total - errors - skipped)로
+    바꿨다 - 옛 기록(scored/errors/skipped 필드가 없음)은 당시엔 이 구분이
+    없었으므로 scored=total로 간주해 그대로 해석한다(과거 기록의 의미를
+    바꾸지 않으면서 이후 기록부터 더 정확해진다)."""
     lines = [
         "실행할 때마다 이 표/그래프가 자동으로 갱신된다(`scripts/grounding_regression.py`가",
         "`scripts/grounding_regression_history.json`에 결과를 추가하고 이 구간을 재생성한다 -",
         "수동으로 이 마커(`GROUNDING_HISTORY_START`/`_END`) 사이를 직접 편집하지 말 것,",
         "다음 실행 때 덮어써진다).",
         "",
-        "| 날짜 | 통과율 | 통과/전체 | 내용 | 인프라 참고 |",
-        "| --- | --- | --- | --- | --- |",
+        "통과율은 채점 대상(scored = 전체 - 오류 - 제외)만 분모로 삼는다 - 제공자 쿼터",
+        "소진 같은 인프라 예외(오류)와 clarify로 빠진 케이스(제외)는 그라운딩 품질과",
+        "무관하므로 분모에서 뺀다.",
+        "",
+        "| 날짜 | 통과율 | 통과/채점 | 전체 · 오류 · 제외 | 내용 | 인프라 참고 |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for h in history:
-        rate = round(h["passed"] / h["total"] * 100)
-        lines.append(f"| {h['date']} | {rate}% | {h['passed']}/{h['total']} | {h['context']} | {h.get('infra_note') or '-'} |")
+        scored = h.get("scored", h["total"])
+        errors = h.get("errors", 0)
+        skipped = h.get("skipped", 0)
+        rate = round(h["passed"] / scored * 100) if scored else 0
+        lines.append(
+            f"| {h['date']} | {rate}% | {h['passed']}/{scored} | "
+            f"{h['total']} · {errors} · {skipped} | {h['context']} | {h.get('infra_note') or '-'} |"
+        )
 
     if history:
         dates = ", ".join(f'"{h["date"]}"' for h in history)
-        rates = ", ".join(str(round(h["passed"] / h["total"] * 100)) for h in history)
+        rates = ", ".join(
+            str(round(h["passed"] / h.get("scored", h["total"]) * 100)) if h.get("scored", h["total"]) else "0"
+            for h in history
+        )
         lines += [
             "",
             "```mermaid",
             "xychart-beta",
-            '    title "그라운딩 회귀 파일럿 통과율 추이(%)"',
+            '    title "그라운딩 회귀 파일럿 통과율 추이(%, 채점 대상 기준)"',
             f"    x-axis [{dates}]",
             '    y-axis "통과율 (%)" 0 --> 100',
             f"    bar [{rates}]",
@@ -311,14 +374,95 @@ def update_readme_history_section(history: list[dict]) -> None:
     print(f"README.md 그라운딩 실험 기록 섹션 갱신 완료 ({len(history)}건)", flush=True)
 
 
+def _save_results(results: list[dict]) -> Path:
+    """실행마다 scripts/results/{YYYYMMDD_HHMM}.json으로 쌓는다(2026-08-18) -
+    기존 RESULTS_PATH는 계속 "최신 실행의 복사본"으로 유지해, 이 경로를 직접
+    읽는 다른 스크립트가 있어도 깨지지 않게 한다."""
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    stamped_path = RESULTS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M')}.json"
+    payload = json.dumps(results, ensure_ascii=False, indent=2)
+    stamped_path.write_text(payload, encoding="utf-8")
+    RESULTS_PATH.write_text(payload, encoding="utf-8")
+    return stamped_path
+
+
+def _load_previous_results() -> list[dict] | None:
+    if not RESULTS_PATH.exists():
+        return None
+    try:
+        return json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _legacy_status(entry: dict) -> str:
+    """이 스키마 변경 전에 저장된 결과 항목(status 필드 없음)의 상태를
+    최선의 추정으로 되살린다 - 그때는 clarify/예외/진짜 실패가 전부 하나의
+    failures 리스트에 섞여 있었으므로, "failures가 있으면 failed"까지만
+    복원 가능하다(정확한 error/skipped 구분은 옛 데이터엔 없음)."""
+    if "status" in entry:
+        return entry["status"]
+    return "failed" if entry.get("failures") else "passed"
+
+
+def diff_against_previous(
+    prev_results: list[dict] | None, curr_results: list[dict]
+) -> tuple[list[str], list[str], int]:
+    """이전 실행 대비 REGRESSION(이전 통과 -> 이번 실패)/FIXED(이전 실패 -> 이번
+    통과) 쿼리 목록과 변동 없음 건수를 돌려준다(2026-08-18). 이번 실행 또는
+    이전 실행에서 error/skipped였던 케이스는 인프라 문제를 회귀로 착각하지
+    않도록 비교에서 제외한다."""
+    if not prev_results:
+        return [], [], 0
+
+    prev_by_query = {r["query"]: _legacy_status(r) for r in prev_results}
+    regressions: list[str] = []
+    fixed: list[str] = []
+    unchanged = 0
+    for r in curr_results:
+        if r["status"] not in ("passed", "failed"):
+            continue
+        prev_status = prev_by_query.get(r["query"])
+        if prev_status not in ("passed", "failed"):
+            continue
+        if prev_status == "passed" and r["status"] == "failed":
+            regressions.append(r["query"])
+        elif prev_status == "failed" and r["status"] == "passed":
+            fixed.append(r["query"])
+        else:
+            unchanged += 1
+    return regressions, fixed, unchanged
+
+
+def _print_diff_report(prev_results: list[dict] | None, curr_results: list[dict]) -> None:
+    regressions, fixed, unchanged = diff_against_previous(prev_results, curr_results)
+    print("-" * 70)
+    print("이전 실행 대비 비교 (오류/제외 케이스는 비교에서 제외):")
+    if prev_results is None:
+        print("  이전 결과 파일이 없어 비교 불가(최초 실행)")
+    else:
+        print(f"  REGRESSION (이전 통과 -> 이번 실패, {len(regressions)}건): {regressions}")
+        print(f"  FIXED      (이전 실패 -> 이번 통과, {len(fixed)}건): {fixed}")
+        print(f"  변동 없음: {unchanged}건")
+
+
 async def run_case(case: Case) -> dict:
-    result = await debate.run_single_debate(case.query)
+    # skip_clarify=True(2026-08-18) - CASES는 전부 브랜드·모델이 구체적인
+    # 질의라 되묻기 없이 결정까지 가는 게 정상 경로다. 이 플래그 없이는
+    # 파이프라인 내부 애매함 판정이 clarify로 빠뜨릴 수 있어(app/debate.py의
+    # run_single_debate, adk_pipeline.run이 이미 지원) API 비용만 쓰고
+    # 채점 데이터가 0건이 된다.
+    result = await debate.run_single_debate(case.query, skip_clarify=True)
     if isinstance(result, ClarifyResponse):
-        return {
-            "category": case.category,
-            "query": case.query,
-            "failures": ["단일 결정 대신 clarify(되묻기)로 빠짐 - 질의를 더 구체화 필요"],
-        }
+        # clarify(되묻기)는 그라운딩 실패가 아니라 채점 제외 대상이다 -
+        # skip_clarify=True를 줬는데도 여기로 빠졌다면 안전망 clarify(완전히
+        # 후보가 없을 때)가 동작한 것으로, 파이프라인 자체의 결함이라기보다
+        # "이 케이스가 채점 목적에 안 맞는다"는 신호에 가깝다.
+        return _case_result(
+            case,
+            "skipped",
+            skip_reason="clarify(되묻기)로 빠짐 - skip_clarify=True인데도 단일 결정에 도달하지 못함",
+        )
 
     decision = result.decision
     failures: list[str] = []
@@ -329,24 +473,39 @@ async def run_case(case: Case) -> dict:
     if decision.verified is False:
         failures.append("challenge 검증에서 명시적으로 탈락한 답이 최종 응답으로 노출됨 (verified=False)")
 
-    if case.expect_keywords:
-        haystack = decision.product_name or ""
-        if not any(kw in haystack for kw in case.expect_keywords):
-            failures.append(
-                f"product_name({haystack!r})에 기대 키워드({case.expect_keywords}) 중 어느 것도 없음"
-            )
+    haystack = decision.product_name or ""
+    # 기본 판정: 프로덕션(app/price_table.enrich_decision, app/adk_pipeline.py의
+    # 다나와 후보 채택)이 실제로 쓰는 것과 동일한 _product_name_matches -
+    # rapidfuzz 유사도 + 모델/수량 충돌 가드 + 배타 토큰 가드. 단순 부분 문자열
+    # 검사(예전 expect_keywords 방식)는 "Razer DeathAdder V3 (정품)"처럼 표기만
+    # 다른 정답을 오답으로 잘못 잡았다(2026-08-18).
+    if not _product_name_matches(case.query, haystack):
+        failures.append(
+            f"product_name({haystack!r})이 질의({case.query!r})와 동일 상품으로 매칭되지 않음 "
+            "(_product_name_matches 기준: 상품명 유사도 + 모델/수량 충돌 가드 + 배타 토큰 가드)"
+        )
 
-    return {
-        "category": case.category,
-        "query": case.query,
+    extra: dict = {
         "product_name": decision.product_name,
         "retailer": decision.retailer,
         "price": decision.price,
         "url": decision.url,
         "verified": decision.verified,
         "price_source": decision.price_source,
-        "failures": failures,
     }
+
+    # expect_keywords는 명시된 케이스에서만 보조 확인으로 쓴다 - 채점(failures)에는
+    # 반영하지 않는다. _product_name_matches가 이미 정답으로 인정한 걸 표기 차이로
+    # 다시 오답 취급하지 않기 위함(위 코멘트의 데스에더 사례가 정확히 이 경우).
+    if case.expect_keywords and not any(kw in haystack for kw in case.expect_keywords):
+        extra["keyword_check_note"] = (
+            f"참고(보조 확인, 채점 미반영): 기대 키워드 {case.expect_keywords} 중 "
+            f"product_name({haystack!r})에 없음"
+        )
+
+    if failures:
+        return _case_result(case, "failed", failures=failures, **extra)
+    return _case_result(case, "passed", **extra)
 
 
 async def main() -> None:
@@ -366,7 +525,11 @@ async def main() -> None:
         sys.exit(1)
     print("헬스체크 통과 - 4개 제공자 모두 정상. 50개 실행 시작.\n", flush=True)
 
-    results = []
+    # 덮어쓰기 전에 직전 실행 결과를 읽어둔다(2026-08-18) - 이번 실행이 끝난
+    # 뒤 REGRESSION/FIXED 비교에 쓴다.
+    prev_results = _load_previous_results()
+
+    results: list[dict] = []
     consecutive_failures = 0
     for i, case in enumerate(CASES):
         if i > 0:
@@ -376,7 +539,7 @@ async def main() -> None:
             r = await run_case(case)
         except Exception as exc:
             case_text = f"{type(exc).__name__}: {exc}"
-            r = {"category": case.category, "query": case.query, "failures": [f"예외 발생: {case_text}"]}
+            r = _case_result(case, "error", error=case_text)
         results.append(r)
         for k, v in r.items():
             print(f"  {k}: {v}", flush=True)
@@ -385,9 +548,11 @@ async def main() -> None:
         # 실패 사유 문자열을 신뢰하지 않는다 - 파이프라인이 provider의 원본
         # 429/insufficient_quota 예외를 내부에서 잡아 일반 RuntimeError나
         # clarify로 바꿔버리면 실패 텍스트에 소진 신호가 전혀 안 남는다(실제
-        # 겪은 사례). 대신 "사유 불문 연속 실패"를 트리거로 삼고, 실제 소진
-        # 여부는 항상 헬스체크로 직접 재확인한다.
-        if r["failures"]:
+        # 겪은 사례). 대신 "사유 불문 연속으로 passed가 아님"을 트리거로 삼고
+        # (failed/error/skipped 전부 포함 - 셋 중 어느 것으로 나타날지 알 수
+        # 없으므로 2026-08-18 스키마 분리 후에도 이 폭은 좁히지 않는다), 실제
+        # 소진 여부는 항상 헬스체크로 직접 재확인한다.
+        if r["status"] != "passed":
             consecutive_failures += 1
         else:
             consecutive_failures = 0
@@ -400,51 +565,80 @@ async def main() -> None:
         if consecutive_failures >= 2:
             still_unhealthy = await check_providers_healthy()
             if still_unhealthy:
-                RESULTS_PATH.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+                stamped_path = _save_results(results)
                 print("=" * 70)
                 print(f"중단: {i + 1}/{len(CASES)}건까지 실행 후 제공자 쿼터 소진 확인 - 여기서 멈춘다.")
                 for msg in still_unhealthy:
                     print(f"  - {msg}")
-                print(f"부분 결과 저장: {RESULTS_PATH}")
+                print(f"부분 결과 저장: {stamped_path} (최신 복사본: {RESULTS_PATH})")
+                _print_diff_report(prev_results, results)
                 print("=" * 70)
                 sys.exit(1)
             consecutive_failures = 0
 
-    RESULTS_PATH.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+    stamped_path = _save_results(results)
+
+    passed_results = [r for r in results if r["status"] == "passed"]
+    failed_results = [r for r in results if r["status"] == "failed"]
+    error_results = [r for r in results if r["status"] == "error"]
+    skipped_results = [r for r in results if r["status"] == "skipped"]
+    scored = len(passed_results) + len(failed_results)
+    rate = round(len(passed_results) / scored * 100) if scored else 0
 
     print("=" * 70)
-    failed = [r for r in results if r["failures"]]
-    print(f"전체 요약: {len(results)}건 중 {len(results) - len(failed)}건 통과, {len(failed)}건 실패")
-    print(f"결과 파일: {RESULTS_PATH}")
+    print(
+        f"전체 요약: {len(results)}건 시도 - 통과 {len(passed_results)} / 실패 {len(failed_results)} "
+        f"(채점 {scored}건 기준 통과율 {rate}%), 오류 {len(error_results)}건, 제외(clarify 등) {len(skipped_results)}건"
+    )
+    print(f"결과 파일: {stamped_path} (최신 복사본: {RESULTS_PATH})")
 
     by_category: dict[str, list[dict]] = {}
     for r in results:
         by_category.setdefault(r["category"], []).append(r)
     print("-" * 70)
-    print("카테고리별 통과율:")
+    print("카테고리별 통과율(채점된 케이스 기준):")
     for category, rows in by_category.items():
-        cat_failed = [r for r in rows if r["failures"]]
-        print(f"  {category}: {len(rows) - len(cat_failed)}/{len(rows)}")
+        cat_scored = [r for r in rows if r["status"] in ("passed", "failed")]
+        cat_passed = [r for r in cat_scored if r["status"] == "passed"]
+        cat_extra_n = len(rows) - len(cat_scored)
+        extra_note = f" (오류/제외 {cat_extra_n}건 별도)" if cat_extra_n else ""
+        if cat_scored:
+            print(f"  {category}: {len(cat_passed)}/{len(cat_scored)}{extra_note}")
+        else:
+            print(f"  {category}: 채점 0건{extra_note}")
     print("-" * 70)
 
-    if failed:
+    if failed_results:
         print("실패 상세:")
-        for r in failed:
+        for r in failed_results:
             print(f"  [FAIL] ({r['category']}) {r['query']}: {r['failures']}")
+    if error_results:
+        print("오류 상세:")
+        for r in error_results:
+            print(f"  [ERROR] ({r['category']}) {r['query']}: {r['error']}")
+    if skipped_results:
+        print("제외 상세:")
+        for r in skipped_results:
+            print(f"  [SKIP] ({r['category']}) {r['query']}: {r['skip_reason']}")
+
+    _print_diff_report(prev_results, results)
     print("=" * 70)
 
     history = _append_history(
         {
             "date": date.today().isoformat(),
             "total": len(results),
-            "passed": len(results) - len(failed),
+            "scored": scored,
+            "passed": len(passed_results),
+            "errors": len(error_results),
+            "skipped": len(skipped_results),
             "context": run_context,
             "infra_note": "",
         }
     )
     update_readme_history_section(history)
 
-    if failed:
+    if failed_results:
         sys.exit(1)
 
 

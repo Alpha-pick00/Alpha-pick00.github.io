@@ -108,7 +108,7 @@ const SearchContext = createContext<SearchContextValue | null>(null);
 // 정보를 찾지 못했다" - 시리즈 옵션 "초코파이 바나나" 자체가 이미 원래 검색어
 // "초코파이"를 포함하고 있어서, 그냥 이어붙이면 "초코파이"가 두 번 들어가
 // 검색이 이상하게 안 맞는 검색어가 됐다). 토큰(공백 기준) 단위로만 비교한다.
-const dedupeAppend = (base: string, addition: string): string => {
+export const dedupeAppend = (base: string, addition: string): string => {
   const baseTokens = base.trim().split(/\s+/).filter(Boolean);
   const seen = new Set(baseTokens.map((t) => t.toLowerCase()));
   const newTokens = addition
@@ -385,7 +385,13 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
     if (!origin || !conversation || values.length === 0) return;
     Object.entries(selected).forEach(([label, value]) => rememberPreference(label, value));
     const combined = values.reduce((acc, value) => dedupeAppend(acc, value), origin.requestQuery).trim();
-    const turn = newTurn(values.join(' · '), combined, undefined, origin.baseQuery);
+    // 2026-08-18(사용자 리포트: "핸드폰 한다음에 샤오미 넣었는데 샤오미만 다시
+    // 검색되는게 뭐하는거야 '핸드폰 샤오미' 이렇게 전에 했던것도 붙여서 넣어야지")
+    // - 실제로 백엔드에 보내는 requestQuery(=combined)는 이미 이전 검색어까지
+    // 합쳐져 있었지만, 말풍선에 보여주는 displayQuery는 방금 고른 값만
+    // (values.join)이라 마치 이전 맥락이 사라진 것처럼 보였다. 실제 검색어와
+    // 화면 표시를 일치시킨다.
+    const turn = newTurn(combined, combined, undefined, origin.baseQuery);
     appendTurn(conversation.id, turn);
     await runTurn(turn.id, turn.requestQuery, undefined, turn.baseQuery, selected);
   };
@@ -401,7 +407,9 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
     const personaOverride = personaLabel ? { [personaLabel]: value } : undefined;
     if (personaLabel) rememberPreference(personaLabel, value);
     const combined = dedupeAppend(origin.requestQuery, value).trim();
-    const turn = newTurn(value, combined, undefined, origin.baseQuery);
+    // 2026-08-18: selectFacets와 같은 이유로 displayQuery도 combined로 맞춘다 -
+    // 방금 고른 값만 보여주면 이전 검색어가 빠진 것처럼 보인다.
+    const turn = newTurn(combined, combined, undefined, origin.baseQuery);
     appendTurn(conversation.id, turn);
     await runTurn(turn.id, turn.requestQuery, undefined, turn.baseQuery, personaOverride);
   };

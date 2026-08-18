@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { AlertTriangle, ArrowUpRight, Check, RotateCcw, Search, Sparkles, Truck } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, Check, Loader2, RotateCcw, Search, Sparkles, Truck, X } from 'lucide-react';
 import type {
   ClarifyFacet as ClarifyFacetType,
   DecideResult,
@@ -8,7 +8,8 @@ import type {
   BrandOption,
   Proposal,
 } from '../lib/api';
-import { askClarifyQuestion } from '../lib/api';
+import { askClarifyQuestion, checkClarifyFacets } from '../lib/api';
+import { dedupeAppend } from '../context/SearchContext';
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
@@ -250,51 +251,145 @@ export const SearchResults = ({
   const [facetQuery, setFacetQuery] = useState<Record<string, string>>({});
   const facets = result.mode === 'clarify' ? result.options.facets : [];
 
+  // 2026-08-18(사용자 요청: "AI상세검색에서 샤오미 즉 검색어에 관련된거를
+  // 뜨게하라고 몇번을 말하냐") - 자유 텍스트로 타이핑한 값(예: "샤오미")은
+  // 원래 clarify 응답의 facet 목록엔 없던 값이라, 다른 facet들도 그 값을
+  // 반영해 좁혀줄 근거(options_by_selection)가 애초에 존재하지 않는다.
+  // "검색어에 관련된 것"을 실제로 보여주려면 지어내지 않고 진짜로 그 결합
+  // 검색어("핸드폰 샤오미")에 대해 다시 물어봐야 한다 - check_clarify_facets를
+  // base_query 없이 호출하면(캐시 재사용 최적화를 건너뛰어) 다나와를 그
+  // 결합 검색어로 실제로 다시 검색해서, 실제로 존재하는 샤오미 관련 facet
+  // (기종·용량 등)을 새로 뽑아온다. liveFacets가 있으면 원래 facets 대신
+  // 이걸 보여준다 - 라벨/구성이 달라질 수 있어 selectedFacets는 초기화한다.
+  const [liveFacets, setLiveFacets] = useState<ClarifyFacetType[] | null>(null);
+  const [liveFacetsLoading, setLiveFacetsLoading] = useState(false);
+  const lastLiveFetchRef = useRef<string | null>(null);
+  // 2026-08-18(사용자 요청: "결과 지금 좋은데 '샤오미' 친거 안사라지고 냅둬") -
+  // liveFacets가 로드되면 그걸 촉발한 원래 facet("핸드폰 기종")이 새 facet
+  // 세트(시리즈/모델/용량)엔 아예 없을 수 있어, 거기 타이핑해둔 "샤오미"를
+  // 보여줄 곳 자체가 사라졌다. 그 값을 여기 별도로 붙잡아두고 계속 칩으로
+  // 보여준다 - 최종 검색어에도 계속 포함시킨다(값이 실제로 사라지면 안 되니까).
+  const [appliedFreeText, setAppliedFreeText] = useState<Record<string, string>>({});
+  const displayFacets = liveFacets ?? facets;
+
+  // 지금까지 고른 값들(어느 facet이든 - 브랜드로 한정 안 됨)로 아직 안 고른
+  // facet들의 보이는 옵션을 즉시 좁힌다(추가 요청 없이, 사용자 요청 2026-08-13:
+  // "삼성전자를 누르면은 시리즈에 삼성전자에 관한것만" -> 2026-08-14: "시리즈에
+  // 초코파이 바나나를 골랏다면 용량에 없는것들은 선택할수없게" - 브랜드 전용
+  // 특수 케이스였던 걸 모든 facet 쌍으로 일반화했다). 여러 facet을 골랐으면
+  // 각각의 options_by_selection을 교집합으로 겹쳐 좁힌다.
+  const visibleOptionsFor = (facet: ClarifyFacetType, selected: Record<string, string>): string[] => {
+    let options = facet.options;
+    for (const [otherLabel, value] of Object.entries(selected)) {
+      if (otherLabel === facet.label) continue;
+      const filtered = facet.options_by_selection?.[value];
+      if (filtered) {
+        options = options.filter((o) => filtered.includes(o));
+      }
+    }
+    return options;
+  };
+
+  const computeNextSelectedFacets = (
+    prev: Record<string, string>,
+    label: string,
+    option: string
+  ): Record<string, string> => {
+    if (prev[label] === option) {
+      const next = { ...prev };
+      delete next[label];
+      return next;
+    }
+    const next = { ...prev, [label]: option };
+    // 이 선택으로 다른 facet의 보이는 옵션이 바뀌어 기존 선택이 더 이상
+    // 유효한 값이 아니게 됐으면 지운다 - 안 그러면 서로 안 맞는 조합(예:
+    // "초코파이 바나나" + "336g")이 그대로 남아있을 수 있다.
+    for (const other of displayFacets) {
+      if (other.label === label) continue;
+      const selectedForOther = next[other.label];
+      if (!selectedForOther) continue;
+      if (!visibleOptionsFor(other, next).includes(selectedForOther)) {
+        delete next[other.label];
+      }
+    }
+    return next;
+  };
+
+  // 2026-08-18 - 옵션 클릭마다 즉시 검색을 쏘면(직전 시도) 시리즈+용량+구매유형처럼
+  // 여러 축을 조합해서 한 번에 검색하는 AI 상세검색 본연의 기능이 깨진다(첫 클릭에서
+  // 바로 새 턴으로 넘어가버려 두 번째 축을 고를 기회가 없어짐, 사용자 리포트: "AI
+  // 상세검색별로 검색할수있는 기능을 왜 없애 - 다시 살려내고") - 되돌린다. 옵션
+  // 클릭은 다시 선택 상태만 바꾸고, 여러 축을 다 고른 뒤 "검색하기"를 눌러야
+  // 진행된다(2026-08-13/14 결정 그대로).
+  const selectFacetOption = (label: string, option: string) => {
+    setSelectedFacets((prev) => computeNextSelectedFacets(prev, label, option));
+  };
+
+  // 2026-08-18(사용자 리포트: "'마우스' 검색 후 브랜드에 '삼성' 넣었는데 그
+  // '삼성'(으)로 검색 버튼을 안 눌러도 검색하기가 활성화돼야지" + "특징에
+  // 인체공학을 누르고 검색하기를 누르니까 삼성 키워드 자체가 사라졌어") - 두
+  // 문제가 사실 하나다: 목록에 없는 값을 타이핑만 하고 그 facet의 "선택"
+  // 버튼을 안 눌렀으면 selectedFacets엔 전혀 안 남아서, (1) 검색하기가
+  // 안 켜지고 (2) 그 상태로 다른 facet을 확정해 검색하면 타이핑해둔 값이
+  // 통째로 사라졌다. 아직 명시적으로 선택 안 됐지만(=selectedFacets에 없지만)
+  // 매칭되는 옵션도 없는 타이핑 값은 "선택하겠다는 의도"로 보고, 검색하기의
+  // 활성화·최종 전송 값 둘 다에 자동으로 포함시킨다(각 facet당 한 번씩 클릭을
+  // 더 요구하지 않는다). 실제로 옵션 버튼을 클릭해 selectedFacets에 명시적으로
+  // 들어간 값이 있으면 그게 우선한다.
+  const pendingFreeTextFacets: Record<string, string> = {};
+  for (const facet of displayFacets) {
+    if (selectedFacets[facet.label]) continue;
+    const typed = (facetQuery[facet.label] ?? '').trim();
+    if (!typed) continue;
+    const opts = visibleOptionsFor(facet, selectedFacets);
+    const hasMatch = opts.some((o) => o.toLowerCase().includes(typed.toLowerCase()));
+    if (!hasMatch) pendingFreeTextFacets[facet.label] = typed;
+  }
+  const effectiveSelectedFacets = { ...selectedFacets, ...pendingFreeTextFacets, ...appliedFreeText };
+
+  useEffect(() => {
+    if (result.mode !== 'clarify') return;
+    if (Object.keys(pendingFreeTextFacets).length === 0) return;
+    const combined = Object.values(effectiveSelectedFacets)
+      .reduce((acc, v) => dedupeAppend(acc, v), result.query)
+      .trim();
+    if (!combined || combined === lastLiveFetchRef.current) return;
+
+    const timer = setTimeout(() => {
+      lastLiveFetchRef.current = combined;
+      setLiveFacetsLoading(true);
+      // base_query를 안 넘긴다 - 넘기면 백엔드가 캐시 재사용을 위해 원래
+      // 검색어("핸드폰")로만 검색하고 결과를 로컬 필터링하는데, 그 원래
+      // 검색결과엔애초에 샤오미가 없어 필터링하면 0건이 된다. base_query
+      // 없이 결합 검색어 그대로 새로 검색해야 진짜 샤오미 관련 결과가 나온다.
+      checkClarifyFacets(combined)
+        .then((resp) => {
+          if (resp.options.facets.length > 0) {
+            setLiveFacets(resp.options.facets);
+            // 이 요청을 쏘게 만든 자유 텍스트 값을 계속 붙잡아둔다(예:
+            // "핸드폰 기종"="샤오미") - 새로 받은 facet 세트엔 그 라벨이
+            // 아예 없을 수 있어도, 사용자가 타이핑한 값 자체는 화면에서
+            // 사라지면 안 되고 최종 검색어에도 계속 포함돼야 한다.
+            setAppliedFreeText((prev) => ({ ...prev, ...pendingFreeTextFacets }));
+            setSelectedFacets({});
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLiveFacetsLoading(false));
+    }, 600);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(pendingFreeTextFacets), JSON.stringify(effectiveSelectedFacets), result.mode, result.query]);
+
   if (result.mode === 'clarify') {
     const { brands, products, volumes, quantities } = result.options;
     const hasAnyOptions =
-      brands.length > 0 || facets.length > 0 || products.length > 0 || volumes.length > 0 || quantities.length > 0;
-
-    // 지금까지 고른 값들(어느 facet이든 - 브랜드로 한정 안 됨)로 아직 안 고른
-    // facet들의 보이는 옵션을 즉시 좁힌다(추가 요청 없이, 사용자 요청 2026-08-13:
-    // "삼성전자를 누르면은 시리즈에 삼성전자에 관한것만" -> 2026-08-14: "시리즈에
-    // 초코파이 바나나를 골랏다면 용량에 없는것들은 선택할수없게" - 브랜드 전용
-    // 특수 케이스였던 걸 모든 facet 쌍으로 일반화했다). 여러 facet을 골랐으면
-    // 각각의 options_by_selection을 교집합으로 겹쳐 좁힌다.
-    const visibleOptionsFor = (facet: ClarifyFacetType, selected: Record<string, string>): string[] => {
-      let options = facet.options;
-      for (const [otherLabel, value] of Object.entries(selected)) {
-        if (otherLabel === facet.label) continue;
-        const filtered = facet.options_by_selection?.[value];
-        if (filtered) {
-          options = options.filter((o) => filtered.includes(o));
-        }
-      }
-      return options;
-    };
-
-    const toggleFacetOption = (label: string, option: string) => {
-      setSelectedFacets((prev) => {
-        if (prev[label] === option) {
-          const next = { ...prev };
-          delete next[label];
-          return next;
-        }
-        const next = { ...prev, [label]: option };
-        // 이 선택으로 다른 facet의 보이는 옵션이 바뀌어 기존 선택이 더 이상
-        // 유효한 값이 아니게 됐으면 지운다 - 안 그러면 서로 안 맞는 조합(예:
-        // "초코파이 바나나" + "336g")이 그대로 남아있을 수 있다.
-        for (const other of facets) {
-          if (other.label === label) continue;
-          const selectedForOther = next[other.label];
-          if (!selectedForOther) continue;
-          if (!visibleOptionsFor(other, next).includes(selectedForOther)) {
-            delete next[other.label];
-          }
-        }
-        return next;
-      });
-    };
+      brands.length > 0 ||
+      displayFacets.length > 0 ||
+      products.length > 0 ||
+      volumes.length > 0 ||
+      quantities.length > 0;
 
     // 고정 축(제품/용량/개수) 중 이번 라운드에 물어볼 하나만 고른다 - 한 번에
     // 다 보여주면 서로 다른 축이 뒤섞여 어떤 조합을 고르는 건지 애매해진다.
@@ -320,6 +415,32 @@ export const SearchResults = ({
         <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
           {hasAnyOptions ? 'AI 상세검색 · 조건을 선택하거나 채팅으로 답해주세요' : '조건을 좁힐 수 없었어요'}
         </span>
+        {Object.keys(appliedFreeText).length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-4 last:mb-0">
+            {Object.entries(appliedFreeText).map(([label, value]) => (
+              <span
+                key={label}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-neutral-950 text-white text-sm font-light"
+              >
+                {value}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAppliedFreeText((prev) => {
+                      const next = { ...prev };
+                      delete next[label];
+                      return next;
+                    })
+                  }
+                  aria-label={`${value} 조건 해제`}
+                  className="hover:opacity-70 transition-opacity"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         {brands.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-4 last:mb-0">
             {brands.map((brand) => (
@@ -333,8 +454,14 @@ export const SearchResults = ({
             ))}
           </div>
         )}
-        {facets.map((facet) => {
-          const baseOptions = visibleOptionsFor(facet, selectedFacets);
+        {liveFacetsLoading && (
+          <div className="mb-4 flex items-center gap-2 text-xs font-light text-neutral-400">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            타이핑한 검색어와 관련된 조건을 다시 찾는 중...
+          </div>
+        )}
+        {displayFacets.map((facet) => {
+          const baseOptions = visibleOptionsFor(facet, effectiveSelectedFacets);
           const query = facetQuery[facet.label] ?? '';
           const visibleOptions = query.trim()
             ? baseOptions.filter((o) => o.toLowerCase().includes(query.trim().toLowerCase()))
@@ -342,14 +469,29 @@ export const SearchResults = ({
           return (
             <div key={facet.label} className="mb-4 last:mb-0">
               <span className="text-xs font-light text-neutral-400 block mb-2">{facet.label}</span>
-              {facet.options.length > 4 && (
+              {/* 원래 옵션이 4개 이하면 검색창 자체가 없었는데, 실제 궁합
+                  데이터로 다른 facet이 이 facet의 옵션을 전부 걸러낼 수도
+                  있어(정상 케이스, 예: 이미 고른 값과 공존하는 옵션이 없음) -
+                  그 경우에도 직접 타이핑할 길이 있어야 막다른 길이 안 된다. */}
+              {(facet.options.length > 4 || baseOptions.length === 0) && (
                 <div className="relative mb-2">
                   <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-300" />
                   <input
                     type="text"
                     value={query}
                     onChange={(e) => setFacetQuery((prev) => ({ ...prev, [facet.label]: e.target.value }))}
+                    onKeyDown={(e) => {
+                      // 2026-08-18(사용자 리포트: "샤오미를 치고 바로 엔터하면
+                      // 검색하게 바꿔줘") - 매칭 옵션이 없어 pendingFreeTextFacets에
+                      // 이미 잡힌 타이핑 값(및 다른 facet에서 이미 확정된 값)을
+                      // 그대로 검색하기와 동일하게 제출한다.
+                      if (e.key === 'Enter' && Object.keys(effectiveSelectedFacets).length > 0) {
+                        e.preventDefault();
+                        onConfirmFacets(effectiveSelectedFacets);
+                      }
+                    }}
                     placeholder={`${facet.label} 찾기`}
+                    autoComplete="off"
                     className="w-full pl-8 pr-3 py-2 rounded-full border border-black/10 text-sm font-light outline-none focus:border-neutral-950 transition-colors"
                   />
                 </div>
@@ -366,7 +508,7 @@ export const SearchResults = ({
                     return (
                       <button
                         key={option}
-                        onClick={() => toggleFacetOption(facet.label, option)}
+                        onClick={() => selectFacetOption(facet.label, option)}
                         className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full border text-sm font-light transition-all ${
                           isSelected
                             ? 'bg-neutral-950 text-white border-neutral-950'
@@ -380,6 +522,20 @@ export const SearchResults = ({
                       </button>
                     );
                   })
+                ) : query.trim() ? (
+                  // 2026-08-18(사용자 리포트: "다나와에는 아이폰 15랑 샤오미가
+                  // 있어" - 목록에 없는 값을 찾으면 막다른 "일치하는 항목이
+                  // 없어요"만 뜨고 검색할 방법이 없었다) - 백엔드가 미리 뽑아준
+                  // 옵션 목록은 그 순간 다나와 검색 결과 상위 몇 건에서 나온
+                  // 값일 뿐 전체 카탈로그가 아니다. 그 목록에 없다고 검색 자체를
+                  // 막지 말고, 타이핑한 값을 그대로 이 facet의 선택값으로 써서
+                  // 검색하게 한다.
+                  <button
+                    onClick={() => selectFacetOption(facet.label, query.trim())}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full border border-dashed border-black/20 text-sm font-light text-neutral-600 hover:bg-neutral-950 hover:text-white hover:border-neutral-950 transition-all"
+                  >
+                    "{query.trim()}"(으)로 검색
+                  </button>
                 ) : (
                   <span className="text-xs font-light text-neutral-400">일치하는 항목이 없어요</span>
                 )}
@@ -387,11 +543,11 @@ export const SearchResults = ({
             </div>
           );
         })}
-        {facets.length > 0 && (
+        {displayFacets.length > 0 && (
           <div className="mb-4 last:mb-0 flex justify-end">
             <button
-              onClick={() => onConfirmFacets(selectedFacets)}
-              disabled={Object.keys(selectedFacets).length === 0}
+              onClick={() => onConfirmFacets(effectiveSelectedFacets)}
+              disabled={Object.keys(effectiveSelectedFacets).length === 0}
               className="px-5 py-2.5 rounded-full bg-[#4ADE80] text-neutral-950 text-sm font-medium disabled:opacity-30 disabled:cursor-not-allowed hover:bg-[#3EBD6E] transition-all"
             >
               검색하기

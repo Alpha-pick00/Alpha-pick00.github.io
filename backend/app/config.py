@@ -27,9 +27,10 @@ class Settings:
     google_merchant_id: str | None = os.environ.get("GOOGLE_MERCHANT_ID")
     google_service_account_file: str | None = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
 
-    # DashScope(Alibaba Cloud) 기준 범용 성능이 가장 높은 모델 - 필요하면 .env의
-    # QWEN_MODEL로 다른 버전(예: qwen-max-latest)으로 바꿀 수 있다.
-    qwen_model: str = os.environ.get("QWEN_MODEL", "qwen-max")
+    # 2026-08-18("qwen 3.7 + 로 모델 바꿔줘") - qwen-max에서 Qwen3.7 세대의
+    # plus 등급으로 교체. 필요하면 .env의 QWEN_MODEL로 다른 버전(예:
+    # qwen3.7-max)으로 바꿀 수 있다.
+    qwen_model: str = os.environ.get("QWEN_MODEL", "qwen3.7-plus")
     deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
     # "gemini"/judge 슬롯은 2026-08-16부터 Groq(무료 API)이 담당한다(사용자 요청:
