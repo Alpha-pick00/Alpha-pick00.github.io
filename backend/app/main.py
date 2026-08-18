@@ -64,10 +64,14 @@ app = FastAPI(title="αlpha Pick Purchase Decision API", lifespan=lifespan)
 # 인증이 없는 API라 origin을 넓게 열어도 데이터 유출 위험은 없지만, "*"로 두면 아무 사이트나
 # 이 API(유료 LLM 호출)를 자기 페이지에 박아 넣고 우리 예산을 소모시킬 수 있어 알려진
 # origin으로만 제한한다.
+# 2026-08-18("Vercel로 배포해줘") - GitHub Pages와 별개로 Vercel에도 같은 프론트엔드를
+# 배포했다. Vercel은 배포마다 고유 URL도 발급하지만(예: alpha-pick-<해시>-<팀>.vercel.app),
+# 실사용자는 고정 프로덕션 별칭만 쓰므로 그 하나만 허용한다.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://alpha-pick00.github.io",
+        "https://alpha-pick-jet.vercel.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
