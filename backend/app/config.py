@@ -46,7 +46,11 @@ class Settings:
     # 해결). groq/compound(-mini)는 TPM은 넉넉하지만 내부적으로 여러 모델에 요청을
     # 위임하는 에이전틱 모델이라 그 하위 모델들의 rate limit을 그대로 물려받아
     # 오히려 더 불안정했다 - 순수 모델 중 TPM이 가장 넉넉한 걸 쓴다.
-    groq_model: str = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    # 2026-08-18: llama-3.3-70b-versatile이 Groq에서 완전히 내려가(계정
+    # /v1/models 조회에도 안 잡힘) 모든 호출이 404로 죽는 게 확인돼, judge와
+    # 같은 openai/gpt-oss-120b(비-에이전틱, 큰 컨텍스트)로 교체 - 실측으로
+    # 확인 완료.
+    groq_model: str = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
     # refine은 프롬프트가 원본 질의 하나뿐이라 작지만, ADK가 output_schema를
     # response_format=json_schema로 요청한다 - groq/compound-mini는 이를 지원하지
     # 않는다("This model does not support response format json_schema"). 구조화

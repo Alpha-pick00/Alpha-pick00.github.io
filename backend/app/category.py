@@ -101,7 +101,10 @@ async def classify_category(query: str, search_results: list[SearchResult]) -> C
     호출부는 이를 '분류 불확실 → 기존처럼 전 축 유지'로 안전하게 처리한다
     (용량/수량을 잘못 숨기는 것보다 안 물어볼 걸 한 번 더 묻는 게 낫다)."""
     try:
-        client = AsyncOpenAI(api_key=settings.groq_api_key, base_url=settings.groq_api_base)
+        # max_retries=0 - embeddings.py와 동일한 이유(사용자 요청, 2026-08-15:
+        # "너무 느려 더 빠르게"). 실패해도 호출부가 이미 폴백(분류 불확실 처리)을
+        # 갖고 있어 SDK 재시도로 얻는 이득보다 지연 비용이 크다.
+        client = AsyncOpenAI(api_key=settings.groq_api_key, base_url=settings.groq_api_base, max_retries=0)
         response = await client.chat.completions.create(
             model=settings.groq_model,
             messages=[{"role": "user", "content": build_classify_prompt(query, search_results)}],

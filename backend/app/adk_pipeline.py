@@ -497,8 +497,16 @@ def _groq_model(model_name: str) -> LiteLlm:
     """Groq는 OpenAI 호환 엔드포인트라 "openai/" 프리픽스 뒤에 api_base/api_key로
     Groq 엔드포인트를 직접 지정한다 - litellm이 groq 프로바이더를 자체 지원하는지에
     기대지 않고 "그냥 OpenAI 호환 엔드포인트"로 취급하는 쪽이 확실하다(agents/gpt.py의
-    DashScope 처리와 동일한 접근)."""
-    return LiteLlm(model=f"openai/{model_name}", api_base=settings.groq_api_base, api_key=settings.groq_api_key)
+    DashScope 처리와 동일한 접근). num_retries=0 - embeddings.py와 동일한 이유
+    (사용자 요청, 2026-08-15: "너무 느려 더 빠르게"): 실패해도 각 단계마다 이미
+    폴백(on_model_error_callback 등)이 있어 litellm 내부 재시도로 얻는 이득보다
+    지연 비용이 크다."""
+    return LiteLlm(
+        model=f"openai/{model_name}",
+        api_base=settings.groq_api_base,
+        api_key=settings.groq_api_key,
+        num_retries=0,
+    )
 
 
 def _build_refine_agent() -> LlmAgent:
@@ -548,7 +556,7 @@ def _build_challenge_agent() -> LlmAgent:
 
     return LlmAgent(
         name="challenge",
-        model=LiteLlm(model=f"deepseek/{settings.deepseek_model}"),
+        model=LiteLlm(model=f"deepseek/{settings.deepseek_model}", num_retries=0),
         instruction=instruction,
         output_key="raw_challenge",
     )
@@ -638,6 +646,7 @@ def _build_pipeline() -> SequentialAgent:
                     model=f"openai/{settings.qwen_model}",
                     api_base=settings.qwen_api_base,
                     api_key=settings.qwen_api_key,
+                    num_retries=0,
                 ),
             ),
             # "gemini" 슬롯은 2026-08-16부터 Groq(gpt-oss-20b)가 담당한다
@@ -646,7 +655,9 @@ def _build_pipeline() -> SequentialAgent:
             # "gemini"라 스키마의 AgentName 리터럴이나 이 파일 다른 곳의 "gemini"
             # 참조를 안 건드린다.
             _build_propose_agent(gemini_raw, _groq_model(settings.groq_model)),
-            _build_propose_agent(deepseek_raw, LiteLlm(model=f"deepseek/{settings.deepseek_model}")),
+            _build_propose_agent(
+                deepseek_raw, LiteLlm(model=f"deepseek/{settings.deepseek_model}", num_retries=0)
+            ),
             # 다나와 A등급 실측가 - 2026-08-16, PRESERVED FROM seungmin/lsm의
             # run_single_debate_price_table_variant(PART 4-2)를 라이브 ADK
             # 파이프라인으로 포팅(README "한계점 및 향후 과제" 후속작업). LLM이
