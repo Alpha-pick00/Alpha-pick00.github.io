@@ -1,4 +1,4 @@
-"""20개 시드 쿼리를 실제 파이프라인(gpt/gemini/deepseek.propose, run_single_debate가
+"""20개 시드 쿼리를 실제 파이프라인(gpt/groq/deepseek.propose, run_single_debate가
 쓰는 것과 동일한 함수)에 흘려서, 실제 후보 URL 분포를 수집한다.
 
 이 스크립트는 `main`에서 분기한 `feat/price-probe` 브랜치에서 돈다 — PR1
@@ -35,7 +35,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(BACKEND_DIR / ".env")
 
 from app import search as search_module  # noqa: E402
-from app.agents import deepseek, gemini, gpt  # noqa: E402
+from app.agents import deepseek, gpt, groq  # noqa: E402
 
 QUERIES = [
     "무선 이어폰 추천",
@@ -90,14 +90,14 @@ async def _collect_one(query: str) -> dict:
     except Exception as exc:
         return {"search_error": f"{type(exc).__name__}: {exc}", "agents": {}}
 
-    gpt_p, gemini_p, deepseek_p = await asyncio.gather(
+    gpt_p, groq_p, deepseek_p = await asyncio.gather(
         gpt.propose(query, results),
-        gemini.propose(query, results),
+        groq.propose(query, results),
         deepseek.propose(query, results),
     )
 
     agents = {}
-    for p in (gpt_p, gemini_p, deepseek_p):
+    for p in (gpt_p, groq_p, deepseek_p):
         agents[p.agent] = {
             "error": p.error,
             "product_name": p.product_name,

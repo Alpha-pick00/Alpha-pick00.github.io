@@ -27,7 +27,7 @@ def test_run_bulk_debate_falls_back_to_single_debate_when_no_proposals_found(mon
     monkeypatch.setattr("app.debate.search_module.search", _fake_search)
     monkeypatch.setattr("app.debate.gpt.propose_bulk", lambda query, results: _fake_propose_bulk_empty("gpt", query, results))
     monkeypatch.setattr(
-        "app.debate.gemini.propose_bulk", lambda query, results: _fake_propose_bulk_empty("gemini", query, results)
+        "app.debate.groq.propose_bulk", lambda query, results: _fake_propose_bulk_empty("groq", query, results)
     )
     monkeypatch.setattr(
         "app.debate.deepseek.propose_bulk", lambda query, results: _fake_propose_bulk_empty("deepseek", query, results)
@@ -89,14 +89,14 @@ def test_run_bulk_debate_falls_back_to_danawa_direct_search_when_tavily_empty(mo
         seen_results.append(results)
         return _empty_bulk_proposal("gpt")
 
-    async def _fake_propose_bulk_gemini(query, results):
-        return _empty_bulk_proposal("gemini")
+    async def _fake_propose_bulk_groq(query, results):
+        return _empty_bulk_proposal("groq")
 
     async def _fake_propose_bulk_deepseek(query, results):
         return _empty_bulk_proposal("deepseek")
 
     monkeypatch.setattr("app.debate.gpt.propose_bulk", _fake_propose_bulk_gpt)
-    monkeypatch.setattr("app.debate.gemini.propose_bulk", _fake_propose_bulk_gemini)
+    monkeypatch.setattr("app.debate.groq.propose_bulk", _fake_propose_bulk_groq)
     monkeypatch.setattr("app.debate.deepseek.propose_bulk", _fake_propose_bulk_deepseek)
 
     async def _fake_run_single_debate(query, skip_clarify=False):
