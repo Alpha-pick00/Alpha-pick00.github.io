@@ -40,13 +40,15 @@ class Settings:
     groq_api_key: str | None = os.environ.get("GROQ_API_KEY")
     groq_api_base: str = os.environ.get("GROQ_API_BASE", "https://api.groq.com/openai/v1")
     # 카테고리분류/OCR 텍스트 정리/propose의 "gemini" 슬롯이 공통으로 쓰는 범용
-    # 모델. Groq 무료(on-demand) 티어의 분당 토큰(TPM) 한도가 모델마다 6000~12000인데,
-    # 검색 결과 12건을 그대로 프롬프트에 넣으면(스니펫 트리밍 전 기준) 이 한도를
-    # 매번 초과했다(agents/base.py의 _SNIPPET_MAX_CHARS 참고 - 그 트리밍으로 기본
-    # 해결). groq/compound(-mini)는 TPM은 넉넉하지만 내부적으로 여러 모델에 요청을
-    # 위임하는 에이전틱 모델이라 그 하위 모델들의 rate limit을 그대로 물려받아
-    # 오히려 더 불안정했다 - 순수 모델 중 TPM이 가장 넉넉한 걸 쓴다.
-    groq_model: str = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    # 모델. 원래는 Groq 무료(on-demand) 티어의 분당 토큰(TPM) 한도가 가장 넉넉한
+    # llama-3.3-70b-versatile을 썼는데(검색 결과 12건을 그대로 프롬프트에 넣으면
+    # 이 한도를 매번 초과했다 - agents/base.py의 _SNIPPET_MAX_CHARS로 기본 해결),
+    # 2026-08-18("llama 모델 전부 GPT-oss 무료 모델로 바꿔줘") - 그라운딩 회귀
+    # 파일럿에서 llama-3.3-70b-versatile의 일일 토큰(TPD) 한도가 실행 초반부터
+    # 소진되는 문제를 반복 관측한 뒤, refine/judge와 같은 gpt-oss 계열(가벼운
+    # 작업이라 20b)로 통일했다 - 별도 쿼터 풀이라 llama TPD 소진의 영향을 안
+    # 받고, 이미 refine에서 검증된 모델이라 새 실패 모드를 추가하지 않는다.
+    groq_model: str = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
     # refine은 프롬프트가 원본 질의 하나뿐이라 작지만, ADK가 output_schema를
     # response_format=json_schema로 요청한다 - groq/compound-mini는 이를 지원하지
     # 않는다("This model does not support response format json_schema"). 구조화
