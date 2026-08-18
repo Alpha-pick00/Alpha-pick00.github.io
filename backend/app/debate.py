@@ -10,7 +10,7 @@ from . import decision_cache
 from . import facet_cache
 from . import price_table as price_table_module
 from . import search as search_module
-from .agents import deepseek, gemini, gpt, judge
+from .agents import deepseek, gpt, groq, judge
 from .agents.base import NO_CANDIDATE_ERROR, is_generic_listing_url
 from .config import settings
 from .intent import is_bulk_query, is_non_product_chitchat, needs_clarification
@@ -147,7 +147,7 @@ async def _search_danawa_urls_with_fallback(
 async def run_danawa_only_debate(
     query: str, base_query: str | None = None
 ) -> DecideResponse | BulkDecideResponse:
-    """LLM API 비용 절감을 위한 임시 로컬 실험 경로 - gpt/gemini/deepseek
+    """LLM API 비용 절감을 위한 임시 로컬 실험 경로 - gpt/groq/deepseek
     제안도, judge 최종 결정도 전부 건너뛴다. LLM 호출 0번. 다나와 실측
     가격표(다나와 직접검색만)에서 A등급(구매 링크 생성 가능) offer를
     규칙 기반으로 최종 추천으로 쓴다.
@@ -652,6 +652,49 @@ async def _extract_facets(
     return facets
 
 
+def _normalize_for_query_match(text: str) -> str:
+    return re.sub(r"\s+", "", text).lower()
+
+
+def _strip_query_answered_options(query: str, facets: list[ClarifyFacet]) -> list[ClarifyFacet]:
+    """사용자가 검색어에 이미 쓴 단어를 facet 선택지로 또 보여주는 문제(2026-08
+    사용자 리포트 "스탠리 텀블러 검색했는데 물어보는 게 반복되고 많다") - "텀블러"를
+    검색했는데 "제품분류" facet이 선택지로 "텀블러"를 또 보여주는 식이라 이미 답한
+    걸 다시 묻는 것처럼 느껴진다. FACET_CLARIFY_INSTRUCTIONS에 이미 답한 개념은
+    값으로 넣지 말라고 지시했지만 DeepSeek이 안정적으로 안 지켜(실측: "스탠리
+    텀블러"/"나이키 반팔티" 둘 다 재현) 여기서 한 번 더 거른다. 질의를 공백 제거
+    + 소문자로 정규화해 그 안에 그대로 부분 문자열로 포함되는 옵션만 제거한다 -
+    "반팔티"처럼 질의에 있는 그대로의 표현만 잡고, "반팔 티셔츠"처럼 표현이 달라진
+    동의어까지는 못 잡는다(그건 프롬프트 쪽 개선 영역으로 남겨둔다)."""
+    normalized_query = _normalize_for_query_match(query)
+    result: list[ClarifyFacet] = []
+    for facet in facets:
+        kept = [
+            opt
+            for opt in facet.options
+            if _normalize_for_query_match(opt) not in normalized_query
+        ]
+        if len(kept) == len(facet.options):
+            # 아무것도 안 걸러졌으면 원래 facet을 그대로 둔다 - 옵션이 원래부터
+            # 1개뿐인 경우까지 이 필터가 건드릴 이유는 없다(그건 이 함수의 책임이
+            # 아니라 추출 쪽 문제).
+            result.append(facet)
+            continue
+        if len(dict.fromkeys(kept)) < 2:
+            continue
+        options_by_selection = None
+        if facet.options_by_selection:
+            filtered = {
+                selector: [v for v in values if v in kept]
+                for selector, values in facet.options_by_selection.items()
+            }
+            options_by_selection = {k: v for k, v in filtered.items() if v} or None
+        result.append(
+            ClarifyFacet(label=facet.label, options=kept, options_by_selection=options_by_selection)
+        )
+    return result
+
+
 async def check_clarify_facets(
     query: str, base_query: str | None = None, persona: dict[str, str] | None = None
 ) -> ClarifyResponse:
@@ -693,17 +736,130 @@ async def check_clarify_facets(
 
     static_facets = facet_cache.lookup(query)
     if static_facets is not None:
+        static_facets = _strip_query_answered_options(query, static_facets)
         return ClarifyResponse(query=query, options=ClarifyOptions(facets=static_facets))
 
     search_query = base_query if base_query and base_query.strip() else query
     items = await price_table_module._search_danawa_items(
         search_query, limit=price_table_module.CLARIFY_SEARCH_LIMIT
     )
+    # items가 비었으면(검색 실패/차단) 카테고리 집계도 같은 이유로 비어있을
+    # 것이므로 굳이 다시 부르지 않는다 - 실패한 요청은 캐시되지 않아서
+    # (danawa_search._fetch_entry) 여기서 또 부르면 이미 실패한 요청을
+    # 그대로 재시도해 불필요한 지연만 늘린다.
+    categories = await price_table_module._search_danawa_categories(search_query) if items else []
+
+    effective_category = _select_effective_category_name(query, categories)
+    if effective_category:
+        # 카테고리를 이미 골랐으면(질의 텍스트에 그 이름이 있으면) 브랜드
+        # 전체 표본이 아니라 그 카테고리로 좁힌 실제 표본으로 나머지
+        # facet(모델/용량 등)을 뽑는다 - 안 그러면 브랜드 전체 표본에는
+        # 그 카테고리 상품이 아예 없을 수 있어(예: "샤오미" 상위 40개엔
+        # 휴대폰이 하나도 없다) "모델" 같은 축이 전혀 다른 카테고리 상품으로
+        # 채워진다(2026-08-18 사용자 리포트: "공기청정기 · 미 패드5처럼
+        # 존재하지 않는 상품으로 매핑돼"). 이렇게 표본 자체를 카테고리로
+        # 좁혀두면, 그 안에서 다시 계산되는 _attach_facet_crossfilter가
+        # "모델을 고르면 용량도 그에 맞게 좁혀지는" 것까지 자연히 따라온다 -
+        # 표본이 이미 그 카테고리 상품뿐이라 별도 로직이 필요 없다.
+        # search.danawa.com Crawl-delay(10초)를 이 라운드에 한 번 더
+        # 감수한다 - _ecosystem_name_pool과 같은 트레이드오프.
+        category_items = await price_table_module._search_danawa_items(
+            f"{search_query} {effective_category}", limit=price_table_module.CLARIFY_SEARCH_LIMIT
+        )
+        if len(category_items) >= MIN_FILTERED_CLARIFY_ITEMS:
+            items = category_items
+
     if base_query and base_query.strip() and base_query.strip() != query.strip():
         items = _filter_items_by_extra_terms(items, query, base_query)
     names = [item["product_name"] for item in items]
     facets = await _extract_facets(query, names, persona)
+    facets = _strip_query_answered_options(query, facets)
+    # _apply_category_breakdown은 _strip_query_answered_options 뒤에 와야 한다 -
+    # 실측 카테고리 facet은 스스로 "이미 고른 값"을 정확히(부모 대분류 이름과의
+    # 우연한 부분 문자열 겹침을 걸러내고) 판정해 만들어지는데(_category_breakdown_facet
+    # 참고), 앞서 오면 이 일반 stripping이 그 정확한 결과를 다시 (덜 정확하게)
+    # 건드려버린다.
+    facets = _apply_category_breakdown(facets, query, categories)
     return ClarifyResponse(query=query, options=ClarifyOptions(facets=facets))
+
+
+def _select_category_group(
+    query: str, groups: list[danawa_search.DanawaCategoryGroup]
+) -> danawa_search.DanawaCategoryGroup | None:
+    """이전 라운드에서 사용자가 카테고리 하나를 이미 골라 질의 텍스트에 그
+    이름이 그대로 들어있으면 그 카테고리를 돌려준다(_facet_resolved와 같은
+    텍스트 포함 판정). 여러 개가 동시에 부분 문자열로 걸리면(예: "태블릿/
+    휴대폰"을 고른 뒤에도 "태블릿"이라는 별개 중분류 이름이 그 안에 우연히
+    포함돼 같이 매치됨) 가장 긴(=가장 구체적인) 이름을 우선한다."""
+    matched = [g for g in groups if g["name"].casefold() in query.casefold()]
+    if not matched:
+        return None
+    return max(matched, key=lambda g: len(g["name"]))
+
+
+def _select_effective_category_name(
+    query: str, categories: list[danawa_search.DanawaCategoryGroup]
+) -> str | None:
+    """이미 고른 카테고리 중 가장 구체적인(중분류 > 대분류) 이름을 돌려준다 -
+    대분류/중분류 둘 다 같은 다나와 응답에 이미 들어있어(parse_category_breakdown)
+    추가 조회 없이 판단 가능하다. 이 이름을 브랜드 질의에 붙여 다나와를 다시
+    검색하면(check_clarify_facets) "모델"/"용량" 등 나머지 facet이 그
+    카테고리에 실제로 속하는 상품만으로 뽑힌다."""
+    top = _select_category_group(query, categories)
+    if top is None:
+        return None
+    # top["name"] 자체가 우연히 자기 중분류 이름을 부분 문자열로 포함할 수
+    # 있다(예: 대분류 "태블릿/휴대폰"은 중분류 "휴대폰"을 이미 포함한다) - 그
+    # 부분을 지우고 나머지에서만 중분류를 찾아야, 대분류만 고른 상태(아직
+    # 중분류는 안 고름)를 중분류까지 고른 것으로 착각하지 않는다.
+    remainder = query.casefold().replace(top["name"].casefold(), "", 1)
+    sub = _select_category_group(remainder, top["subcategories"])
+    return sub["name"] if sub is not None else top["name"]
+
+
+def _category_breakdown_facet(
+    query: str, categories: list[danawa_search.DanawaCategoryGroup]
+) -> ClarifyFacet | None:
+    """다나와 검색결과의 실측 카테고리 집계로 "카테고리" facet을 만든다
+    (2026-08-18 사용자 리포트: "샤오미"를 검색하면 AI 상세검색 카테고리에
+    휴대폰이 안 나온다 - DeepSeek이 보는 상품명 표본(_extract_facets, 최대
+    90개)이 다나와 검색 순위 상위권에 쏠려서, 특정 대분류 상품이 표본에 아예
+    안 걸리면 그 카테고리는 영원히 못 본다). 이 집계는 표본이 아니라 다나와
+    자체 카테고리 색인이라 표본 편향에서 자유롭다. 대분류가 2개 미만이면
+    (=애초에 여러 카테고리로 안 갈린다는 뜻) None."""
+    selected = _select_category_group(query, categories)
+    if selected is None:
+        groups = categories
+    else:
+        # selected["name"](대분류) 자체가 우연히 자기 중분류 이름을 부분
+        # 문자열로 포함할 수 있다(예: 대분류 "태블릿/휴대폰"은 중분류
+        # "휴대폰"을 이미 포함한다) - 그 부분을 지운 나머지에서만 "이미 고른
+        # 중분류"를 판정해야, 대분류만 고른 시점(아직 중분류는 안 고름)에
+        # 그 안에 우연히 포함된 중분류 옵션이 "이미 답함"으로 잘못 사라지지
+        # 않는다(_select_effective_category_name과 같은 이유).
+        remainder = query.casefold().replace(selected["name"].casefold(), "", 1)
+        groups = [g for g in selected["subcategories"] if g["name"].casefold() not in remainder]
+    groups = [g for g in groups if g["count"] > 0]
+    if len(groups) < 2:
+        return None
+    groups = sorted(groups, key=lambda g: g["count"], reverse=True)
+    return ClarifyFacet(label="카테고리", options=[g["name"] for g in groups])
+
+
+def _apply_category_breakdown(
+    facets: list[ClarifyFacet], query: str, categories: list[danawa_search.DanawaCategoryGroup]
+) -> list[ClarifyFacet]:
+    """DeepSeek이 뽑은 facets에 실측 카테고리 facet을 끼워 넣는다 - DeepSeek이
+    이미 "카테고리"(또는 동의어) 라벨로 뭔가 뽑았으면 그 옵션을 실측값으로
+    교체하고, 없으면 맨 앞에 새로 추가한다(카테고리는 가장 상위 질문이라
+    다른 축보다 먼저 물어보는 게 자연스럽다)."""
+    injected = _category_breakdown_facet(query, categories)
+    if injected is None:
+        return facets
+    result = [injected if f.label == injected.label else f for f in facets]
+    if not any(f.label == injected.label for f in facets):
+        result.insert(0, injected)
+    return result
 
 
 def _facet_options_for_query(query: str, facet: ClarifyFacet) -> list[str]:
@@ -858,7 +1014,7 @@ async def run_bulk_debate(query: str) -> BulkDecideResponse | DecideResponse | C
     proposals: list[BulkProposal] = list(
         await asyncio.gather(
             gpt.propose_bulk(query, results),
-            gemini.propose_bulk(query, results),
+            groq.propose_bulk(query, results),
             deepseek.propose_bulk(query, results),
         )
     )

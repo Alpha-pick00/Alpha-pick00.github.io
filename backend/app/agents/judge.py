@@ -11,7 +11,10 @@ from .base import parse_json_object
 
 
 def _client() -> AsyncOpenAI:
-    return AsyncOpenAI(api_key=settings.groq_api_key, base_url=settings.groq_api_base)
+    # max_retries=0 - embeddings.py와 동일한 이유(사용자 요청, 2026-08-15: "너무
+    # 느려 더 빠르게"). 실패해도 호출부가 이미 폴백을 갖고 있어 SDK 재시도로
+    # 얻는 이득보다 지연 비용이 크다.
+    return AsyncOpenAI(api_key=settings.groq_api_key, base_url=settings.groq_api_base, max_retries=0)
 
 # 병합된 후보들이 이미 어느 모델(들)이 제안했는지(proposed_by)와 DeepSeek의
 # 검증 결과(verified/challenge_note)를 달고 들어오므로, judge는 그 두 신호를 보고

@@ -10,7 +10,18 @@ import asyncio
 from fastapi.testclient import TestClient
 
 from app import decision_cache
-from app.debate import check_clarify_facets, run_clarify, run_danawa_only_debate_stream, run_debate, run_debate_stream
+from app.debate import (
+    _apply_category_breakdown,
+    _category_breakdown_facet,
+    _select_category_group,
+    _select_effective_category_name,
+    _strip_query_answered_options,
+    check_clarify_facets,
+    run_clarify,
+    run_danawa_only_debate_stream,
+    run_debate,
+    run_debate_stream,
+)
 from app.intent import is_non_product_chitchat, needs_clarification
 from app.main import app
 from app.schemas import ClarifyFacet, Decision, DecideResponse, SearchResult
@@ -969,6 +980,157 @@ def test_check_clarify_facets_orders_phone_model_facet_first(monkeypatch):
     assert result.options.facets[0].label == "핸드폰 기종"
 
 
+# -- 다나와 실측 카테고리 집계로 "카테고리" facet을 채우고, 선택된 카테고리로
+# 표본을 다시 좁히는 기능(2026-08-18 사용자 리포트: "샤오미로 검색하면 AI
+# 상세검색 카테고리에 휴대폰이 안 나온다" / "카테고리를 고르면 모델도, 모델을
+# 고르면 용량도 그에 맞게 좁혀져야지 - 안 그러면 공기청정기 · 미 패드5처럼
+# 존재하지 않는 상품으로 매핑돼") -------------------------------------------
+
+_XIAOMI_CATEGORIES = [
+    {
+        "name": "태블릿/휴대폰",
+        "count": 202586,
+        "subcategories": [
+            {"name": "휴대폰 주변용품", "count": 77372},
+            {"name": "휴대폰", "count": 20469},
+        ],
+    },
+    {
+        "name": "생활가전",
+        "count": 56381,
+        "subcategories": [{"name": "청소기", "count": 47851}],
+    },
+]
+
+
+def test_select_category_group_prefers_longest_match_on_overlap():
+    # "태블릿/휴대폰"을 고른 뒤에도 "휴대폰"이라는 별개 중분류 이름이 그 문자열
+    # 안에 부분적으로 걸린다 - 더 구체적인(긴) "태블릿/휴대폰"을 우선해야 한다.
+    top = _select_category_group("샤오미 태블릿/휴대폰", _XIAOMI_CATEGORIES)
+    assert top["name"] == "태블릿/휴대폰"
+
+
+def test_select_effective_category_name_returns_subcategory_when_drilled_down():
+    name = _select_effective_category_name("샤오미 태블릿/휴대폰 휴대폰", _XIAOMI_CATEGORIES)
+    assert name == "휴대폰"
+
+
+def test_select_effective_category_name_returns_top_level_when_only_top_chosen():
+    name = _select_effective_category_name("샤오미 태블릿/휴대폰", _XIAOMI_CATEGORIES)
+    assert name == "태블릿/휴대폰"
+
+
+def test_select_effective_category_name_none_when_nothing_chosen():
+    assert _select_effective_category_name("샤오미", _XIAOMI_CATEGORIES) is None
+
+
+def test_category_breakdown_facet_uses_top_level_groups_by_default():
+    facet = _category_breakdown_facet("샤오미", _XIAOMI_CATEGORIES)
+    assert facet.label == "카테고리"
+    assert facet.options == ["태블릿/휴대폰", "생활가전"]  # count 내림차순
+
+
+def test_category_breakdown_facet_narrows_to_subcategories_once_selected():
+    facet = _category_breakdown_facet("샤오미 태블릿/휴대폰", _XIAOMI_CATEGORIES)
+    # 대분류 "태블릿/휴대폰"만 골랐을 뿐 중분류 "휴대폰"은 아직 안 골랐다 -
+    # 대분류 이름 자체가 우연히 "휴대폰"을 부분 문자열로 포함한다고 해서
+    # 이미 고른 것으로 착각해 옵션에서 지우면 안 된다(2026-08-18 실측:
+    # 바로 이 문제로 정작 사용자가 원했던 "휴대폰" 옵션이 화면에서 사라졌었다).
+    assert facet.options == ["휴대폰 주변용품", "휴대폰"]
+
+
+def test_category_breakdown_facet_excludes_genuinely_chosen_subcategory():
+    facet = _category_breakdown_facet("샤오미 태블릿/휴대폰 휴대폰", _XIAOMI_CATEGORIES)
+    # 이번엔 "휴대폰"이 대분류 이름 바깥에 별도로 등장하므로 진짜로 고른 것 -
+    # 남은 옵션이 "휴대폰 주변용품" 하나뿐이라(2개 미만) facet 자체가 사라진다.
+    assert facet is None
+
+
+def test_category_breakdown_facet_none_when_fewer_than_two_groups():
+    assert _category_breakdown_facet("샤오미", [_XIAOMI_CATEGORIES[0]]) is None
+
+
+def test_apply_category_breakdown_replaces_llm_facet_with_real_breakdown():
+    # DeepSeek이 표본 편향(휴대폰이 표본에 없음)으로 "생활가전"만 뽑았어도,
+    # 실측 집계에 있는 "태블릿/휴대폰"으로 교체돼야 한다.
+    facets = [ClarifyFacet(label="카테고리", options=["생활가전"])]
+    result = _apply_category_breakdown(facets, "샤오미", _XIAOMI_CATEGORIES)
+    assert len(result) == 1
+    assert result[0].options == ["태블릿/휴대폰", "생활가전"]
+
+
+def test_apply_category_breakdown_inserts_when_no_category_facet_exists():
+    facets = [ClarifyFacet(label="모델", options=["미지아 선풍기"])]
+    result = _apply_category_breakdown(facets, "샤오미", _XIAOMI_CATEGORIES)
+    assert [f.label for f in result] == ["카테고리", "모델"]
+
+
+def test_check_clarify_facets_injects_real_category_facet_when_sample_misses_it(monkeypatch):
+    """브랜드 전체 표본(다나와 검색 상위)에 특정 카테고리 상품이 하나도 없어도
+    (샤오미 실측: 상위 40개가 전부 액세서리/가전이라 휴대폰이 없다), 다나와
+    검색결과 페이지의 실측 카테고리 집계에 있으면 "카테고리" facet에 떠야
+    한다."""
+
+    async def _fake_search_danawa(query, limit=90):
+        return [{"pcode": "1", "product_name": "샤오미 미지아 선풍기", "total_mall_count": None}]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+
+    async def _fake_search_danawa_categories(query):
+        return _XIAOMI_CATEGORIES
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa_categories", _fake_search_danawa_categories)
+
+    async def _fake_extract_facets(query, names):
+        return [ClarifyFacet(label="모델", options=names)]
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
+
+    result = asyncio.run(check_clarify_facets("샤오미"))
+
+    by_label = {f.label: f for f in result.options.facets}
+    assert "태블릿/휴대폰" in by_label["카테고리"].options
+
+
+def test_check_clarify_facets_rescopes_sample_when_category_already_selected(monkeypatch):
+    """카테고리를 이미 골랐으면(질의에 그 이름이 있으면) 브랜드 전체 표본이
+    아니라 그 카테고리로 좁힌 실제 표본으로 나머지 facet(모델 등)을 뽑아야
+    한다 - 안 그러면 "공기청정기" 카테고리를 골랐는데 "모델" facet에 전혀
+    다른 카테고리 상품(예: "미 패드5")이 섞여 나온다."""
+    brand_wide_items = [{"pcode": "1", "product_name": "샤오미 미지아 선풍기", "total_mall_count": None}]
+    phone_items = [
+        {"pcode": "2", "product_name": "샤오미 포코 X8 프로 256GB", "total_mall_count": None},
+        {"pcode": "3", "product_name": "샤오미 15T 프로 512GB", "total_mall_count": None},
+        {"pcode": "4", "product_name": "샤오미 레드미 노트14 프로 256GB", "total_mall_count": None},
+    ]
+
+    async def _fake_search_danawa(query, limit=90):
+        if query == "샤오미 휴대폰":
+            return phone_items
+        return brand_wide_items
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+
+    async def _fake_search_danawa_categories(query):
+        return _XIAOMI_CATEGORIES
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa_categories", _fake_search_danawa_categories)
+
+    async def _fake_extract_facets(query, names):
+        return [ClarifyFacet(label="모델", options=names)]
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
+
+    result = asyncio.run(check_clarify_facets("샤오미 태블릿/휴대폰 휴대폰", base_query="샤오미"))
+
+    by_label = {f.label: f for f in result.options.facets}
+    assert by_label["모델"].options == [
+        "샤오미 포코 X8 프로 256GB",
+        "샤오미 15T 프로 512GB",
+        "샤오미 레드미 노트14 프로 256GB",
+    ]
+
+
 def test_extract_facets_from_names_returns_empty_on_no_product_names():
     from app.agents import deepseek
 
@@ -1091,6 +1253,68 @@ def test_check_clarify_facets_returns_facets_for_ambiguous_query(monkeypatch):
 
     assert result.mode == "clarify"
     assert result.options.facets == [ClarifyFacet(label="카테고리", options=["탄산음료"])]
+
+
+def test_strip_query_answered_options_removes_value_already_in_query():
+    """사용자 리포트(2026-08-18 "스탠리 텀블러 검색했는데 물어보는 게 반복되고
+    많다") 회귀 테스트 - 검색어에 이미 있는 단어("텀블러")를 facet이 선택지로
+    또 보여주면 이미 답한 걸 다시 묻는 것처럼 느껴진다."""
+    facets = [
+        ClarifyFacet(
+            label="제품분류",
+            options=["텀블러", "보틀", "머그"],
+            options_by_selection={"473ml": ["텀블러", "보틀"], "709ml": ["텀블러"]},
+        )
+    ]
+
+    result = _strip_query_answered_options("스탠리 텀블러", facets)
+
+    assert result == [
+        ClarifyFacet(
+            label="제품분류",
+            options=["보틀", "머그"],
+            options_by_selection={"473ml": ["보틀"]},
+        )
+    ]
+
+
+def test_strip_query_answered_options_drops_facet_left_with_under_two_values():
+    """필터링 후 서로 다른 값이 1개 이하로 남으면 그 기준 자체가 더 이상 좁혀주는
+    게 없으므로 facet 전체를 뺀다."""
+    facets = [ClarifyFacet(label="제품분류", options=["텀블러", "보틀"])]
+
+    result = _strip_query_answered_options("스탠리 텀블러 보틀", facets)
+
+    assert result == []
+
+
+def test_strip_query_answered_options_leaves_untouched_facet_with_only_one_option():
+    """필터링으로 걸러진 게 하나도 없으면, 그 facet이 원래부터 옵션 1개뿐이었어도
+    이 함수가 임의로 지우면 안 된다(그건 추출 쪽 책임)."""
+    facets = [ClarifyFacet(label="시리즈", options=["삼성전자 갤럭시S25 256GB"])]
+
+    result = _strip_query_answered_options("핸드폰 없는브랜드", facets)
+
+    assert result == facets
+
+
+def test_check_clarify_facets_strips_query_redundant_option_end_to_end(monkeypatch):
+    async def _fake_search_danawa(query, limit=3):
+        return [
+            {"pcode": "1", "product_name": "스탠리 퀜처 텀블러 887ml", "total_mall_count": None},
+            {"pcode": "2", "product_name": "스탠리 아이스플로우 보틀 473ml", "total_mall_count": None},
+        ]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+
+    async def _fake_extract_facets(query, names):
+        return [ClarifyFacet(label="제품분류", options=["텀블러", "보틀"])]
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
+
+    result = asyncio.run(check_clarify_facets("스탠리 텀블러"))
+
+    assert result.options.facets == []
 
 
 def test_check_clarify_facets_uses_wider_search_limit_than_the_fast_path(monkeypatch):

@@ -12,6 +12,8 @@ from app.adk_pipeline import (
     _is_danawa_product_url,
     _judge_eligible_proposals,
     _merge_proposals,
+    _on_propose_model_error,
+    _on_refine_model_error,
     _pick_and_verify_relaxed,
     _relaxed_fallback_decision,
     _skip_judge_if_single_candidate,
@@ -63,20 +65,20 @@ def test_format_price_krw_none():
 def test_merge_proposals_combines_all_agents():
     raw_by_agent = {
         "gpt": json.dumps([_raw_candidate("무선 마우스", 12900, COUPANG_URL)]),
-        "gemini": json.dumps([_raw_candidate("무선 마우스", 12900, COUPANG_URL)]),
+        "groq": json.dumps([_raw_candidate("무선 마우스", 12900, COUPANG_URL)]),
         "deepseek": json.dumps([]),
     }
 
     merged = asyncio.run(_merge_proposals(raw_by_agent, []))
 
     assert len(merged) == 1
-    assert merged[0]["proposed_by"] == ["gpt", "gemini"]
+    assert merged[0]["proposed_by"] == ["gpt", "groq"]
 
 
 def test_merge_proposals_skips_agent_with_malformed_json():
     raw_by_agent = {
         "gpt": json.dumps([_raw_candidate("무선 마우스", 12900, COUPANG_URL)]),
-        "gemini": "이건 JSON이 아닙니다",
+        "groq": "이건 JSON이 아닙니다",
         "deepseek": None,
     }
 
@@ -87,7 +89,7 @@ def test_merge_proposals_skips_agent_with_malformed_json():
 
 
 def test_merge_proposals_all_empty_returns_empty_list():
-    raw_by_agent = {"gpt": json.dumps([]), "gemini": None, "deepseek": ""}
+    raw_by_agent = {"gpt": json.dumps([]), "groq": None, "deepseek": ""}
 
     assert asyncio.run(_merge_proposals(raw_by_agent, [])) == []
 
@@ -95,7 +97,7 @@ def test_merge_proposals_all_empty_returns_empty_list():
 def test_merge_proposals_filters_generic_listing_url():
     raw_by_agent = {
         "gpt": json.dumps([_raw_candidate("무선 마우스", 12900, "https://coupang.com/search?q=마우스")]),
-        "gemini": None,
+        "groq": None,
         "deepseek": None,
     }
 
@@ -111,7 +113,7 @@ def test_merge_proposals_filters_danawa_comparison_page_url():
     loadingBridge.html은 이 패턴에 안 걸려 그대로 통과한다)."""
     raw_by_agent = {
         "gpt": json.dumps([_raw_candidate("위닉스 뽀송 DHC-167IPW", 0, "https://prod.danawa.com/info?pcode=1982936")]),
-        "gemini": None,
+        "groq": None,
         "deepseek": None,
     }
 
@@ -128,7 +130,7 @@ def test_merge_proposals_filters_danawa_mobile_comparison_page_url():
         "gpt": json.dumps(
             [_raw_candidate("LG전자 2024 그램16", 0, "https://m.danawa.com/product/product.html?code=45320081")]
         ),
-        "gemini": None,
+        "groq": None,
         "deepseek": None,
     }
 
@@ -141,7 +143,7 @@ def test_merge_proposals_keeps_danawa_bridge_purchase_link():
     bridge_url = "https://prod.danawa.com/bridge/loadingBridge.html?pcode=1&cmpnyc=EE715"
     raw_by_agent = {
         "gpt": json.dumps([_raw_candidate("무선 마우스", 12900, bridge_url)]),
-        "gemini": None,
+        "groq": None,
         "deepseek": None,
     }
 
@@ -157,11 +159,47 @@ def test_merge_proposals_filters_candidate_with_empty_url():
     채우는 문제로 이어진다 — 애초에 후보 풀에 들어오지 못하게 막는다."""
     raw_by_agent = {
         "gpt": json.dumps([_raw_candidate("무선 마우스", 12900, "")]),
-        "gemini": None,
+        "groq": None,
         "deepseek": None,
     }
 
     assert asyncio.run(_merge_proposals(raw_by_agent, [])) == []
+
+
+# --- _on_propose_model_error ------------------------------------------------
+
+
+class _StubCallbackContext:
+    def __init__(self, agent_name: str = "groq"):
+        self.agent_name = agent_name
+
+
+def test_on_propose_model_error_returns_none_to_propagate_failure():
+    """2026-08-18, 사용자 요청: "3개중 하나라도 빠지면 결과를 내지 않도록
+    해야지 왜 3개를 안쓰고 2개만해서 결과를 내" - propose 3개(gpt/groq/
+    deepseek) 중 하나라도 실패하면 그 실패를 빈 배열로 조용히 덮지 않고
+    그대로 흘려보내야 한다. ADK는 이 콜백이 None을 반환하면 원래 예외를
+    그대로 raise한다(google.adk.flows.llm_flows.base_llm_flow 참고) -
+    run_stream()의 바깥 try/except가 이를 잡아 proposals를 빈 채로 두고
+    기존 clarify/relaxed fallback/NO_CANDIDATE_ERROR 경로로 이어지므로,
+    2/3만으로 최종 답을 내지 않는다."""
+    result = _on_propose_model_error(_StubCallbackContext(), None, RuntimeError("모델 호출 실패"))
+
+    assert result is None
+
+
+# --- _on_refine_model_error ---------------------------------------------------
+
+
+def test_on_refine_model_error_returns_none_to_propagate_failure():
+    """2026-08-18, 사용자 요청: "AI 모델중에 하나라도 토큰 다쓰면 실행되지
+    않도록 바꿔줘" - propose와 같은 원칙을 refine에도 적용한다. 원래는
+    정제를 포기하고 원본 질의로 폴백해 계속 진행했는데, 이제는 모델
+    하나라도 실패하면 정직하게 전체를 실패시켜야 하므로 None을 반환해
+    ADK가 원본 예외를 그대로 raise하게 한다."""
+    result = _on_refine_model_error(_StubCallbackContext("refine"), None, RuntimeError("모델 호출 실패"))
+
+    assert result is None
 
 
 # --- _apply_challenge ------------------------------------------------------
@@ -170,7 +208,7 @@ def test_merge_proposals_filters_candidate_with_empty_url():
 def test_apply_challenge_matches_verdict_by_url_even_when_order_differs():
     candidates = [
         _merged_candidate(COUPANG_URL, ["gpt"], "상품A"),
-        _merged_candidate(ELEVENST_URL, ["gemini"], "상품B"),
+        _merged_candidate(ELEVENST_URL, ["groq"], "상품B"),
     ]
     # 검증 결과 순서가 후보 순서와 뒤바뀜 — url로 정확히 매칭돼야 한다.
     challenge = ChallengeResult(
@@ -199,7 +237,7 @@ def test_apply_challenge_falls_back_to_index_when_url_missing():
 
 
 def test_apply_challenge_empty_verdicts_leaves_all_unverified():
-    candidates = [_merged_candidate(COUPANG_URL, ["gpt"]), _merged_candidate(ELEVENST_URL, ["gemini"])]
+    candidates = [_merged_candidate(COUPANG_URL, ["gpt"]), _merged_candidate(ELEVENST_URL, ["groq"])]
 
     proposals = _apply_challenge(candidates, ChallengeResult(verdicts=[]))
 
@@ -220,12 +258,59 @@ def test_apply_challenge_empty_candidates_returns_empty_list():
     assert _apply_challenge([], ChallengeResult(verdicts=[])) == []
 
 
+def test_apply_challenge_uses_refreshed_price_when_verdict_provides_it():
+    """2026-08-19, 사용자 리포트("실제로 사이트 들어갔을 때는 다른 가격을
+    가져오는 문제") - challenge 직전 _ExtractPagesNode가 이미 라이브로 재조회한
+    후보 페이지 원문을 DeepSeek가 읽고 refreshed_price_krw를 채워주면, 그
+    갱신된 가격이 새 네트워크 호출 없이 최종 Proposal.price에 반영돼야 한다."""
+    candidates = [_merged_candidate(COUPANG_URL, ["gpt"])]
+    challenge = ChallengeResult(
+        verdicts=[
+            ChallengeVerdict(
+                url=COUPANG_URL, verified=True, note="상품 일치", refreshed_price_krw=15000
+            )
+        ]
+    )
+
+    proposals = _apply_challenge(candidates, challenge)
+
+    assert proposals[0].price == "15,000원"
+    assert "재조회 시점 가격으로 갱신됨" in proposals[0].challenge_note
+
+
+def test_apply_challenge_keeps_original_price_when_verdict_has_no_refreshed_price():
+    candidates = [_merged_candidate(COUPANG_URL, ["gpt"])]
+    challenge = ChallengeResult(verdicts=[ChallengeVerdict(url=COUPANG_URL, verified=True, note="통과")])
+
+    proposals = _apply_challenge(candidates, challenge)
+
+    assert proposals[0].price == "12,900원"
+    assert proposals[0].challenge_note == "통과"
+
+
+def test_apply_challenge_ignores_refreshed_price_for_danawa_sourced_candidate():
+    """danawa 출신 후보는 원래 가격 자체가 이미 구조화된 실측 스크래핑이라
+    DeepSeek 검증(및 refreshed_price_krw)을 아예 안 거친다 - 만약 verdict에
+    같은 url로 refreshed_price_krw가 실려와도 무시돼야 한다."""
+    candidates = [_merged_candidate(COUPANG_URL, ["danawa"])]
+    challenge = ChallengeResult(
+        verdicts=[
+            ChallengeVerdict(url=COUPANG_URL, verified=False, note="무시돼야 함", refreshed_price_krw=99999)
+        ]
+    )
+
+    proposals = _apply_challenge(candidates, challenge)
+
+    assert proposals[0].price == "12,900원"
+    assert proposals[0].verified is True
+
+
 def test_apply_challenge_drops_expired_danawa_candidate_entirely():
     """가격비교가 중지된(다나와가 서비스 종료로 표시하는) 페이지는 verified=False로
     남기지 않고 결과에서 아예 빠져야 한다 — "가격미확인" 카드로 노출되면 안 된다."""
     candidates = [
         _merged_candidate(COUPANG_URL, ["gpt"], "상품A"),
-        _merged_candidate(ELEVENST_URL, ["gemini"], "상품B"),
+        _merged_candidate(ELEVENST_URL, ["groq"], "상품B"),
     ]
 
     proposals = _apply_challenge(candidates, ChallengeResult(verdicts=[]), {ELEVENST_URL})
@@ -413,7 +498,7 @@ def test_judge_eligible_proposals_falls_back_to_full_list_when_all_rejected():
 def test_merge_proposals_includes_danawa_agent():
     raw_by_agent = {
         "gpt": None,
-        "gemini": None,
+        "groq": None,
         "deepseek": None,
         "danawa": json.dumps([_raw_candidate("무선 마우스", 12900, COUPANG_URL)]),
     }
@@ -438,7 +523,7 @@ def test_merge_proposals_resolves_comparison_page_to_bridge_url_when_pcode_match
         "gpt": json.dumps(
             [_raw_candidate("Razer DeathAdder V3 (정품)", 0, "https://prod.danawa.com/info?pcode=19505813")]
         ),
-        "gemini": None,
+        "groq": None,
         "deepseek": None,
     }
 
@@ -461,7 +546,7 @@ def test_merge_proposals_still_filters_comparison_page_when_pcode_does_not_match
         "gpt": json.dumps(
             [_raw_candidate("Razer DeathAdder V3 (정품)", 0, "https://prod.danawa.com/info?pcode=19505813")]
         ),
-        "gemini": None,
+        "groq": None,
         "deepseek": None,
     }
 
