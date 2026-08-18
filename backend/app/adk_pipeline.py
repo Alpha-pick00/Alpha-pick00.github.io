@@ -479,11 +479,17 @@ def _apply_challenge(
 # LlmAgent 노드 — 실제 모델 호출은 ADK + LiteLlm이 담당(수동 SDK 호출 없음).
 #
 # ADK의 SequentialAgent/ParallelAgent는 서브 에이전트 하나가 예외를 던지면
-# 파이프라인 전체를 그대로 죽인다(예: propose 3개 중 Gemini 하나만 API 오류가
-# 나도 GPT·DeepSeek가 이미 만들어둔 결과까지 전부 버려지고 "후보를 찾지 못했다"로
-# 끝남 — 실제로 겪은 장애: Gemini 프로젝트가 일시적으로 403을 뱉었을 때 검색
-# 전체가 죽었다). on_model_error_callback으로 모델 호출 실패를 가로채, 그 모델만
-# 빈 결과로 대체하고 나머지 파이프라인은 계속 진행하게 한다.
+# 파이프라인 전체를 그대로 죽인다 - 이 프로젝트는 이 기본 동작을 그대로
+# 쓴다(2026-08-18, 사용자 요청: "AI 모델중에 하나라도 토큰 다쓰면 실행되지
+# 않도록 바꿔줘" - "3개중 하나라도 빠지면 결과를 내지 않도록"과 같은 원칙을
+# refine/challenge/judge까지 전부 확장). challenge·judge는 on_model_error_callback을
+# 아예 등록하지 않아 원래도 실패하면 그대로 예외가 올라갔다(agent.
+# canonical_on_model_error_callbacks가 비어있으면 ADK가 원본 예외를 그대로
+# raise한다 - base_llm_flow._call_llm_async 참고). refine/propose 2곳만
+# "이 모델 하나 없이도 계속 진행"하는 콜백을 등록해뒀었는데(과거엔 모델 하나가
+# 죽어도 나머지로 답을 냈다), 이제 둘 다 실패를 그대로 흘려보내 pipeline_failed로
+# 처리되게 바꿨다 - run_stream()의 바깥 try/except가 이를 잡아 proposals를
+# 빈 채로 두고 기존 clarify/relaxed fallback/NO_CANDIDATE_ERROR 경로로 이어진다.
 # ---------------------------------------------------------------------------
 
 
@@ -512,14 +518,19 @@ def _skip_refine_if_already_specific(callback_context, llm_request) -> LlmRespon
     return _model_error_fallback_response(fallback.model_dump_json())
 
 
-def _on_refine_model_error(callback_context, llm_request, error) -> LlmResponse:
-    """refine의 모델(Groq) 호출이 실패하면 정제를 포기하고 원본 질의를 그대로 쓴다 —
-    다듬지 않은 질의로라도 검색을 계속하는 게 파이프라인 전체를 죽이는 것보다
-    낫다."""
-    logger.warning("refine 단계 모델 호출 실패, 원본 질의로 폴백", exc_info=error)
-    original_query = callback_context.state.get("original_query", "")
-    fallback = RefinedQuery(query=original_query)
-    return _model_error_fallback_response(fallback.model_dump_json())
+def _on_refine_model_error(callback_context, llm_request, error) -> LlmResponse | None:
+    """refine의 모델(Groq) 호출이 실패하면 그 실패를 그대로 흘려보낸다(None
+    반환) - propose와 동일한 이유(_on_propose_model_error 참고). 원래는
+    정제를 포기하고 원본 질의로 폴백해 계속 진행했는데(다듬지 않은
+    질의로라도 검색을 계속하는 게 파이프라인을 죽이는 것보다 낫다는 판단),
+    2026-08-18(사용자 요청: "AI 모델중에 하나라도 토큰 다쓰면 실행되지
+    않도록 바꿔줘") 어떤 모델이든 하나라도 실패하면 정직하게 전체를
+    실패시키는 쪽으로 원칙을 통일했다."""
+    logger.warning(
+        "refine 단계 모델 호출 실패 - 모델 하나라도 실패하면 파이프라인을 그대로 실패시킨다",
+        exc_info=error,
+    )
+    return None
 
 
 def _on_propose_model_error(callback_context, llm_request, error) -> LlmResponse | None:

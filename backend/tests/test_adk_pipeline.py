@@ -13,6 +13,7 @@ from app.adk_pipeline import (
     _judge_eligible_proposals,
     _merge_proposals,
     _on_propose_model_error,
+    _on_refine_model_error,
     _pick_and_verify_relaxed,
     _relaxed_fallback_decision,
     _skip_judge_if_single_candidate,
@@ -183,6 +184,20 @@ def test_on_propose_model_error_returns_none_to_propagate_failure():
     기존 clarify/relaxed fallback/NO_CANDIDATE_ERROR 경로로 이어지므로,
     2/3만으로 최종 답을 내지 않는다."""
     result = _on_propose_model_error(_StubCallbackContext(), None, RuntimeError("모델 호출 실패"))
+
+    assert result is None
+
+
+# --- _on_refine_model_error ---------------------------------------------------
+
+
+def test_on_refine_model_error_returns_none_to_propagate_failure():
+    """2026-08-18, 사용자 요청: "AI 모델중에 하나라도 토큰 다쓰면 실행되지
+    않도록 바꿔줘" - propose와 같은 원칙을 refine에도 적용한다. 원래는
+    정제를 포기하고 원본 질의로 폴백해 계속 진행했는데, 이제는 모델
+    하나라도 실패하면 정직하게 전체를 실패시켜야 하므로 None을 반환해
+    ADK가 원본 예외를 그대로 raise하게 한다."""
+    result = _on_refine_model_error(_StubCallbackContext("refine"), None, RuntimeError("모델 호출 실패"))
 
     assert result is None
 
