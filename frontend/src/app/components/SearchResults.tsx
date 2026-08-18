@@ -250,6 +250,12 @@ export const SearchResults = ({
   // 존재하지만 Hooks는 조건부로 못 부르니 다른 모드에서는 빈 배열로 둔다.
   const [selectedFacets, setSelectedFacets] = useState<Record<string, string>>({});
   const [facetQuery, setFacetQuery] = useState<Record<string, string>>({});
+  // GPT 쇼핑의 "이거랑 비슷한거 더" 패턴 벤치마킹(2026-08-18, 사용자 요청
+  // "GPT 쇼핑의 장점을 잘 접목시켜줘") - judge가 고른 최종 추천 하나만
+  // 클릭 가능했는데, propose 단계에서 이미 받아온 다른 후보(proposals)도
+  // 전부 실제 구매 가능한 상품(URL·가격 확보됨)이다. mode==='single'에서만
+  // 쓰이지만 Hooks는 조건부로 못 부르니 다른 모드에서는 그냥 null로 둔다.
+  const [selectedProposalUrl, setSelectedProposalUrl] = useState<string | null>(null);
   const facets = result.mode === 'clarify' ? result.options.facets : [];
 
   if (result.mode === 'clarify') {
@@ -457,48 +463,93 @@ export const SearchResults = ({
   const winningProposers = winningProposal?.proposed_by?.length
     ? winningProposal.proposed_by
     : [decision.chosen_agent];
+
+  // selectedProposalUrl이 가리키는 후보를 찾으면 그걸 메인 카드에 보여준다 -
+  // 추가 요청 없이(proposals가 이미 URL/가격까지 다 갖고 있어서) 즉시
+  // 전환된다. AI가 심사로 고른 것과 사용자가 직접 고른 대안을 구분하려고
+  // isAlternate로 라벨/되돌리기 버튼을 분기한다.
+  const selectedProposal = selectedProposalUrl
+    ? proposals.find((p) => p.url === selectedProposalUrl) ?? null
+    : null;
+  const isAlternate = selectedProposal != null;
+  const displayed = selectedProposal ?? decision;
+  const displayedProposers = isAlternate
+    ? selectedProposal.proposed_by?.length
+      ? selectedProposal.proposed_by
+      : [selectedProposal.agent]
+    : winningProposers;
   const headerLabel =
-    winningProposers.length > 1
-      ? `${winningProposers.map((a) => AGENT_LABEL[a] || a).join(' · ')} 공동 제안 채택`
-      : `${AGENT_LABEL[winningProposers[0]] || winningProposers[0]} 제안 채택`;
+    displayedProposers.length > 1
+      ? `${displayedProposers.map((a) => AGENT_LABEL[a] || a).join(' · ')} 공동 제안 채택`
+      : `${AGENT_LABEL[displayedProposers[0]] || displayedProposers[0]} 제안 채택`;
+  const otherProposals = proposals.filter((p) => p.url !== displayed.url);
 
   return (
     <Card>
-      <span className="text-xs font-mono uppercase tracking-widest text-neutral-400 block mb-4">
-        최종 추천 · {headerLabel}
-      </span>
+      <div className="flex items-center justify-between mb-4">
+        <span className="text-xs font-mono uppercase tracking-widest text-neutral-400">
+          {isAlternate ? `다른 후보 · ${headerLabel}` : `최종 추천 · ${headerLabel}`}
+        </span>
+        {isAlternate && (
+          <button
+            type="button"
+            onClick={() => setSelectedProposalUrl(null)}
+            className="text-xs font-mono uppercase tracking-widest text-neutral-400 hover:text-neutral-950 transition-colors"
+          >
+            AI 추천으로
+          </button>
+        )}
+      </div>
       <a
-        href={decision.url}
+        href={displayed.url ?? undefined}
         target="_blank"
         rel="noopener noreferrer"
         className="group flex items-start justify-between gap-4 mb-3"
       >
         <div className="min-w-0">
-          <p className="text-lg font-medium text-neutral-950">{decision.product_name}</p>
-          <p className="text-sm font-light text-neutral-500">{decision.retailer}</p>
+          <p className="text-lg font-medium text-neutral-950">{displayed.product_name}</p>
+          <p className="text-sm font-light text-neutral-500">{displayed.retailer}</p>
         </div>
         <div className="shrink-0 flex items-center gap-2">
           <span className="text-xl font-medium text-neutral-950 whitespace-nowrap">
-            {decision.price || '가격 미확인'}
+            {displayed.price || '가격 미확인'}
           </span>
           <ArrowUpRight className="w-5 h-5 text-neutral-300 group-hover:text-neutral-950 transition-colors" />
         </div>
       </a>
-      <p className="text-sm font-light text-neutral-600 leading-relaxed mb-6">{decision.reasoning}</p>
+      <p className="text-sm font-light text-neutral-600 leading-relaxed mb-6">{displayed.reasoning}</p>
 
-      <div className="pt-4 border-t border-black/5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {proposals.map((p, i) => (
-          <div key={p.url ?? i} className="flex items-start gap-2 text-xs">
-            <VerifiedBadge verified={p.verified} />
-            <div className="min-w-0">
-              <ProposedByChips proposedBy={p.proposed_by} />
-              <p className="mt-1 font-light text-neutral-600 truncate">
-                {p.error ? p.error : `${p.product_name} · ${p.price || '가격 미확인'}`}
-              </p>
-            </div>
+      {otherProposals.length > 0 && (
+        <div className="pt-4 border-t border-black/5">
+          <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400 block mb-2">
+            다른 후보
+          </span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {otherProposals.map((p, i) => {
+              const isPickable = !p.error && !!p.url && !!p.product_name;
+              return (
+                <button
+                  key={p.url ?? i}
+                  type="button"
+                  disabled={!isPickable}
+                  onClick={() => isPickable && setSelectedProposalUrl(p.url)}
+                  className={`flex items-start gap-2 text-xs text-left rounded-lg -mx-2 px-2 py-1.5 transition-colors ${
+                    isPickable ? 'hover:bg-black/[0.03] cursor-pointer' : 'cursor-default'
+                  }`}
+                >
+                  <VerifiedBadge verified={p.verified} />
+                  <div className="min-w-0">
+                    <ProposedByChips proposedBy={p.proposed_by} />
+                    <p className="mt-1 font-light text-neutral-600 truncate">
+                      {p.error ? p.error : `${p.product_name} · ${p.price || '가격 미확인'}`}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
     </Card>
   );
 };
