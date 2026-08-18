@@ -45,10 +45,17 @@ class Settings:
     # 이 한도를 매번 초과했다 - agents/base.py의 _SNIPPET_MAX_CHARS로 기본 해결),
     # 2026-08-18("llama 모델 전부 GPT-oss 무료 모델로 바꿔줘") - 그라운딩 회귀
     # 파일럿에서 llama-3.3-70b-versatile의 일일 토큰(TPD) 한도가 실행 초반부터
-    # 소진되는 문제를 반복 관측한 뒤, refine/judge와 같은 gpt-oss 계열(가벼운
-    # 작업이라 20b)로 통일했다 - 별도 쿼터 풀이라 llama TPD 소진의 영향을 안
-    # 받고, 이미 refine에서 검증된 모델이라 새 실패 모드를 추가하지 않는다.
-    groq_model: str = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
+    # 소진되는 문제를 반복 관측한 뒤 gpt-oss-20b(refine과 같은 모델)로 한 번
+    # 바꿨는데, 그러자 refine + propose + 카테고리분류 + OCR이 전부 gpt-oss-20b의
+    # 같은 20만 토큰/일 예산을 나눠 쓰게 돼 오히려 더 빨리(같은 파일럿의
+    # 43번째 케이스 근처) 소진됐다 - 바로 아래 groq_refine_model과 겹치지 않게
+    # gpt-oss-120b(judge와 공유)로 옮겼다. propose는 output_schema를 안 쓰므로
+    # (순수 JSON 배열 텍스트를 직접 파싱) 애초에 구조화 출력 지원 여부와 무관하게
+    # 아무 모델이나 쓸 수 있다 - judge와 공유하는 이 조합이 refine과 공유하는
+    # 것보다 실제로 더 나은지는 다음 파일럿으로 다시 확인해야 한다(judge는 후보가
+    # 1개면 스킵되지만 propose는 매 질의 항상 실행돼, 어느 쪽이 덜 부딪히는지는
+    # 아직 추정일 뿐 실측하지 않았다).
+    groq_model: str = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
     # refine은 프롬프트가 원본 질의 하나뿐이라 작지만, ADK가 output_schema를
     # response_format=json_schema로 요청한다 - groq/compound-mini는 이를 지원하지
     # 않는다("This model does not support response format json_schema"). 구조화
