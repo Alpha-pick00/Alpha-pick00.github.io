@@ -45,6 +45,7 @@ from .agents.base import (
     build_refine_query_prompt,
     filter_candidates,
     format_results_block,
+    is_danawa_comparison_page,
     parse_json_array,
 )
 from .config import settings
@@ -263,7 +264,8 @@ class _FilterMergeNode(BaseAgent):
             "deepseek": state.get("deepseek_raw"),
             "danawa": state.get("danawa_raw"),
         }
-        merged = _merge_proposals(raw_by_agent)
+        danawa_tables = _danawa_tables_from_state(state)
+        merged = await _merge_proposals(raw_by_agent, danawa_tables)
         logger.info(
             "후보 풀: 병합 %d건 (%r)", len(merged), [m["proposed_by"] for m in merged]
         )
@@ -271,16 +273,51 @@ class _FilterMergeNode(BaseAgent):
         yield Event(author=self.name, actions=EventActions(state_delta={"candidates": merged}))
 
 
-def _merge_proposals(raw_by_agent: dict[str, str | None]) -> list[dict]:
-    """3개 제안자의 원시 JSON 텍스트를 각각 파싱+필터링한 뒤 fusion.dedup으로
-    동일 상품을 병합하는 순수 함수 — 한 제안자의 파싱이 실패해도 나머지로
-    진행한다(LLM 호출 없이 테스트 가능)."""
+async def _resolve_comparison_page_item(
+    item: dict, danawa_tables: list[tuple[PriceTable, dict]]
+) -> dict:
+    """item['url']이 다나와 가격비교 페이지(prod.danawa.com/info?pcode=...)면
+    같은 propose 라운드에서 _DanawaFetchNode가 이미 페치해 둔 가격표와 pcode로
+    대조해 A등급 최저가 구매링크로 바꿔치기한다 - 해석에 성공하면 URL이
+    /bridge/ 형태로 바뀌어 뒤이은 filter_candidates()의
+    is_danawa_comparison_page 검사를 정상 통과한다. 해석 실패(pcode 불일치,
+    A등급 오퍼 없음 등)하면 원본을 그대로 반환해 기존처럼 필터링되게 둔다 -
+    안 검증된 값을 지어내지 않는다는 원칙은 그대로 유지."""
+    url = item.get("url") or ""
+    if not is_danawa_comparison_page(url):
+        return item
+    resolved = await price_table_module.resolve_danawa_comparison_url(url, danawa_tables)
+    if resolved is None:
+        return item
+    resolved_url, price_krw, retailer = resolved
+    return {**item, "url": resolved_url, "price_krw": price_krw, "retailer": retailer}
+
+
+async def _merge_proposals(
+    raw_by_agent: dict[str, str | None],
+    danawa_tables: list[tuple[PriceTable, dict]],
+) -> list[dict]:
+    """3개 제안자의 원시 JSON 텍스트를 각각 파싱한 뒤, 다나와 가격비교 페이지
+    URL은 A등급 구매링크로 먼저 해석하고(_resolve_comparison_page_item),
+    필터링해 fusion.dedup으로 동일 상품을 병합한다 — 한 제안자의 파싱이
+    실패해도 나머지로 진행한다.
+
+    (2026-08-18) 원래는 LLM 호출 없이 테스트 가능한 순수 동기 함수였는데,
+    Qwen/Groq/DeepSeek이 다나와 검색 결과에서 고를 수 있는 URL이 사실상 전부
+    가격비교 페이지 형태뿐이라(다나와 도메인 단독 검색의 특성상) 해석 없이
+    그대로 필터링하면 세 제안자가 후보를 거의 못 만들어 후보 풀이 자주
+    0건으로 비고, 그 결과 되묻기(clarify)나 "적절한 상품 후보를 찾지 못했다"
+    실패가 대량 발생하는 걸 그라운딩 회귀 파일럿에서 확인했다(50개 중 정직한
+    실패인 케이스는 12%뿐, 나머지는 이 문제였다). 해석 자체(resolve_purchase_url)는
+    실제로는 네트워크 호출이 없는 순수 문자열 가공이라(price_table.py 참고)
+    async로 바꿔도 테스트 비용이 늘지 않는다."""
     entries: list[tuple[str, AgentCandidate]] = []
     for agent_name, raw in raw_by_agent.items():
         if not raw:
             continue
         try:
             items = parse_json_array(raw)
+            items = [await _resolve_comparison_page_item(item, danawa_tables) for item in items]
             items = filter_candidates(items, max_items=_MAX_CANDIDATES_PER_AGENT)
             entries.extend((agent_name, AgentCandidate(**item)) for item in items)
         except Exception:

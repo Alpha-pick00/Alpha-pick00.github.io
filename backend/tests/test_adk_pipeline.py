@@ -67,7 +67,7 @@ def test_merge_proposals_combines_all_agents():
         "deepseek": json.dumps([]),
     }
 
-    merged = _merge_proposals(raw_by_agent)
+    merged = asyncio.run(_merge_proposals(raw_by_agent, []))
 
     assert len(merged) == 1
     assert merged[0]["proposed_by"] == ["gpt", "gemini"]
@@ -80,7 +80,7 @@ def test_merge_proposals_skips_agent_with_malformed_json():
         "deepseek": None,
     }
 
-    merged = _merge_proposals(raw_by_agent)
+    merged = asyncio.run(_merge_proposals(raw_by_agent, []))
 
     assert len(merged) == 1
     assert merged[0]["proposed_by"] == ["gpt"]
@@ -89,7 +89,7 @@ def test_merge_proposals_skips_agent_with_malformed_json():
 def test_merge_proposals_all_empty_returns_empty_list():
     raw_by_agent = {"gpt": json.dumps([]), "gemini": None, "deepseek": ""}
 
-    assert _merge_proposals(raw_by_agent) == []
+    assert asyncio.run(_merge_proposals(raw_by_agent, [])) == []
 
 
 def test_merge_proposals_filters_generic_listing_url():
@@ -99,7 +99,7 @@ def test_merge_proposals_filters_generic_listing_url():
         "deepseek": None,
     }
 
-    assert _merge_proposals(raw_by_agent) == []
+    assert asyncio.run(_merge_proposals(raw_by_agent, [])) == []
 
 
 def test_merge_proposals_filters_danawa_comparison_page_url():
@@ -115,7 +115,7 @@ def test_merge_proposals_filters_danawa_comparison_page_url():
         "deepseek": None,
     }
 
-    assert _merge_proposals(raw_by_agent) == []
+    assert asyncio.run(_merge_proposals(raw_by_agent, [])) == []
 
 
 def test_merge_proposals_filters_danawa_mobile_comparison_page_url():
@@ -132,7 +132,7 @@ def test_merge_proposals_filters_danawa_mobile_comparison_page_url():
         "deepseek": None,
     }
 
-    assert _merge_proposals(raw_by_agent) == []
+    assert asyncio.run(_merge_proposals(raw_by_agent, [])) == []
 
 
 def test_merge_proposals_keeps_danawa_bridge_purchase_link():
@@ -145,7 +145,7 @@ def test_merge_proposals_keeps_danawa_bridge_purchase_link():
         "deepseek": None,
     }
 
-    merged = _merge_proposals(raw_by_agent)
+    merged = asyncio.run(_merge_proposals(raw_by_agent, []))
 
     assert len(merged) == 1
     assert merged[0]["url"] == bridge_url
@@ -161,7 +161,7 @@ def test_merge_proposals_filters_candidate_with_empty_url():
         "deepseek": None,
     }
 
-    assert _merge_proposals(raw_by_agent) == []
+    assert asyncio.run(_merge_proposals(raw_by_agent, [])) == []
 
 
 # --- _apply_challenge ------------------------------------------------------
@@ -418,10 +418,56 @@ def test_merge_proposals_includes_danawa_agent():
         "danawa": json.dumps([_raw_candidate("무선 마우스", 12900, COUPANG_URL)]),
     }
 
-    merged = _merge_proposals(raw_by_agent)
+    merged = asyncio.run(_merge_proposals(raw_by_agent, []))
 
     assert len(merged) == 1
     assert merged[0]["proposed_by"] == ["danawa"]
+
+
+def test_merge_proposals_resolves_comparison_page_to_bridge_url_when_pcode_matches():
+    """2026-08-18, 그라운딩 회귀 파일럿에서 발견: Qwen/Groq/DeepSeek이 다나와
+    단독 검색 결과에서 고를 수 있는 URL은 거의 전부 가격비교 페이지
+    (prod.danawa.com/info?pcode=...) 형태뿐인데, 해석 없이 필터링만 하면 세
+    제안자가 후보를 거의 못 만든다. 같은 propose 라운드에서 _DanawaFetchNode가
+    이미 페치해 둔 가격표(danawa_tables)에 같은 pcode가 있으면, 그 A등급
+    최저가 구매링크로 바꿔치기해 후보를 살려야 한다."""
+    table, result = _danawa_price_table_pair(
+        "레이저 데스에더 V3", [_offer_li("옥션", "45,000", "EE715", link_pcode="777")], pcode="19505813"
+    )
+    raw_by_agent = {
+        "gpt": json.dumps(
+            [_raw_candidate("Razer DeathAdder V3 (정품)", 0, "https://prod.danawa.com/info?pcode=19505813")]
+        ),
+        "gemini": None,
+        "deepseek": None,
+    }
+
+    merged = asyncio.run(_merge_proposals(raw_by_agent, [(table, result)]))
+
+    assert len(merged) == 1
+    assert merged[0]["url"] == "https://prod.danawa.com/bridge/loadingBridge.html?cmpnyc=EE715&link_pcode=777"
+    assert merged[0]["price_krw"] == 45000
+    assert merged[0]["retailer"] == "옥션"
+
+
+def test_merge_proposals_still_filters_comparison_page_when_pcode_does_not_match():
+    """danawa_tables에 같은 pcode를 가진 가격표가 없으면(예: _DanawaFetchNode가
+    다른 상품을 찾았거나 아예 실패했으면) 해석할 근거가 없다 - 안 검증된
+    값을 지어내지 않고 기존처럼 그대로 걸러야 한다."""
+    table, result = _danawa_price_table_pair(
+        "다른 상품", [_offer_li("옥션", "45,000", "EE715", link_pcode="777")], pcode="99999999"
+    )
+    raw_by_agent = {
+        "gpt": json.dumps(
+            [_raw_candidate("Razer DeathAdder V3 (정품)", 0, "https://prod.danawa.com/info?pcode=19505813")]
+        ),
+        "gemini": None,
+        "deepseek": None,
+    }
+
+    merged = asyncio.run(_merge_proposals(raw_by_agent, [(table, result)]))
+
+    assert merged == []
 
 
 def test_apply_challenge_marks_danawa_sourced_candidate_verified_without_challenge_verdict():
