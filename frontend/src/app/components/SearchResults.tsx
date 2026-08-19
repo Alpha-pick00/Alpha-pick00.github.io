@@ -675,36 +675,78 @@ export const SearchResults = ({
       </a>
       <p className="text-sm font-light text-neutral-600 leading-relaxed mb-6">{displayed.reasoning}</p>
 
-      {otherProposals.length > 0 && (
+      {/* 취향 주도 카테고리(패션의류/잡화 등)에서만 채워진다 - GPT 쇼핑의
+          스타일 가이드 벤치마킹(2026-08-19). 그룹의 상품명/가격/판매처는
+          group 자체가 아니라 반드시 실제 proposals에서 url로 찾아 쓴다 -
+          백엔드가 이미 그라운딩 검증을 했지만, 프론트도 group에 직접 실린
+          텍스트가 아니라 검증된 proposal 데이터를 신뢰하는 편이 안전하다. */}
+      {result.style_guide && result.style_guide.groups.length > 0 ? (
         <div className="pt-4 border-t border-black/5">
-          <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400 block mb-2">
-            다른 후보
-          </span>
+          {result.style_guide.intro && (
+            <p className="text-sm font-light text-neutral-600 leading-relaxed mb-4">
+              {result.style_guide.intro}
+            </p>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {otherProposals.map((p, i) => {
-              const isPickable = !p.error && !!p.url && !!p.product_name;
-              return (
-                <button
-                  key={p.url ?? i}
-                  type="button"
-                  disabled={!isPickable}
-                  onClick={() => isPickable && setSelectedProposalUrl(p.url)}
-                  className={`flex items-start gap-2 text-xs text-left rounded-lg -mx-2 px-2 py-1.5 transition-colors ${
-                    isPickable ? 'hover:bg-black/[0.03] cursor-pointer' : 'cursor-default'
-                  }`}
-                >
-                  <VerifiedBadge verified={p.verified} />
-                  <div className="min-w-0">
-                    <ProposedByChips proposedBy={p.proposed_by} />
-                    <p className="mt-1 font-light text-neutral-600 truncate">
-                      {p.error ? p.error : `${p.product_name} · ${p.price || '가격 미확인'}`}
-                    </p>
-                  </div>
-                </button>
-              );
-            })}
+            {result.style_guide.groups
+              .filter((g) => g.url !== displayed.url)
+              .map((g) => {
+                const matched = proposals.find((p) => p.url === g.url);
+                if (!matched) return null;
+                return (
+                  <button
+                    key={g.url}
+                    type="button"
+                    onClick={() => setSelectedProposalUrl(g.url)}
+                    className="flex flex-col items-start gap-1 text-left rounded-lg -mx-2 px-2 py-2 hover:bg-black/[0.03] transition-colors cursor-pointer"
+                  >
+                    <span className="text-xs font-medium text-neutral-950">{g.label}</span>
+                    <span className="text-xs font-light text-neutral-500 leading-relaxed">{g.description}</span>
+                    <span className="text-xs font-light text-neutral-600 mt-1">
+                      {matched.product_name} · {matched.price || '가격 미확인'}
+                    </span>
+                  </button>
+                );
+              })}
           </div>
+          {result.style_guide.closing_pick && (
+            <p className="text-xs font-light text-neutral-400 leading-relaxed mt-4 pt-4 border-t border-black/5">
+              {result.style_guide.closing_pick}
+            </p>
+          )}
         </div>
+      ) : (
+        otherProposals.length > 0 && (
+          <div className="pt-4 border-t border-black/5">
+            <span className="text-[11px] font-mono uppercase tracking-widest text-neutral-400 block mb-2">
+              다른 후보
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {otherProposals.map((p, i) => {
+                const isPickable = !p.error && !!p.url && !!p.product_name;
+                return (
+                  <button
+                    key={p.url ?? i}
+                    type="button"
+                    disabled={!isPickable}
+                    onClick={() => isPickable && setSelectedProposalUrl(p.url)}
+                    className={`flex items-start gap-2 text-xs text-left rounded-lg -mx-2 px-2 py-1.5 transition-colors ${
+                      isPickable ? 'hover:bg-black/[0.03] cursor-pointer' : 'cursor-default'
+                    }`}
+                  >
+                    <VerifiedBadge verified={p.verified} />
+                    <div className="min-w-0">
+                      <ProposedByChips proposedBy={p.proposed_by} />
+                      <p className="mt-1 font-light text-neutral-600 truncate">
+                        {p.error ? p.error : `${p.product_name} · ${p.price || '가격 미확인'}`}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )
       )}
     </Card>
   );

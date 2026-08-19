@@ -6,6 +6,7 @@ from app.adk_pipeline import (
     _apply_challenge,
     _broad_web_fallback_search,
     _build_decision,
+    _build_style_guide,
     _comparison_page_listing_fallback,
     _danawa_tables_from_state,
     _finalize_with_danawa,
@@ -73,6 +74,43 @@ def test_merge_proposals_combines_all_agents():
 
     assert len(merged) == 1
     assert merged[0]["proposed_by"] == ["gpt", "groq"]
+
+
+def test_merge_proposals_defaults_to_one_candidate_per_agent():
+    """기본값(max_candidates_per_agent 생략)은 지금까지처럼 에이전트당 1개로
+    자른다 - 2026-08-15 사용자 요청("최종 후보도 1개만")이 다른 모든
+    카테고리의 기본 동작으로 남아있어야 한다(회귀 확인)."""
+    raw_by_agent = {
+        "gpt": json.dumps(
+            [
+                _raw_candidate("상품 A", 10000, "https://coupang.com/vp/products/a"),
+                _raw_candidate("상품 B", 20000, "https://coupang.com/vp/products/b"),
+            ]
+        ),
+    }
+
+    merged = asyncio.run(_merge_proposals(raw_by_agent, []))
+
+    assert len(merged) == 1
+
+
+def test_merge_proposals_style_guide_mode_keeps_multiple_candidates_per_agent():
+    """스타일 가이드 모드(max_candidates_per_agent를 크게 넘김)는 propose가
+    이미 배열로 돌려준 여러 후보를 그대로 살려야 한다 - 새 LLM 호출 없이
+    후보 풀만 넓어진다."""
+    raw_by_agent = {
+        "gpt": json.dumps(
+            [
+                _raw_candidate("상품 A", 10000, "https://coupang.com/vp/products/a"),
+                _raw_candidate("상품 B", 20000, "https://coupang.com/vp/products/b"),
+                _raw_candidate("상품 C", 30000, "https://coupang.com/vp/products/c"),
+            ]
+        ),
+    }
+
+    merged = asyncio.run(_merge_proposals(raw_by_agent, [], max_candidates_per_agent=4))
+
+    assert len(merged) == 3
 
 
 def test_merge_proposals_skips_agent_with_malformed_json():
@@ -418,6 +456,83 @@ def test_build_decision_returns_none_without_raw_decision():
 
 def test_build_decision_returns_none_without_proposals():
     assert _build_decision({"raw_decision": {"url": COUPANG_URL}}, []) is None
+
+
+# --- _build_style_guide (취향 주도 카테고리에서 challenge를 통과한 proposals를
+# 스타일별로 그룹핑, 2026-08-19 사용자 요청: GPT 쇼핑처럼 여러 검증된 후보를
+# 스타일별로 보여주되 최종 추천은 지금처럼 judge가 고른 하나를 그대로 쓴다) ---
+
+
+def test_build_style_guide_returns_none_with_fewer_than_two_eligible_proposals():
+    proposals = [_proposal_for_decision(COUPANG_URL)]
+    assert asyncio.run(_build_style_guide("스니커즈", proposals)) is None
+
+
+def test_build_style_guide_grounds_groups_to_real_proposal_urls(monkeypatch):
+    """LLM이 목록에 없는 url을 지어내면(judge에서 이미 확인된 위험과 동일한
+    패턴) 그 그룹은 조용히 버려야 한다 - style_guide도 judge의 _build_decision과
+    같은 그라운딩 원칙을 지킨다."""
+    proposals = [
+        _proposal_for_decision(COUPANG_URL, price="201,700원", retailer="쿠팡"),
+        _proposal_for_decision(ELEVENST_URL, price="181,300원", retailer="11번가"),
+    ]
+
+    async def _fake_generate(query, eligible):
+        return {
+            "intro": "비즈니스 캐주얼에는 이런 스니커즈가 좋아요.",
+            "groups": [
+                {"label": "가장 무난한 선택", "description": "화이트 가죽 미니멀 스니커즈.", "url": COUPANG_URL},
+                {"label": "지어낸 후보", "description": "목록에 없는 url.", "url": "https://example.com/fake"},
+            ],
+            "closing_pick": "화이트 가죽이 1순위예요.",
+        }
+
+    monkeypatch.setattr(adk_pipeline_module.judge_module, "generate_style_guide", _fake_generate)
+
+    style_guide = asyncio.run(_build_style_guide("비즈니스 캐주얼 스니커즈", proposals))
+
+    # 그라운딩된 그룹이 하나뿐이라(지어낸 url은 버려짐) 2개 미만 -> None.
+    assert style_guide is None
+
+
+def test_build_style_guide_builds_from_grounded_groups(monkeypatch):
+    proposals = [
+        _proposal_for_decision(COUPANG_URL, price="201,700원", retailer="쿠팡"),
+        _proposal_for_decision(ELEVENST_URL, price="181,300원", retailer="11번가"),
+    ]
+
+    async def _fake_generate(query, eligible):
+        return {
+            "intro": "비즈니스 캐주얼에는 이런 스니커즈가 좋아요.",
+            "groups": [
+                {"label": "가장 무난한 선택", "description": "화이트 가죽 미니멀 스니커즈.", "url": COUPANG_URL},
+                {"label": "좀 더 캐주얼하게", "description": "테니스화 계열.", "url": ELEVENST_URL},
+            ],
+            "closing_pick": "화이트 가죽이 1순위예요.",
+        }
+
+    monkeypatch.setattr(adk_pipeline_module.judge_module, "generate_style_guide", _fake_generate)
+
+    style_guide = asyncio.run(_build_style_guide("비즈니스 캐주얼 스니커즈", proposals))
+
+    assert style_guide is not None
+    assert style_guide.intro == "비즈니스 캐주얼에는 이런 스니커즈가 좋아요."
+    assert [g.url for g in style_guide.groups] == [COUPANG_URL, ELEVENST_URL]
+    assert style_guide.closing_pick == "화이트 가죽이 1순위예요."
+
+
+def test_build_style_guide_returns_none_when_generation_fails(monkeypatch):
+    proposals = [
+        _proposal_for_decision(COUPANG_URL),
+        _proposal_for_decision(ELEVENST_URL),
+    ]
+
+    async def _boom(query, eligible):
+        raise RuntimeError("groq down")
+
+    monkeypatch.setattr(adk_pipeline_module.judge_module, "generate_style_guide", _boom)
+
+    assert asyncio.run(_build_style_guide("스니커즈", proposals)) is None
 
 
 # --- _broad_web_fallback_search (다나와 한정 검색이 빈손일 때의 최후 폴백,
