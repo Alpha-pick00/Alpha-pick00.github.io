@@ -68,3 +68,33 @@ def test_search_naver_returns_empty_list_on_failure(monkeypatch):
     results = asyncio.run(search_module.search_naver("무선 이어폰"))
 
     assert results == []
+
+
+def test_search_unrestricted_passes_empty_domains_list(monkeypatch):
+    captured: dict = {}
+
+    async def _fake_tavily_search(query, max_results, domains=None):
+        captured["query"] = query
+        captured["max_results"] = max_results
+        captured["domains"] = domains
+        return [SearchResult(title="어딘가의 리뷰 글", url="https://example.com/review", snippet="...")]
+
+    monkeypatch.setattr(search_module, "_tavily_search", _fake_tavily_search)
+
+    results = asyncio.run(search_module.search_unrestricted("희귀 상품명"))
+
+    assert captured["query"] == "희귀 상품명"
+    assert captured["domains"] == []
+    assert len(results) == 1
+    assert results[0].url == "https://example.com/review"
+
+
+def test_search_unrestricted_returns_empty_list_on_failure(monkeypatch):
+    async def _boom(query, max_results, domains=None):
+        raise RuntimeError("tavily down")
+
+    monkeypatch.setattr(search_module, "_tavily_search", _boom)
+
+    results = asyncio.run(search_module.search_unrestricted("희귀 상품명"))
+
+    assert results == []

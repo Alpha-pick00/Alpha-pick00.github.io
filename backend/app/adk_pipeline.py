@@ -116,6 +116,43 @@ def _refined_query_text(state: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
+_BROAD_FALLBACK_DANAWA_LIMIT = 5
+
+
+async def _broad_web_fallback_search(query: str) -> list[SearchResult]:
+    """다나와 한정 검색이 아무것도 못 찾았을 때의 최후 폴백(사용자 요청,
+    2026-08-19: "검색 알고리즘으로 적절한 상품을 찾을 수 없는 경우에는 구글
+    쇼핑에서 사용자 쿼리를 따로 검색해서 상위 5개의 제품을 다나와에서
+    가져오게"). search_module.search_unrestricted()로 도메인 제한 없이 한
+    번 더 검색해 질의에 맞는 실제 상품/브랜드명을 발견한 뒤, 가장 관련도
+    높은(Tavily가 1순위로 낸) 결과의 제목을 그 이름 삼아 다나와에 딱 한 번만
+    재검색한다(최대 5개) - 발견한 후보 개수만큼 다나와를 반복 검색하면
+    요청마다 10초 Crawl-delay가 곱절로 붙어(search.danawa.com 서비스 전체
+    상한 보호 원칙, fetchers/danawa_search.py 참고) 응답이 지나치게 느려진다."""
+    broad_results = await search_module.search_unrestricted(query)
+    if not broad_results:
+        return []
+
+    discovered_name = broad_results[0].title
+    try:
+        items = await price_table_module._search_danawa_items(
+            discovered_name, limit=_BROAD_FALLBACK_DANAWA_LIMIT
+        )
+    except Exception:
+        logger.warning("폴백 다나와 재검색 실패: %r", discovered_name, exc_info=True)
+        return []
+
+    return [
+        SearchResult(
+            title=item["product_name"],
+            url=f"https://prod.danawa.com/info/?pcode={item['pcode']}",
+            snippet=item["product_name"],
+            score=None,
+        )
+        for item in items
+    ]
+
+
 class _SearchNode(BaseAgent):
     """정제된 질의로 search_module.search()를 호출해 원본 결과 + 프롬프트용
     포맷 텍스트를 상태에 저장한다. 이 섹션의 다른 노드와 달리 Tavily 호출 전에
@@ -124,7 +161,12 @@ class _SearchNode(BaseAgent):
     참고). 이 호출은 이 노드 안에서만 쓰고 상태에 저장하지 않는다 — clarify
     단계의 카테고리 분류(debate.py::_extract_clarify_options)는 실제 검색
     결과를 근거로 다시 판별하는 별도 호출이라 더 정확하고, 그 결과와 여기서
-    쓰는 값을 굳이 공유할 필요가 없다."""
+    쓰는 값을 굳이 공유할 필요가 없다.
+
+    다나와 한정 검색이 완전히 빈손이면(2026-08-19 사용자 요청)
+    _broad_web_fallback_search로 한 번 더 시도한다 - 원래 질의로는
+    danawa.com 안에 매칭되는 상품이 아예 없을 때(표현이 어색하거나 다나와
+    색인에 없는 경우)의 최후 수단이라, 대부분의 검색은 이 분기를 안 탄다."""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         query = _refined_query_text(ctx.session.state)
@@ -135,6 +177,13 @@ class _SearchNode(BaseAgent):
         except Exception:
             logger.exception("검색 실패: %r", search_query)
             results = []
+
+        if not results:
+            try:
+                results = await _broad_web_fallback_search(query)
+            except Exception:
+                logger.exception("비제한 폴백 검색 실패: %r", query)
+                results = []
 
         yield Event(
             author=self.name,
