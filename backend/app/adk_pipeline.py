@@ -38,7 +38,6 @@ from . import search as search_module
 from .agents import deepseek as deepseek_module
 from .agents import gpt as gpt_module
 from .agents import judge as judge_module
-from .category import CategoryClassification, classify_category
 from .intent import needs_clarification
 from .agents.base import (
     NO_CANDIDATE_ERROR,
@@ -69,8 +68,12 @@ logger = logging.getLogger(__name__)
 
 _APP_NAME = "alpha_pick_debate"
 
-# 매 요청 검색 히트 수 — search.py::search()의 max_results 기본값(12)과 동일하게.
-_MAX_SEARCH_RESULTS = 12
+# 매 요청 검색 히트 수 — search_cache.FETCH_SIZE(2026-08-19부터 20)와 동일하게.
+# "이어폰"처럼 경쟁이 치열한 넓은 카테고리는 다나와 결과 상당수가 "가격비교
+# 중지 상품"(구매 불가)이라 표본이 작으면 propose가 살아있는 후보를 하나도
+# 못 볼 수 있다(search_cache.py의 FETCH_SIZE 상향 코멘트 참고) - 그 넓어진
+# 표본을 실제로 다 쓰도록 맞춰 올린다.
+_MAX_SEARCH_RESULTS = 20
 # 에이전트당 최종 후보 1개(가장 좋은 것 하나)만 제안하게 한다(사용자 요청,
 # 2026-08-15: "최종 후보도 각각 5개가 아닌 1개만 추천해주는걸로 하자 가장
 # 좋은 거 1개") - 이전엔 에이전트당 최대 5개까지 브레인스토밍해 병합 풀을
@@ -87,19 +90,6 @@ def _format_price_krw(price_krw: int | None) -> str:
 
 def _search_results_from_state(state: dict) -> list[SearchResult]:
     return [SearchResult(**r) for r in state.get("search_results") or []]
-
-
-def _augment_search_query(query: str, classification: CategoryClassification) -> str:
-    """Tavily에 보낼 검색어에 분류된 카테고리를 살짝 얹어, 검색엔진 자체의
-    랭킹을 그 카테고리 쪽으로 미세 조정한다. 도메인/결과를 강제로 거르는 게
-    아니라 키워드를 하나 더 얹는 완만한 가중치라 — 분류가 틀려도 원래 질의
-    키워드는 그대로 남아 있어 결과가 아예 사라지지는 않는다. 반대로 이 보정된
-    문자열은 Tavily 호출에만 쓰고, 프롬프트에 넘기는 refined_query 자체는
-    건드리지 않는다(propose/judge가 보는 질의는 항상 깨끗한 원문). 분류가
-    실패했으면(category=None) 원래 질의를 그대로 둔다."""
-    if classification.category is None:
-        return query
-    return f"{query} {classification.category}"
 
 
 def _refined_query_text(state: dict) -> str:
@@ -155,13 +145,19 @@ async def _broad_web_fallback_search(query: str) -> list[SearchResult]:
 
 class _SearchNode(BaseAgent):
     """정제된 질의로 search_module.search()를 호출해 원본 결과 + 프롬프트용
-    포맷 텍스트를 상태에 저장한다. 이 섹션의 다른 노드와 달리 Tavily 호출 전에
-    카테고리 분류(Groq) 호출이 하나 더 낀다 — 분류 결과를 검색어에 얹어
-    검색엔진 랭킹을 카테고리 쪽으로 미세 조정하기 위함(_augment_search_query
-    참고). 이 호출은 이 노드 안에서만 쓰고 상태에 저장하지 않는다 — clarify
-    단계의 카테고리 분류(debate.py::_extract_clarify_options)는 실제 검색
-    결과를 근거로 다시 판별하는 별도 호출이라 더 정확하고, 그 결과와 여기서
-    쓰는 값을 굳이 공유할 필요가 없다.
+    포맷 텍스트를 상태에 저장한다.
+
+    한때(_augment_search_query, 2026-08-12) Tavily에 보내는 검색어 뒤에
+    분류된 16개 대분류 카테고리 중 하나를 덧붙여 검색엔진 랭킹을 "미세
+    조정"하려 했는데, 실측(2026-08-19 사용자 리포트: "10만원대 이어폰
+    추천해줘 했는데 아무것도 안뜨잖아")으로 오히려 역효과임이 드러났다 -
+    "가전디지털"처럼 원래 넓은 대분류를 덧붙이면 Tavily가 그 흔한 키워드
+    쪽으로 결과를 완전히 끌고 가버려("이어폰" 검색이 스마트링·TV·자동차
+    뉴스로 뒤덮임), "완만한 가중치"라는 설계 의도와 달리 원 질의 자체가
+    묻혀버렸다. 그래서 이 보정을 제거하고 정제된 질의를 그대로 검색한다 -
+    다나와 도메인 한정만으로도 이미 충분히 좁혀져 있어 추가 보정이 없어도
+    된다. classify_category는 이 노드의 유일한 호출부였다(clarify 단계는
+    별도 호출, debate.py::_extract_clarify_options) - 이제 안 쓴다.
 
     다나와 한정 검색이 완전히 빈손이면(2026-08-19 사용자 요청)
     _broad_web_fallback_search로 한 번 더 시도한다 - 원래 질의로는
@@ -170,12 +166,10 @@ class _SearchNode(BaseAgent):
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         query = _refined_query_text(ctx.session.state)
-        classification = await classify_category(query, [])
-        search_query = _augment_search_query(query, classification)
         try:
-            results = await search_module.search(search_query, max_results=_MAX_SEARCH_RESULTS)
+            results = await search_module.search(query, max_results=_MAX_SEARCH_RESULTS)
         except Exception:
-            logger.exception("검색 실패: %r", search_query)
+            logger.exception("검색 실패: %r", query)
             results = []
 
         if not results:

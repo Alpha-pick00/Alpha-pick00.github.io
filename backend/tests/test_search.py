@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
+
 from app import search as search_module
 from app.schemas import SearchResult
 
@@ -98,3 +100,39 @@ def test_search_unrestricted_returns_empty_list_on_failure(monkeypatch):
     results = asyncio.run(search_module.search_unrestricted("희귀 상품명"))
 
     assert results == []
+
+
+def test_tavily_search_filters_out_generic_listing_pages(monkeypatch):
+    """다나와 카테고리 목록 페이지처럼 특정 상품 하나를 가리키지 않는 결과는
+    propose에게 넘기기 전에 걸러야 한다(2026-08-19 사용자 리포트: "10만원대
+    이어폰 추천해줘 했는데 아무것도 안뜨잖아" - "이어폰" 검색 결과가 목록
+    페이지로 뒤덮여 propose가 실제 상품을 하나도 못 봤다)."""
+    fixture_response = {
+        "results": [
+            {
+                "title": "무선 이어폰 : 다나와 가격비교",
+                "url": "https://prod.danawa.com/list?cate=12237349",
+                "content": "카테고리 목록",
+            },
+            {
+                "title": "QCY Mini 2 : 다나와 가격비교",
+                "url": "https://prod.danawa.com/info?pcode=6833593",
+                "content": "39,900원",
+            },
+        ]
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=fixture_response)
+
+    real_async_client = httpx.AsyncClient
+
+    def factory(**kwargs):
+        return real_async_client(transport=httpx.MockTransport(handler), timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr(search_module.httpx, "AsyncClient", factory)
+
+    results = asyncio.run(search_module._tavily_search("이어폰", 5))
+
+    assert len(results) == 1
+    assert results[0].url == "https://prod.danawa.com/info?pcode=6833593"

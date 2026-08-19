@@ -4,6 +4,7 @@ import logging
 import httpx
 
 from . import embeddings, google_merchant, search_cache
+from .agents.base import is_generic_listing_url
 from .config import settings
 from .schemas import SearchResult
 
@@ -59,6 +60,16 @@ async def _tavily_search(
 
     results = []
     for r in data.get("results", []):
+        # 카테고리 목록 페이지(예: prod.danawa.com/list?cate=)는 특정 상품 하나를
+        # 가리키지 않아 가격/판매처 정보가 없다 - propose 단계는 지금까지 이걸
+        # 후보로 받아들인 뒤(is_generic_listing_url, agents/base.py)에야 걸러냈는데,
+        # "이어폰"처럼 넓은 카테고리어는 Tavily 결과 자체가 이런 목록 페이지로
+        # 뒤덮여 있어(실측 2026-08-19: "이어폰" 검색 8건 전부가 목록 페이지) propose가
+        # 볼 수 있는 실제 상품이 하나도 없는 채로 프롬프트가 채워졌다 - 3개 모델이
+        # 전부 후보를 못 만들어 "적절한 상품 후보를 찾지 못했습니다"로 끝났다.
+        # 검색 결과를 프롬프트에 넣기 전에 걸러야, propose가 애초에 실제 상품만 본다.
+        if is_generic_listing_url(r["url"]):
+            continue
         raw = r.get("raw_content") or ""
         snippet = r.get("content", "")
         # raw_content가 있으면 스니펫보다 정보가 많으므로 우선 사용(토큰 절약을 위해 앞부분만)

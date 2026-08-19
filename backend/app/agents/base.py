@@ -6,6 +6,12 @@ from ..schemas import SearchResult
 
 _GENERIC_LISTING_URL_PATTERN = re.compile(
     r"(search\?|dsearch\.php|/search\.|Gateway\.[a-z]+\?|/list\?cate="
+    # 모바일 다나와의 카테고리 목록 페이지(예: m.danawa.com/product/
+    # productList.html?cateCode=11252453) - 단일 상품 페이지(product.html?code=)와
+    # 이름이 비슷해 헷갈리기 쉽지만 "List"가 붙고 파라미터도 cateCode라 별개다
+    # (2026-08-19 실측: "이어폰" 검색 결과에 섞여 들어와 다른 목록 페이지들처럼
+    # propose에게 아무 상품 정보도 못 준 채 프롬프트만 채웠다).
+    r"|productList\.html\?"
     r"|[?&](q|query|prdid|code)=($|&|#))",
     re.IGNORECASE,
 )
