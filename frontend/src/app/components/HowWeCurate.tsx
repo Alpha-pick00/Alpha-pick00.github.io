@@ -2,6 +2,11 @@ import { useRef } from 'react';
 import { motion } from 'motion/react';
 import { Sparkles, Search, Users, ShieldCheck, Scale, CheckCircle2 } from 'lucide-react';
 
+// judge 슬롯은 2026-08-16부터 Claude가 아니라 Groq(openai/gpt-oss-120b)다(백엔드
+// app/agents/judge.py 참고 - Anthropic엔 상시 무료 API 티어가 없다). 이 페이지는
+// 그 뒤로도 한동안 "Claude가 심사"라고 안내하고 있었다(사용자 리포트, 2026-08-19:
+// "claude 이제 사용안하는데 claude를 이용해 검증한다고 하잖아") - 실제로 안 쓰는
+// 모델을 쓴다고 안내하면 안 되므로 여기서 바로잡는다.
 const steps = [
   {
     icon: Sparkles,
@@ -25,8 +30,8 @@ const steps = [
   },
   {
     icon: Scale,
-    title: 'Claude가 근거를 심사',
-    description: '검증을 통과한 제안과 그 근거만 보고, 다섯 번째 모델인 Claude가 어떤 제안이 실제로 신뢰할 만한지 비교합니다.',
+    title: 'Groq가 근거를 심사',
+    description: '검증을 통과한 제안과 그 근거만 보고, Groq가 어떤 제안이 실제로 신뢰할 만한지 비교합니다.',
   },
   {
     icon: CheckCircle2,
@@ -71,8 +76,8 @@ export const HowWeCurate = () => {
             <div className="absolute top-0 left-[-1px] h-12 w-[1px] bg-gradient-to-b from-black to-transparent" />
             <p className="text-xl md:text-2xl font-light text-neutral-700 leading-relaxed">
               하나의 모델에게 묻지 않습니다. 서로 다른 세 모델이 각자 조사해 제안하고, DeepSeek가 그 근거를
-              먼저 검증한 뒤, <span className="font-medium" style={{ color: '#4ADE80' }}>다섯 번째 모델</span>인
-              Claude가 최종 심사합니다.
+              먼저 검증한 뒤, <span className="font-medium" style={{ color: '#4ADE80' }}>Groq</span>가
+              최종 심사합니다.
             </p>
           </motion.div>
         </div>
@@ -88,7 +93,7 @@ export const HowWeCurate = () => {
           <svg
             viewBox="0 0 1460 380"
             role="img"
-            aria-label="검색어가 들어오면 먼저 Groq가 질의를 다듬고, 백엔드가 Tavily를 통해 다나와를 검색한다. 그 결과를 Qwen, Groq, DeepSeek 세 모델에게 동시에 전달하면 세 모델은 각자 근거를 담아 상품을 제안한다. DeepSeek가 그 세 제안의 근거를 다시 검토해 교차 검증하고, Claude가 검증을 통과한 근거를 비교 심사해 하나의 최종 추천으로 압축한다."
+            aria-label="검색어가 들어오면 먼저 Groq가 질의를 다듬고, 백엔드가 Tavily를 통해 다나와를 검색한다. 그 결과를 Qwen, Groq, DeepSeek 세 모델에게 동시에 전달하면 세 모델은 각자 근거를 담아 상품을 제안한다. DeepSeek가 그 세 제안의 근거를 다시 검토해 교차 검증하고, Groq가 검증을 통과한 근거를 비교 심사해 하나의 최종 추천으로 압축한다."
             className="w-full h-auto min-w-[1180px]"
           >
             <defs>
@@ -152,15 +157,15 @@ export const HowWeCurate = () => {
             <text x="961" y="184" textAnchor="middle" fontSize="13" fontWeight="600" fill="#0a0a0a" fontFamily="-apple-system, sans-serif">교차 검증</text>
             <text x="961" y="202" textAnchor="middle" fontSize="10.5" fill="#8a8a8a" fontFamily="-apple-system, sans-serif">DeepSeek · 근거 재검토</text>
 
-            {/* DeepSeek -> Claude */}
+            {/* DeepSeek -> Groq(judge) */}
             <line x1="1036" y1="190" x2="1076" y2="190" stroke="#c7c7c7" strokeWidth="1.4" markerEnd="url(#hwc-arrow)" />
 
-            {/* Claude judge */}
+            {/* Groq judge */}
             <rect x="1076" y="140" width="170" height="100" rx="14" fill="rgba(74,222,128,0.08)" stroke="#4ADE80" strokeWidth="1.6" />
-            <text x="1161" y="182" textAnchor="middle" fontSize="14" fontWeight="700" fill="#0a0a0a" fontFamily="-apple-system, sans-serif">Claude</text>
+            <text x="1161" y="182" textAnchor="middle" fontSize="14" fontWeight="700" fill="#0a0a0a" fontFamily="-apple-system, sans-serif">Groq</text>
             <text x="1161" y="200" textAnchor="middle" fontSize="10.5" fill="#166534" fontFamily="-apple-system, sans-serif">근거 비교 심사</text>
 
-            {/* Claude -> Final */}
+            {/* Groq(judge) -> Final */}
             <line x1="1246" y1="190" x2="1302" y2="190" stroke="#4ADE80" strokeWidth="1.6" markerEnd="url(#hwc-arrow-accent)" />
 
             {/* Final */}

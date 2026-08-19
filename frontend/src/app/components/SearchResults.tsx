@@ -81,7 +81,7 @@ const STAGE_LABEL: Record<DecideStage, string> = {
   searching: '다나와에서 검색하고 있습니다',
   proposing: 'Qwen · Groq · DeepSeek가 후보를 찾고 있습니다',
   challenging: 'DeepSeek가 근거를 검증하고 있습니다',
-  judging: 'Claude가 근거를 비교해 최종 추천을 고르고 있습니다',
+  judging: 'Groq가 근거를 비교해 최종 추천을 고르고 있습니다',
 };
 
 const ProposedByChips = ({ proposedBy }: { proposedBy: string[] | null | undefined }) =>
