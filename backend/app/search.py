@@ -1,9 +1,8 @@
-import asyncio
 import logging
 
 import httpx
 
-from . import embeddings, google_merchant, search_cache
+from . import search_cache
 from .agents.base import is_generic_listing_url
 from .config import settings
 from .schemas import SearchResult
@@ -79,50 +78,20 @@ async def _tavily_search(
 
 
 async def _fetch(query: str) -> list[SearchResult]:
-    """Tavily 스크래핑 + Google Merchant(내 상품 피드) 결과를 실제로 호출해 병합한다.
-    google_merchant.search()는 설정이 없거나 계정에 매칭되는 상품이 없으면
-    빈 리스트를 반환하므로, 지금은 사실상 Tavily 결과만 나온다(google_merchant
-    모듈의 docstring 참고). 캐시를 거치지 않는 순수 조회 — search()의 캐시 미스
-    경로와 refresh()의 강제 갱신 경로가 이 함수를 공유한다."""
-    merchant_task = google_merchant.search(query)
-    tavily_task = _tavily_search(query, search_cache.FETCH_SIZE)
-    merchant_results, tavily_results = await asyncio.gather(
-        merchant_task, tavily_task, return_exceptions=True
-    )
-
-    if isinstance(merchant_results, BaseException):
-        merchant_results = []
-    if isinstance(tavily_results, BaseException):
-        tavily_results = []
-
-    seen_urls = {r.url for r in merchant_results}
-    merged = list(merchant_results)
-    merged += [r for r in tavily_results if r.url not in seen_urls]
-    return merged
+    """Tavily를 호출해 검색 결과를 가져온다. 캐시를 거치지 않는 순수 조회 —
+    search()의 캐시 미스 경로와 refresh()의 강제 갱신 경로가 이 함수를 공유한다."""
+    return await _tavily_search(query, search_cache.FETCH_SIZE)
 
 
 async def search(query: str, max_results: int = 12) -> list[SearchResult]:
     """같은 질의가 반복되면 search_cache에서 재사용한다 — 항상 FETCH_SIZE만큼
-    받아서 캐시해두고, 더 적은 max_results를 요청한 호출은 앞에서 잘라 쓴다.
-    완전 일치가 없으면 의미(임베딩) 기반으로 비슷한 질의의 캐시를 재사용한다 —
-    실패해도 Tavily 조회로 그대로 폴백한다."""
+    받아서 캐시해두고, 더 적은 max_results를 요청한 호출은 앞에서 잘라 쓴다."""
     cached = search_cache.get(query)
     if cached is not None:
         return cached[:max_results]
 
-    query_embedding: list[float] | None = None
-    if settings.semantic_cache_enabled and settings.openai_api_key:
-        try:
-            query_embedding = await embeddings.embed_query(query)
-            match = search_cache.find_similar(query_embedding)
-            if match is not None:
-                _, results, _ = match
-                return results[:max_results]
-        except Exception:
-            logger.warning("의미 기반 캐시 조회 실패, Tavily로 폴백", exc_info=True)
-
     merged = await _fetch(query)
-    search_cache.set(query, merged, embedding=query_embedding)
+    search_cache.set(query, merged)
     return merged[:max_results]
 
 

@@ -7,12 +7,6 @@ load_dotenv()
 
 
 class Settings:
-    # openai_api_key는 이제 embeddings.py(검색 캐시 의미 기반 매칭)에서만 쓴다 -
-    # "gpt" 에이전트 슬롯 자체는 2026-08-15부터 OpenAI 토큰 소진으로 Qwen(DashScope)
-    # 으로 옮겼다(agents/gpt.py 참고 - 파일/함수/agent="gpt" 식별자는 스키마·
-    # 프론트엔드·테스트 전반에 걸쳐 있어 그대로 두고, 내부에서 호출하는 모델만
-    # 바꿨다). 아래 qwen_api_key가 그 슬롯의 실제 자격증명이다.
-    openai_api_key: str | None = os.environ.get("OPENAI_API_KEY")
     qwen_api_key: str | None = os.environ.get("QWEN_API_KEY")
     # DashScope는 리전마다 별도 엔드포인트/계정이다 - 이전에 이 프로젝트가 Qwen을
     # 붙였다가 "Model Studio 계정의 과금 플랜 활성화 문제"로 포기한 적이 있는데
@@ -24,8 +18,6 @@ class Settings:
     )
     deepseek_api_key: str | None = os.environ.get("DEEPSEEK_API_KEY")
     tavily_api_key: str | None = os.environ.get("TAVILY_API_KEY")
-    google_merchant_id: str | None = os.environ.get("GOOGLE_MERCHANT_ID")
-    google_service_account_file: str | None = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
 
     # 2026-08-18("qwen 3.7 + 로 모델 바꿔줘") - qwen-max에서 Qwen3.7 세대의
     # plus 등급으로 교체. 필요하면 .env의 QWEN_MODEL로 다른 버전(예:
@@ -84,11 +76,6 @@ class Settings:
     groq_judge_model: str = os.environ.get("GROQ_JUDGE_MODEL", "openai/gpt-oss-120b")
 
     google_vision_api_key: str | None = os.environ.get("GOOGLE_VISION_API_KEY")
-
-    # 검색 캐시의 의미 기반(임베딩) 매칭 on/off. openai_api_key는 이제 이 임베딩
-    # 조회에서만 쓰이지만, 그것과 별개로 이 기능 자체만 끄고 싶을 때를 위한
-    # 스위치를 그대로 둔다.
-    semantic_cache_enabled: bool = os.environ.get("SEMANTIC_CACHE_ENABLED", "true").lower() != "false"
 
     # 소셜 로그인 (Google Client ID는 프론트엔드 VITE_GOOGLE_CLIENT_ID로만 쓰임 —
     # access_token으로 유저 정보를 조회하는 방식이라 백엔드는 client id가 필요 없다)

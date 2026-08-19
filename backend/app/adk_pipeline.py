@@ -674,8 +674,8 @@ def _groq_model(model_name: str) -> LiteLlm:
     """Groq는 OpenAI 호환 엔드포인트라 "openai/" 프리픽스 뒤에 api_base/api_key로
     Groq 엔드포인트를 직접 지정한다 - litellm이 groq 프로바이더를 자체 지원하는지에
     기대지 않고 "그냥 OpenAI 호환 엔드포인트"로 취급하는 쪽이 확실하다(agents/gpt.py의
-    DashScope 처리와 동일한 접근). num_retries=0 - embeddings.py와 동일한 이유
-    (사용자 요청, 2026-08-15: "너무 느려 더 빠르게"): 실패해도 각 단계마다 이미
+    DashScope 처리와 동일한 접근). num_retries=0 - 사용자 요청(2026-08-15: "너무
+    느려 더 빠르게"): 실패해도 각 단계마다 이미
     폴백(on_model_error_callback 등)이 있어 litellm 내부 재시도로 얻는 이득보다
     지연 비용이 크다."""
     return LiteLlm(
