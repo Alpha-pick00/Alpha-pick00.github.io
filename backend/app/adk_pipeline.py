@@ -36,6 +36,7 @@ from pydantic import TypeAdapter
 
 from . import price_table as price_table_module
 from . import search as search_module
+from .category import classify_category
 from .agents import deepseek as deepseek_module
 from .agents import gpt as gpt_module
 from .agents import judge as judge_module
@@ -63,6 +64,8 @@ from .schemas import (
     Proposal,
     RefinedQuery,
     SearchResult,
+    StyleGuide,
+    StyleGuideGroup,
 )
 from fusion.dedup import merge_candidates
 
@@ -84,6 +87,32 @@ _MAX_SEARCH_RESULTS = 20
 # 최선의 답 하나만 내고, 병합은 여전히 3개 에이전트가 같은 상품을 골랐는지
 # 판단하는 데만 쓰인다.
 _MAX_CANDIDATES_PER_AGENT = 1
+
+# 취향 주도 카테고리(스타일 가이드 모드, 2026-08-19 사용자 요청)에 한해서만
+# 위 1건 컷을 완화한다 - 위 2026-08-15 요청("1개만 추천")은 여전히 기본값
+# (다른 모든 카테고리)에 그대로 적용되고, 이 값은 STYLE_GUIDE_CATEGORIES에
+# 속한 질의에서만 쓰인다. propose 프롬프트가 이미 에이전트당 최대 5개를
+# 배열로 돌려주므로(PROPOSAL_INSTRUCTIONS) 이 컷을 완화해도 새 LLM 호출은
+# 없다 - 이미 받아온 응답을 덜 잘라낼 뿐이다.
+_STYLE_GUIDE_MAX_CANDIDATES_PER_AGENT = 4
+
+# judge/스타일 가이드 LLM 호출에 실제로 넣어주는 후보 수는 위 후보 풀 크기와
+# 별개로 이 값에서 다시 한 번 자른다(2026-08-19 실측: 스타일 가이드 카테고리에서
+# 후보 풀을 넓힌 채 이 컷 없이 judge 프롬프트를 만들면 이 프로젝트가 쓰는 Groq
+# 계정의 gpt-oss-120b TPM 한도(분당 8000)를 넘겨 429(RateLimitError)가 났다 -
+# "Request too large ... Limit 8000, Requested 8074/8283". judge는 원래도 "1개만
+# 추천"(_MAX_CANDIDATES_PER_AGENT) 시절 최대 3개 안팎만 봤으므로, 이 컷은 그
+# 예산 안으로 되돌리면서도 스타일 가이드가 2~4개 그룹을 만들 여유는 남긴다.
+# state에 남는 proposals 자체(프론트 "다른 후보 보기"용)는 그대로 더 넓다 -
+# LLM에게 "보여주는" 양만 줄인다.
+_MAX_JUDGE_INPUT_CANDIDATES = 4
+
+# category.py의 16개 대분류 중 "스펙보다 취향이 중요한" 카테고리만 스타일
+# 가이드 대상으로 삼는다(사용자 요청, 2026-08-19: "다른 카테고리들도 저렇게
+# 추가해줘" - 패션에서 시작해 확장). 나머지(식품/가전디지털/자동차용품 등)는
+# 스펙·가격 비교가 핵심이라 지금처럼 단일 추천만 낸다. 필요하면 이 집합만
+# 조정하면 된다.
+STYLE_GUIDE_CATEGORIES = {"패션의류/잡화", "뷰티", "홈인테리어", "완구/취미"}
 
 
 def _format_price_krw(price_krw: int | None) -> str:
@@ -164,15 +193,28 @@ class _SearchNode(BaseAgent):
     다나와 한정 검색이 완전히 빈손이면(2026-08-19 사용자 요청)
     _broad_web_fallback_search로 한 번 더 시도한다 - 원래 질의로는
     danawa.com 안에 매칭되는 상품이 아예 없을 때(표현이 어색하거나 다나와
-    색인에 없는 경우)의 최후 수단이라, 대부분의 검색은 이 분기를 안 탄다."""
+    색인에 없는 경우)의 최후 수단이라, 대부분의 검색은 이 분기를 안 탄다.
+
+    classify_category는(2026-08-19, 스타일 가이드 모드 게이트로 재사용 -
+    검색어 보정 용도로는 위에서 이미 뗐지만 이건 별개 목적이다) 검색과
+    asyncio.gather로 나란히 돌린다 - Tavily 검색이 어차피 훨씬 오래 걸려서
+    같이 부르면 이 카테고리 분류 지연시간이 전혀 추가되지 않는다."""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         query = _refined_query_text(ctx.session.state)
-        try:
-            results = await search_module.search(query, max_results=_MAX_SEARCH_RESULTS)
-        except Exception:
-            logger.exception("검색 실패: %r", query)
+        search_task = search_module.search(query, max_results=_MAX_SEARCH_RESULTS)
+        classify_task = classify_category(query, [])
+        results, classification = await asyncio.gather(
+            search_task, classify_task, return_exceptions=True
+        )
+        if isinstance(results, BaseException):
+            logger.exception("검색 실패: %r", query, exc_info=results)
             results = []
+        if isinstance(classification, BaseException):
+            logger.exception("스타일 가이드 카테고리 분류 실패: %r", query, exc_info=classification)
+            style_guide_mode = False
+        else:
+            style_guide_mode = classification.category in STYLE_GUIDE_CATEGORIES
 
         if not results:
             try:
@@ -187,6 +229,7 @@ class _SearchNode(BaseAgent):
                 state_delta={
                     "search_results": [r.model_dump() for r in results],
                     "search_results_block": format_results_block(results),
+                    "style_guide_mode": style_guide_mode,
                 }
             ),
         )
@@ -312,7 +355,15 @@ class _FilterMergeNode(BaseAgent):
             "danawa": state.get("danawa_raw"),
         }
         danawa_tables = _danawa_tables_from_state(state)
-        merged = await _merge_proposals(raw_by_agent, danawa_tables)
+        # 취향 주도 카테고리(스타일 가이드 모드)는 에이전트당 후보를 1개로
+        # 자르지 않는다 - propose 프롬프트가 이미 매번 최대 5개를 배열로
+        # 돌려주므로(PROPOSAL_INSTRUCTIONS) 새 LLM 호출 없이 표본만 넓어진다.
+        max_per_agent = (
+            _STYLE_GUIDE_MAX_CANDIDATES_PER_AGENT
+            if state.get("style_guide_mode")
+            else _MAX_CANDIDATES_PER_AGENT
+        )
+        merged = await _merge_proposals(raw_by_agent, danawa_tables, max_candidates_per_agent=max_per_agent)
         logger.info(
             "후보 풀: 병합 %d건 (%r)", len(merged), [m["proposed_by"] for m in merged]
         )
@@ -343,6 +394,7 @@ async def _resolve_comparison_page_item(
 async def _merge_proposals(
     raw_by_agent: dict[str, str | None],
     danawa_tables: list[tuple[PriceTable, dict]],
+    max_candidates_per_agent: int = _MAX_CANDIDATES_PER_AGENT,
 ) -> list[dict]:
     """3개 제안자의 원시 JSON 텍스트를 각각 파싱한 뒤, 다나와 가격비교 페이지
     URL은 A등급 구매링크로 먼저 해석하고(_resolve_comparison_page_item),
@@ -365,7 +417,7 @@ async def _merge_proposals(
         try:
             items = parse_json_array(raw)
             items = [await _resolve_comparison_page_item(item, danawa_tables) for item in items]
-            items = filter_candidates(items, max_items=_MAX_CANDIDATES_PER_AGENT)
+            items = filter_candidates(items, max_items=max_candidates_per_agent)
             entries.extend((agent_name, AgentCandidate(**item)) for item in items)
         except Exception:
             logger.exception("%s 제안 파싱 실패, 이 제안자는 후보 풀에서 제외", agent_name)
@@ -731,7 +783,8 @@ def _build_judge_agent() -> LlmAgent:
     def instruction(ctx: ReadonlyContext) -> str:
         query = _refined_query_text(ctx.state)
         proposals = [Proposal(**p) for p in (ctx.state.get("proposals") or [])]
-        return judge_module.build_judge_prompt(query, _judge_eligible_proposals(proposals))
+        eligible = _judge_eligible_proposals(proposals)[:_MAX_JUDGE_INPUT_CANDIDATES]
+        return judge_module.build_judge_prompt(query, eligible)
 
     return LlmAgent(
         name="judge",
@@ -859,6 +912,42 @@ def _build_decision(state: dict, proposals: list[Proposal]) -> Decision | None:
         chosen_agent=matched.agent,
         verified=matched.verified,
     )
+
+
+async def _build_style_guide(query: str, proposals: list[Proposal]) -> StyleGuide | None:
+    """취향 주도 카테고리(STYLE_GUIDE_CATEGORIES)에서만, judge가 하나 고른
+    최종 추천(decision)과는 별개로 challenge를 통과한 proposals 전체를
+    스타일별로 그룹핑해 덧붙인다(2026-08-19 사용자 요청 - GPT 쇼핑처럼
+    여러 검증된 후보를 스타일별로 보여주되, 최종 추천은 지금처럼 하나로
+    유지). judge_module.generate_style_guide는 LLM 호출+파싱만 하고, 여기서
+    _build_decision과 같은 그라운딩 검증을 한다 - LLM이 목록에 없는 url을
+    지어내면(judge에서 이미 한 번 확인된 위험) 그 그룹은 조용히 버린다.
+    그룹이 2개 미만으로 남으면(대부분 무관하다고 판단됐거나 실패) 아예
+    None - 스타일 가이드는 있으면 좋은 부가 정보일 뿐, 없어도 기존 단일
+    추천 응답과 완전히 동일하게 동작해야 한다."""
+    eligible = _judge_eligible_proposals(proposals)[:_MAX_JUDGE_INPUT_CANDIDATES]
+    if len(eligible) < 2:
+        return None
+    try:
+        data = await judge_module.generate_style_guide(query, eligible)
+    except Exception:
+        logger.exception("스타일 가이드 생성 실패: %r", query)
+        return None
+
+    by_url = {p.url: p for p in eligible if p.url}
+    groups: list[StyleGuideGroup] = []
+    for g in data.get("groups") or []:
+        url = g.get("url")
+        if url not in by_url:
+            continue
+        label = (g.get("label") or "").strip()
+        description = (g.get("description") or "").strip()
+        if not label or not description:
+            continue
+        groups.append(StyleGuideGroup(label=label, description=description, url=url))
+    if len(groups) < 2:
+        return None
+    return StyleGuide(intro=data.get("intro") or "", groups=groups, closing_pick=data.get("closing_pick"))
 
 
 async def _verify_relaxed_verdict(
@@ -1214,7 +1303,16 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
         raise RuntimeError(NO_CANDIDATE_ERROR)
 
     decision, price_table = await _finalize_with_danawa(decision, proposals, danawa_tables)
-    result = DecideResponse(query=query, proposals=proposals, decision=decision, price_table=price_table)
+    style_guide = (
+        await _build_style_guide(query, proposals) if final_state.get("style_guide_mode") else None
+    )
+    result = DecideResponse(
+        query=query,
+        proposals=proposals,
+        decision=decision,
+        price_table=price_table,
+        style_guide=style_guide,
+    )
     yield {"type": "final", "result": result.model_dump()}
 
 

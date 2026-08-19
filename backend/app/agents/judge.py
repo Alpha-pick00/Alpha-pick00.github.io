@@ -58,6 +58,43 @@ ORGANIZE_INSTRUCTIONS = (
 )
 
 
+# 취향 주도 카테고리(패션의류/잡화 등, adk_pipeline.STYLE_GUIDE_CATEGORIES)에서만
+# 쓴다(2026-08-19 사용자 요청: GPT 쇼핑처럼 스타일별로 여러 검증된 후보를
+# 묶어 보여주되, 최종 추천은 지금처럼 judge가 하나 고른 것을 그대로 쓴다).
+# 여기 넘어오는 proposals는 이미 challenge를 통과한(또는 미검증) 것들이라
+# 새 사실을 만들지 않는다 - 순수하게 재구성/라벨링만 한다.
+STYLE_GUIDE_INSTRUCTIONS = (
+    "당신은 패션/라이프스타일 상품을 스타일별로 정리해 소개하는 에디터입니다. "
+    "아래는 이미 실제 가격·구매링크가 검증된 후보 목록입니다 - 이 목록에 있는 "
+    "product_name/url을 그대로만 사용하고, 새 상품이나 URL을 만들어내지 마세요. "
+    "이 후보들을 서로 다른 스타일/용도 관점에서 2~4개 그룹으로 나누고, 그룹마다 "
+    "왜 그 상품을 골랐는지 1~2문장으로 설명하세요. 근거가 부족하면 무리해서 "
+    "그룹 수를 채우지 마세요. "
+    "반드시 아래 JSON 형식으로만 답하세요. 다른 텍스트를 덧붙이지 마세요.\n\n"
+    '{"intro": "...", "groups": [{"label": "...", "description": "...", "url": "..."}], '
+    '"closing_pick": "..." 또는 null}'
+)
+
+
+def build_style_guide_prompt(query: str, proposals: list[Proposal]) -> str:
+    proposals_block = "\n".join(
+        f"- {p.product_name} / {p.price} / {p.retailer} / {p.url} / 근거: {p.reasoning or '-'}"
+        for p in proposals
+    )
+    return f"{STYLE_GUIDE_INSTRUCTIONS}\n\n사용자 질의: {query}\n\n검증된 후보:\n{proposals_block}"
+
+
+async def generate_style_guide(query: str, proposals: list[Proposal]) -> dict:
+    """호출부(adk_pipeline._build_style_guide)가 url 그라운딩 검증을 맡는다 -
+    이 함수는 organize_options와 같은 패턴으로 LLM 호출+JSON 파싱만 한다."""
+    client = _client()
+    response = await client.chat.completions.create(
+        model=settings.groq_judge_model,
+        messages=[{"role": "user", "content": build_style_guide_prompt(query, proposals)}],
+    )
+    return parse_json_object(response.choices[0].message.content or "")
+
+
 def build_judge_prompt(query: str, proposals: list[Proposal]) -> str:
     """adk_pipeline의 judge LlmAgent가 쓰는 프롬프트 — 각 후보의 제안자
     (proposed_by)와 DeepSeek 검증 결과(verified/challenge_note)를 함께 보여준다."""

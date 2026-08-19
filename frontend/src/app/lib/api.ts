@@ -24,11 +24,28 @@ export interface Decision {
   chosen_agent: AgentName;
 }
 
+export interface StyleGuideGroup {
+  label: string;
+  description: string;
+  // proposals 중 하나의 url과 정확히 일치한다(그라운딩) - 백엔드
+  // adk_pipeline._build_style_guide가 이미 검증해서 보낸다.
+  url: string;
+}
+
+export interface StyleGuide {
+  intro: string;
+  groups: StyleGuideGroup[];
+  closing_pick: string | null;
+}
+
 export interface DecideResponse {
   mode: 'single';
   query: string;
   proposals: Proposal[];
   decision: Decision;
+  // 취향 주도 카테고리(패션의류/잡화 등)에서만 채워진다 - 없으면 기존
+  // 단일 추천 UI 그대로.
+  style_guide?: StyleGuide | null;
 }
 
 export interface BrandOption {

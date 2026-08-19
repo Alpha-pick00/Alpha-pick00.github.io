@@ -152,12 +152,31 @@ class PriceTable(BaseModel):
     price_label: str = "최저가"
 
 
+class StyleGuideGroup(BaseModel):
+    label: str
+    description: str
+    # 반드시 proposals 중 하나의 url과 정확히 일치해야 한다(그라운딩) -
+    # adk_pipeline._build_style_guide가 실제 후보에 없는 url은 걸러낸다.
+    url: str
+
+
+class StyleGuide(BaseModel):
+    intro: str
+    groups: list[StyleGuideGroup]
+    closing_pick: str | None = None
+
+
 class DecideResponse(BaseModel):
     mode: Literal["single"] = "single"
     query: str
     proposals: list[Proposal]
     decision: Decision
     price_table: PriceTable | None = None
+    # 취향 주도 카테고리(패션의류/잡화 등)에서만 채워진다(2026-08-19 사용자
+    # 요청: GPT 쇼핑처럼 스타일별로 여러 검증된 후보를 묶어 보여주되, 최종
+    # 추천(decision)은 지금처럼 하나로 유지). None이면 기존 단일 추천
+    # 응답과 완전히 동일 - 하위 호환.
+    style_guide: StyleGuide | None = None
 
 
 class BrandOption(BaseModel):
