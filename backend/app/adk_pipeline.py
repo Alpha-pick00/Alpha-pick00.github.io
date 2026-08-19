@@ -23,6 +23,7 @@ from typing import Any, AsyncGenerator, AsyncIterator
 from urllib.parse import urlsplit
 
 from fetchers import danawa as danawa_fetcher
+from openai import AsyncOpenAI
 from google.adk.agents import BaseAgent, LlmAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -48,6 +49,7 @@ from .agents.base import (
     format_results_block,
     is_danawa_comparison_page,
     parse_json_array,
+    parse_json_object,
 )
 from .config import settings
 from .schemas import (
@@ -956,6 +958,95 @@ async def _relaxed_fallback_decision(query: str, search_results: list[SearchResu
     )
 
 
+async def _is_relevant_to_query(query: str, product_name: str) -> bool:
+    """이 상품이 이 검색어가 찾는 상품 "종류"와 실제로 맞는지 LLM 한 번으로
+    확인한다 - _comparison_page_listing_fallback 전용. 텍스트 유사도
+    (rapidfuzz token_set_ratio)로는 이 판정이 안 됐다(실측 2026-08-19:
+    "10만원대 이어폰 추천해줘"에 상품명 자체가 카테고리 단어를 안 담은
+    무관한 상품(쌍안경 "니쿠라 10-30x25", 노트북 "삼성전자 갤럭시북2 프로")이
+    가격/순서 기준 1위로 뽑혔는데, 유사도 점수로는 진짜 이어폰들과 구분이
+    안 됐다 - 제품명이 브랜드+모델명뿐이라 카테고리 단어 자체가 아예 없는
+    경우가 흔해서 문자열 매칭 자체가 이 문제엔 안 맞았다). 아주 드물게
+    (다른 모든 경로가 실패했을 때만) 타는 최후 폴백이라 LLM 호출 하나를
+    추가로 쓸 여유가 있다.
+
+    groq_refine_model(gpt-oss-20b)이 아니라 groq_judge_model(gpt-oss-120b)을
+    쓴다 - 실측(2026-08-19): 같은 프롬프트로 "호카 클리프톤 10"(러닝화)이
+    "10만원대 이어폰" 검색과 relevant=true라고 확신에 차 틀린 답을 낸 걸
+    발견했다. 20b는 이 판정 자체를 못 하는 것으로 보이고, 이미 judge/propose
+    단계에서 신뢰도가 검증된 120b로 바꾸니 즉시 올바르게(false) 판정했다."""
+    prompt = (
+        "다음 상품이 이 검색어가 찾는 상품 종류와 실제로 맞는지만 판단하세요. "
+        "가격대·브랜드 선호·재고는 무시하고, 상품 카테고리/종류 자체가 맞는지만 보세요. "
+        '반드시 {"relevant": true 또는 false} 형식의 JSON으로만 답하세요.\n\n'
+        f"검색어: {query}\n상품명: {product_name}"
+    )
+    try:
+        client = AsyncOpenAI(api_key=settings.groq_api_key, base_url=settings.groq_api_base, max_retries=0)
+        response = await client.chat.completions.create(
+            model=settings.groq_judge_model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        data = parse_json_object(response.choices[0].message.content or "")
+        return bool(data.get("relevant"))
+    except Exception:
+        logger.exception("비교 페이지 폴백 관련성 판정 실패: %r / %r", query, product_name)
+        return False
+
+
+async def _comparison_page_listing_fallback(
+    query: str, danawa_tables: list[tuple[PriceTable, dict]]
+) -> Decision | None:
+    """직접 구매 링크를 만들 수 있는 후보가 하나도 없을 때(propose 3곳 +
+    _relaxed_fallback_decision까지 전부 실패)의 최후 폴백(사용자 요청,
+    2026-08-19: "그래도 추천해줘라고 했을때 답변을 잘해주는거잖아") - 다나와가
+    실측한 가격표 자체는 있는데(CMPNYC_MAP에 없거나 url_rule=None인 판매처만
+    걸려 A등급 구매링크를 못 만드는 경우, 예: 쿠팡 제휴 코드가 막힌 상태)
+    "아무것도 못 찾았다"고 끝내는 대신, 다나와 가격비교 페이지 자체를(실제
+    존재하는 페이지, 실제 최저가) 정직하게 보여준다.
+
+    danawa_tables는 표본 자체가 작고 노이즈가 많다(실측: url 최대 5개 중
+    fetch_danawa_offers가 실제로 성공하는 건 보통 1개뿐이라 "순서"나
+    "가격" 같은 값싼 휴리스틱으로는 관련성을 걸러낼 수 없었다 - 최저가
+    기준도, 첫 번째 기준도 둘 다 무관한 상품을 골랐다). 그래서 표마다
+    _is_relevant_to_query로 실제 확인해, 통과하는 첫 번째 표만 쓴다 -
+    전부 무관하면(또는 모든 표가 offers/pcode가 없으면) 정직하게 None을
+    반환해 호출부가 NO_CANDIDATE_ERROR로 이어지게 한다 - 무관한 상품을
+    추천하느니 못 찾았다고 하는 게 낫다.
+
+    최종 URL/판매처는 main.py::_resolve_danawa_urls(danawa.resolve_lowest_price)가
+    한 번 더 다나와 자체 AJAX로 실제 최저가 판매처를 조회해 바꿔치기할 수도,
+    실패하면 이 비교 페이지 URL 그대로 둘 수도 있다 - 그래서 reasoning은 둘
+    중 어느 쪽이 되어도 거짓이 되지 않게 "직접 검증된 후보가 없어 다나와
+    실측 데이터를 대신 안내한다"는 사실만 말하고, "링크를 못 만들었다"처럼
+    나중에 틀릴 수 있는 단정은 하지 않는다.
+
+    호출부는 이 결과를 _finalize_with_danawa에 넘기지 않는다 -
+    exclude_price_comparison_site_as_final_pick이 정확히 이런 비교 페이지
+    URL을 최종 결정에서 걷어내는 역할이라(정상 경로에서는 맞는 동작) 여기서
+    의도적으로 만드는 비교 페이지 폴백까지 걷어내 버린다."""
+    candidates = [(pt, dr) for pt, dr in danawa_tables if pt.offers and pt.source_pcode]
+    for price_table, _ in candidates:
+        if not await _is_relevant_to_query(query, price_table.product_name or ""):
+            continue
+        cheapest = price_table.offers[0]
+        return Decision(
+            product_name=price_table.product_name or "상품",
+            price=_format_price_krw(cheapest.price_krw),
+            retailer="다나와 가격비교",
+            url=f"https://prod.danawa.com/info/?pcode={price_table.source_pcode}",
+            reasoning=(
+                "AI 제안 중 직접 검증된 구매 후보가 없어, 다나와가 실측한 가격비교 데이터를 "
+                f"대신 안내합니다 - {cheapest.seller} 등 {len(price_table.offers)}개 판매처의 "
+                "실제 가격이 확인됩니다."
+            ),
+            chosen_agent="danawa",
+            price_source="danawa_offer",
+            verified=True,
+        )
+    return None
+
+
 def _danawa_tables_from_state(state: dict) -> list[tuple[PriceTable, dict]]:
     return [(PriceTable(**t), raw) for t, raw in (state.get("danawa_tables") or [])]
 
@@ -1084,6 +1175,17 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
             )
             yield {"type": "final", "result": result.model_dump()}
             return
+        listing_decision = await _comparison_page_listing_fallback(query, danawa_tables)
+        if listing_decision is not None:
+            primary = price_table_module.pick_primary(danawa_tables)
+            result = DecideResponse(
+                query=query,
+                proposals=[],
+                decision=listing_decision,
+                price_table=primary[0] if primary else None,
+            )
+            yield {"type": "final", "result": result.model_dump()}
+            return
         raise RuntimeError(NO_CANDIDATE_ERROR)
 
     decision = _build_decision(final_state, proposals)
@@ -1095,6 +1197,17 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
             )
             result = DecideResponse(
                 query=query, proposals=proposals, decision=fallback_decision, price_table=price_table
+            )
+            yield {"type": "final", "result": result.model_dump()}
+            return
+        listing_decision = await _comparison_page_listing_fallback(query, danawa_tables)
+        if listing_decision is not None:
+            primary = price_table_module.pick_primary(danawa_tables)
+            result = DecideResponse(
+                query=query,
+                proposals=proposals,
+                decision=listing_decision,
+                price_table=primary[0] if primary else None,
             )
             yield {"type": "final", "result": result.model_dump()}
             return
