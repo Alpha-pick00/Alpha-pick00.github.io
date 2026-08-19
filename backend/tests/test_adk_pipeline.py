@@ -6,6 +6,7 @@ from app.adk_pipeline import (
     _apply_challenge,
     _broad_web_fallback_search,
     _build_decision,
+    _comparison_page_listing_fallback,
     _danawa_tables_from_state,
     _finalize_with_danawa,
     _format_price_krw,
@@ -733,6 +734,69 @@ def test_danawa_tables_from_state_round_trips_price_table():
     restored_table, restored_result = restored[0]
     assert restored_table.product_name == "테스트 상품"
     assert restored_result["product_name"] == "테스트 상품"
+
+
+# --- _comparison_page_listing_fallback (구매 링크 후보가 전혀 없을 때의 최후
+# 폴백, 2026-08-19 사용자 요청: "그래도 추천해줘라고 했을때 답변을 잘해주는거잖아") ---
+
+
+def test_comparison_page_listing_fallback_returns_none_without_tables():
+    assert asyncio.run(_comparison_page_listing_fallback("이어폰", [])) is None
+
+
+def test_comparison_page_listing_fallback_skips_irrelevant_table_and_uses_first_relevant_one(monkeypatch):
+    """CMPNYC_MAP에 구매 링크 규칙이 없는 판매처(쿠팡 - url_rule=None, 실측
+    2026-08-19: 다나와-쿠팡 제휴 코드가 막혀 있음)만 걸려도, 실측 가격표
+    자체는 있으니 "아무것도 못 찾았다"가 아니라 다나와 비교 페이지를
+    정직하게 최종 답으로 낸다. 순서나 가격으로 표를 고르지 않는다 - 회귀
+    테스트(2026-08-19 실측: 최저가/첫 순위 휴리스틱 둘 다 "10만원대
+    이어폰" 검색에서 무관한 상품(쌍안경, 노트북)을 골랐다) - 각 표마다
+    실제로 관련성을 확인해, 무관한 표는 건너뛰고 관련 있는 첫 표만 쓴다."""
+    irrelevant_table, irrelevant_result = _danawa_price_table_pair(
+        "니쿠라 10-30x25 (쌍안경)", [_offer_li("쿠팡", "5,000", "TP40F")], pcode="111"
+    )
+    relevant_table, relevant_result = _danawa_price_table_pair(
+        "아이리버 무선 이어폰", [_offer_li("쿠팡", "99,000", "TP40F")], pcode="222"
+    )
+
+    async def _fake_relevance(query, product_name):
+        return product_name == "아이리버 무선 이어폰"
+
+    monkeypatch.setattr(adk_pipeline_module, "_is_relevant_to_query", _fake_relevance)
+
+    decision = asyncio.run(
+        _comparison_page_listing_fallback(
+            "10만원대 이어폰 추천해줘", [(irrelevant_table, irrelevant_result), (relevant_table, relevant_result)]
+        )
+    )
+
+    assert decision is not None
+    assert decision.product_name == "아이리버 무선 이어폰"
+    assert decision.price == "99,000원"
+    assert decision.url == "https://prod.danawa.com/info/?pcode=222"
+    assert decision.retailer == "다나와 가격비교"
+    assert decision.chosen_agent == "danawa"
+    assert decision.price_source == "danawa_offer"
+    assert decision.verified is True
+    assert "다나와가 실측한 가격비교 데이터를" in decision.reasoning
+
+
+def test_comparison_page_listing_fallback_returns_none_when_all_tables_irrelevant(monkeypatch):
+    """전부 무관하면(관련성 판정이 다 false거나 실패하면) 무관한 상품을
+    추천하느니 정직하게 포기한다(None -> 호출부가 NO_CANDIDATE_ERROR로
+    이어감)."""
+    table, result = _danawa_price_table_pair(
+        "니쿠라 10-30x25 (쌍안경)", [_offer_li("쿠팡", "5,000", "TP40F")], pcode="111"
+    )
+
+    async def _always_irrelevant(query, product_name):
+        return False
+
+    monkeypatch.setattr(adk_pipeline_module, "_is_relevant_to_query", _always_irrelevant)
+
+    decision = asyncio.run(_comparison_page_listing_fallback("10만원대 이어폰 추천해줘", [(table, result)]))
+
+    assert decision is None
 
 
 def test_danawa_tables_from_state_empty_when_missing():
