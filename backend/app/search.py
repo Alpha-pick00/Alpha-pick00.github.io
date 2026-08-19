@@ -159,6 +159,33 @@ async def search_coupang(query: str) -> list[SearchResult]:
         return []
 
 
+_UNRESTRICTED_MAX_RESULTS = 3
+
+
+async def search_unrestricted(query: str) -> list[SearchResult]:
+    """다나와 한정 검색(search())이 아무것도 못 찾았을 때 쓰는 최후 폴백
+    (사용자 요청, 2026-08-19: "검색 알고리즘으로 적절한 상품을 찾을 수 없는
+    경우에는 구글 쇼핑에서 사용자 쿼리를 따로 검색해서... 다나와에서
+    가져오게") - 구글 쇼핑 전용 API는 무료 티어가 없고(SerpAPI 등 유료
+    서드파티), 직접 스크래핑은 danawa.com에서 이미 겪은 IP 차단 위험을 또
+    다른 도메인에 반복하는 셈이라(2026-08-18 실측: AWS IP가 데이터센터
+    대역이라 차단당함), 이미 쓰고 있는 Tavily를 도메인 제한 없이(전체 웹)
+    호출해 같은 목적(질의에 맞는 실제 상품/브랜드명 발견)을 달성한다.
+
+    이 결과 자체를 후보로 쓰지 않는다 - 다나와 URL이 아니면 구매 링크를
+    만들 수 없다(파이프라인 전체가 다나와 bridge_url 해석에 의존). 호출부
+    (adk_pipeline._broad_web_fallback_search)가 여기서 발견한 상품명을
+    다나와에 다시 검색해 실측 후보로 바꾼다. search()와 달리 캐시를 쓰지
+    않는다 - 이미 드문 최후 폴백이라 캐시 재사용 이점이 크지 않다. 실패해도
+    조용히 빈 리스트 - 이 경로가 없어도 기존 실패 처리(NO_CANDIDATE_ERROR)
+    그대로 동작한다."""
+    try:
+        return await _tavily_search(query, _UNRESTRICTED_MAX_RESULTS, domains=[])
+    except Exception:
+        logger.warning("비제한 폴백 검색 실패: %r", query, exc_info=True)
+        return []
+
+
 NAVER_DOMAINS = ["shopping.naver.com"]
 _NAVER_MAX_RESULTS = 5
 

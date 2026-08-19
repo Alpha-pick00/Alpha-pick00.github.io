@@ -5,6 +5,7 @@ import app.adk_pipeline as adk_pipeline_module
 from app.adk_pipeline import (
     _apply_challenge,
     _augment_search_query,
+    _broad_web_fallback_search,
     _build_decision,
     _danawa_tables_from_state,
     _finalize_with_danawa,
@@ -438,6 +439,72 @@ def test_augment_search_query_keeps_original_when_classification_failed():
     query = _augment_search_query("초코파이 해태제과", CategoryClassification())
 
     assert query == "초코파이 해태제과"
+
+
+# --- _broad_web_fallback_search (다나와 한정 검색이 빈손일 때의 최후 폴백,
+# 2026-08-19 사용자 요청: "검색 알고리즘으로 적절한 상품을 찾을 수 없는
+# 경우에는 구글 쇼핑에서 사용자 쿼리를 따로 검색해서 상위 5개의 제품을
+# 다나와에서 가져오게") -----------------------------------------------------
+
+
+def test_broad_web_fallback_search_returns_empty_when_no_broad_results(monkeypatch):
+    async def _empty_unrestricted(query):
+        return []
+
+    monkeypatch.setattr(adk_pipeline_module.search_module, "search_unrestricted", _empty_unrestricted)
+
+    results = asyncio.run(_broad_web_fallback_search("존재하지 않는 상품명 xyz"))
+
+    assert results == []
+
+
+def test_broad_web_fallback_search_regrounds_via_danawa_using_top_result_title(monkeypatch):
+    """비제한 검색(구글 쇼핑 대체)이 찾은 1순위 결과의 제목을 실제 상품명
+    삼아 다나와에 딱 한 번만 재검색해, 그 결과를 다나와 URL을 가진
+    SearchResult로 바꿔야 한다."""
+    captured: dict = {}
+
+    async def _fake_unrestricted(query):
+        return [
+            SearchResult(title="샤오미 15T 프로 512GB", url="https://example.com/a", snippet="..."),
+            SearchResult(title="다른 후보", url="https://example.com/b", snippet="..."),
+        ]
+
+    async def _fake_search_danawa_items(query, limit):
+        captured["query"] = query
+        captured["limit"] = limit
+        return [
+            {"pcode": "111", "product_name": "샤오미 15T 프로 512GB 블랙", "total_mall_count": None},
+            {"pcode": "222", "product_name": "샤오미 15T 프로 512GB 화이트", "total_mall_count": None},
+        ]
+
+    monkeypatch.setattr(adk_pipeline_module.search_module, "search_unrestricted", _fake_unrestricted)
+    monkeypatch.setattr(adk_pipeline_module.price_table_module, "_search_danawa_items", _fake_search_danawa_items)
+
+    results = asyncio.run(_broad_web_fallback_search("애매한 원래 질의"))
+
+    assert captured["query"] == "샤오미 15T 프로 512GB"
+    assert captured["limit"] == adk_pipeline_module._BROAD_FALLBACK_DANAWA_LIMIT
+    assert [r.url for r in results] == [
+        "https://prod.danawa.com/info/?pcode=111",
+        "https://prod.danawa.com/info/?pcode=222",
+    ]
+    assert results[0].title == "샤오미 15T 프로 512GB 블랙"
+
+
+def test_broad_web_fallback_search_returns_empty_when_danawa_lookup_fails(monkeypatch):
+    async def _fake_unrestricted(query):
+        return [SearchResult(title="샤오미 15T 프로", url="https://example.com/a", snippet="...")]
+
+    async def _boom(query, limit):
+        raise RuntimeError("danawa search blocked")
+
+    monkeypatch.setattr(adk_pipeline_module.search_module, "search_unrestricted", _fake_unrestricted)
+    monkeypatch.setattr(adk_pipeline_module.price_table_module, "_search_danawa_items", _boom)
+
+    results = asyncio.run(_broad_web_fallback_search("애매한 원래 질의"))
+
+    assert results == []
 
 
 # --- _urls_to_extract (challenge 전 실제 페이지 재조회 대상) ----------------
