@@ -6,7 +6,7 @@ const services = [
   {
     icon: Bot,
     title: "멀티에이전트 토론",
-    description: "ChatGPT, Groq, DeepSeek가 각자 상품을 조사해 제안하고, Claude가 그 근거를 심사해 하나의 답으로 압축합니다."
+    description: "ChatGPT, Groq, DeepSeek가 각자 상품을 조사해 제안하고, Groq가 그 근거를 심사해 하나의 답으로 압축합니다."
   },
   {
     icon: ScanLine,
