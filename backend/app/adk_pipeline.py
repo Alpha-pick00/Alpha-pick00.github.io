@@ -1214,10 +1214,15 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
                 search_results = [
                     SearchResult(**r) for r in event.actions.state_delta.get("search_results") or []
                 ]
-                clarify = await _extract_clarify_options(query, search_results)
+                # skip_clarify=True면 아래 조건이 항상 거짓이라 clarify 결과를
+                # 쓰지 않는다 - 그런데도 호출 자체는 무조건 나가고 있었다.
+                # _extract_clarify_options는 브랜드별 최대 15개 병렬 DeepSeek
+                # 호출까지 갈 수 있는 무거운 함수라(debate.py 참고), 후속 라운드
+                # (skip_clarify=True)마다 결과를 100% 버리면서도 이 비용을 그대로
+                # 치르고 있었다 - 토큰 절약(2026-08-19)으로 아예 호출을 건너뛴다.
+                clarify = None if skip_clarify else await _extract_clarify_options(query, search_results)
                 if (
                     clarify is not None
-                    and not skip_clarify
                     and _is_ambiguous_facets(query, clarify.options.facets)
                 ):
                     await gen.aclose()
