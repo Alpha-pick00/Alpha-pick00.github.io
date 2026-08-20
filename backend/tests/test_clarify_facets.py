@@ -1067,11 +1067,15 @@ def test_apply_category_breakdown_inserts_when_no_category_facet_exists():
     assert [f.label for f in result] == ["카테고리", "모델"]
 
 
-def test_check_clarify_facets_injects_real_category_facet_when_sample_misses_it(monkeypatch):
-    """브랜드 전체 표본(다나와 검색 상위)에 특정 카테고리 상품이 하나도 없어도
-    (샤오미 실측: 상위 40개가 전부 액세서리/가전이라 휴대폰이 없다), 다나와
-    검색결과 페이지의 실측 카테고리 집계에 있으면 "카테고리" facet에 떠야
-    한다."""
+def test_check_clarify_facets_no_longer_injects_category_facet(monkeypatch):
+    """(2026-08-20, "카테고리 선택 안 하게 만들고") 예전엔 브랜드 전체 표본에
+    없는 카테고리도 다나와 실측 카테고리 집계로 "카테고리" facet에 끼워 넣어
+    되물었다(샤오미 실측: 상위 40개가 전부 액세서리/가전이라 휴대폰이 없어도
+    "태블릿/휴대폰" 카테고리를 확인하게 했다) - 이제 이 되물음 자체를 없앴다.
+    "이프로"처럼 브랜드만 봐도 카테고리가 명백한 질의에 불필요한 카테고리
+    확인 질문을 던지지 않기 위함이다. _category_breakdown_facet/
+    _apply_category_breakdown 함수 자체는 남아있지만 check_clarify_facets가
+    더 이상 호출하지 않는다(아래 단위 테스트들이 함수 자체는 계속 검증)."""
 
     async def _fake_search_danawa(query, limit=90):
         return [{"pcode": "1", "product_name": "샤오미 미지아 선풍기", "total_mall_count": None}]
@@ -1091,7 +1095,37 @@ def test_check_clarify_facets_injects_real_category_facet_when_sample_misses_it(
     result = asyncio.run(check_clarify_facets("샤오미"))
 
     by_label = {f.label: f for f in result.options.facets}
-    assert "태블릿/휴대폰" in by_label["카테고리"].options
+    assert "카테고리" not in by_label
+    assert by_label["모델"].options == ["샤오미 미지아 선풍기"]
+
+
+def test_check_clarify_facets_strips_category_facet_even_if_deepseek_still_proposes_one(monkeypatch):
+    """(2026-08-20 실측 회귀) 위 테스트는 DeepSeek이 "카테고리" facet을 아예
+    안 낸 경우만 다룬다 - 실제로는 프롬프트에서 "카테고리"를 예시/JSON 형식에서
+    빼고 만들지 말라고 명시했는데도(agents.base.FACET_CLARIFY_INSTRUCTIONS)
+    DeepSeek이 "초코파이" 검색에 "카테고리": ["초코파이", "과자세트", "과자", ...]
+    처럼 검색어 자체를 되묻는 facet을 스스로 만들어낸 사례가 있었다(다른 프롬프트
+    지시를 안정적으로 안 지키는 _strip_query_answered_options와 같은 유형의 문제).
+    _extract_facets가 label=="카테고리"인 facet을 한 번 더 걸러내는지 확인한다."""
+
+    async def _fake_search_danawa(query, limit=90):
+        return [{"pcode": "1", "product_name": "오리온 초코파이 바나나 468g", "total_mall_count": None}]
+
+    monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
+
+    async def _fake_extract_facets(query, names):
+        return [
+            ClarifyFacet(label="카테고리", options=["초코파이", "과자세트", "과자", "선물세트", "파이", "케이크"]),
+            ClarifyFacet(label="용량", options=["468g", "234g"]),
+        ]
+
+    monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
+
+    result = asyncio.run(check_clarify_facets("초코파이"))
+
+    by_label = {f.label: f for f in result.options.facets}
+    assert "카테고리" not in by_label
+    assert by_label["용량"].options == ["468g", "234g"]
 
 
 def test_check_clarify_facets_rescopes_sample_when_category_already_selected(monkeypatch):
@@ -1227,13 +1261,13 @@ def test_check_clarify_facets_static_cache_miss_falls_through_to_real_search(mon
     monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
 
     async def _fake_extract_facets(query, names):
-        return [ClarifyFacet(label="카테고리", options=["탄산음료"])]
+        return [ClarifyFacet(label="브랜드", options=["오리온"])]
 
     monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
 
     result = asyncio.run(check_clarify_facets("과자"))
 
-    assert result.options.facets == [ClarifyFacet(label="카테고리", options=["탄산음료"])]
+    assert result.options.facets == [ClarifyFacet(label="브랜드", options=["오리온"])]
 
 
 def test_check_clarify_facets_returns_facets_for_ambiguous_query(monkeypatch):
@@ -1247,14 +1281,14 @@ def test_check_clarify_facets_returns_facets_for_ambiguous_query(monkeypatch):
 
     async def _fake_extract_facets(query, names):
         assert names == ["코카콜라 350ml 24개", "칠성사이다 190ml"]
-        return [ClarifyFacet(label="카테고리", options=["탄산음료"])]
+        return [ClarifyFacet(label="브랜드", options=["코카콜라", "칠성사이다"])]
 
     monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
 
     result = asyncio.run(check_clarify_facets("음료수"))
 
     assert result.mode == "clarify"
-    assert result.options.facets == [ClarifyFacet(label="카테고리", options=["탄산음료"])]
+    assert result.options.facets == [ClarifyFacet(label="브랜드", options=["코카콜라", "칠성사이다"])]
 
 
 def test_strip_query_answered_options_removes_value_already_in_query():
@@ -1557,7 +1591,7 @@ def test_decide_clarify_endpoint_returns_clarify_response(monkeypatch):
     monkeypatch.setattr("fetchers.danawa_search.search_danawa", _fake_search_danawa)
 
     async def _fake_extract_facets(query, names):
-        return [ClarifyFacet(label="카테고리", options=["탄산음료", "주스"])]
+        return [ClarifyFacet(label="브랜드", options=["코카콜라", "칠성사이다"])]
 
     monkeypatch.setattr("app.agents.deepseek.extract_facets_from_names", _fake_extract_facets)
 
@@ -1567,7 +1601,7 @@ def test_decide_clarify_endpoint_returns_clarify_response(monkeypatch):
     data = resp.json()
     assert data["mode"] == "clarify"
     assert data["options"]["facets"] == [
-        {"label": "카테고리", "options": ["탄산음료", "주스"], "options_by_selection": None}
+        {"label": "브랜드", "options": ["코카콜라", "칠성사이다"], "options_by_selection": None}
     ]
 
 

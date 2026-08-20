@@ -6,7 +6,13 @@ from pydantic import BaseModel
 # 선택 대상 풀에 직접 들어간다. 프론트엔드는 AGENT_LABEL[agent] || agent로
 # 렌더링해(frontend/src/app/components/SearchResults.tsx) 모르는 값이 와도
 # 원문 그대로 표시할 뿐 깨지지 않는다 - 확인 후 추가했다.
-AgentName = Literal["gpt", "groq", "deepseek", "danawa"]
+# "elevenst": 2026-08-20("11번가 api를 구해서 다나와를 폐기하고 11번가 쪽으로
+# 방향을 틀려고") - 11번가 오픈API(ProductSearch) 구조화 데이터 기반 후보.
+# adk_pipeline._build_pipeline()의 메인 파이프라인은 이제 danawa 대신 이
+# 슬롯을 쓰지만, "danawa" 값 자체는 지우지 않는다(다나와 관련 코드/데이터
+# 흐름은 파일로 그대로 남겨뒀고 - run_danawa_only_debate() 같은 별도
+# 진입점이 계속 이 값을 씀).
+AgentName = Literal["gpt", "groq", "deepseek", "danawa", "elevenst"]
 AuthProvider = Literal["google", "kakao", "naver"]
 
 
@@ -69,8 +75,11 @@ class Decision(BaseModel):
     chosen_agent: AgentName
     # "danawa_offer": app.price_table이 다나와 실측 가격표의 A등급(링크 생성
     # 가능) offer와 대조해 price/url을 검증된 값으로 교체했다는 뜻.
+    # "elevenst_offer"(2026-08-20): 최종 선택된 후보가 11번가 오픈API 구조화
+    # 데이터 그대로라는 뜻(adk_pipeline._finalize_with_danawa 참고) - 이것도
+    # 없으면 검증된 공식 API 가격이 "llm_guess"로 잘못 표시된다.
     # "llm_guess"(기본값): 그런 대조 없이 LLM이 제안한 값 그대로.
-    price_source: Literal["danawa_offer", "llm_guess"] = "llm_guess"
+    price_source: Literal["danawa_offer", "elevenst_offer", "llm_guess"] = "llm_guess"
     # 최종 선택된 후보가 DeepSeek challenge 검증을 통과했는지(Proposal.verified와
     # 같은 의미) — judge 경로는 매칭된 proposal의 값을 그대로 물려받고, relaxed
     # fallback 경로(2026-08-16 강화)는 별도로 challenge를 태워 채운다. None은

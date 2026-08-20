@@ -3,6 +3,8 @@ import re
 
 import httpx
 
+from fetchers import elevenst as elevenst_fetcher
+
 from . import search_cache
 from .agents.base import is_generic_listing_url
 from .config import settings
@@ -154,10 +156,44 @@ async def _tavily_search(
     return results
 
 
+def _elevenst_snippet(product: elevenst_fetcher.Product) -> str:
+    """11번가는 Tavily의 raw_content 같은 본문 스니펫을 안 준다 - 대신 이미
+    구조화된 필드(가격/판매자/리뷰)를 한 줄로 조합한다. propose 프롬프트
+    (agents/base.py::format_results_block)는 title/url/snippet 텍스트
+    블록만 기대하므로 프롬프트 쪽은 안 건드려도 된다."""
+    price = product.sale_price or product.price
+    parts = [f"{price:,}원" if price else None, product.seller_nick, f"리뷰 {product.review_count}건" if product.review_count else None]
+    return " · ".join(p for p in parts if p)
+
+
+async def _elevenst_search(query: str, max_results: int) -> list[SearchResult]:
+    """11번가 오픈API(ProductSearch)로 검색한다 - 2026-08-20("11번가 api를
+    구해서 다나와를 폐기하고 11번가 쪽으로 방향을 틀려고")부터 search()의
+    기본 백엔드. 키 미설정/API 실패는 빈 리스트로 조용히 처리한다 - Tavily
+    기반 다른 함수들(search_coupang 등)과 동일한 "본 파이프라인을 절대 막지
+    않는다" 원칙."""
+    if not settings.elevenst_api_key:
+        return []
+    try:
+        result = await elevenst_fetcher.search_products(
+            settings.elevenst_api_key, query, page_size=max_results
+        )
+    except elevenst_fetcher.ElevenstApiError:
+        logger.warning("11번가 검색 실패: %r", query, exc_info=True)
+        return []
+
+    results = []
+    for p in result.products:
+        if not p.detail_url or not p.name:
+            continue
+        results.append(SearchResult(title=p.name, url=p.detail_url, snippet=_elevenst_snippet(p), score=None))
+    return results
+
+
 async def _fetch(query: str) -> list[SearchResult]:
-    """Tavily를 호출해 검색 결과를 가져온다. 캐시를 거치지 않는 순수 조회 —
+    """11번가를 호출해 검색 결과를 가져온다. 캐시를 거치지 않는 순수 조회 —
     search()의 캐시 미스 경로와 refresh()의 강제 갱신 경로가 이 함수를 공유한다."""
-    return await _tavily_search(query, search_cache.FETCH_SIZE)
+    return await _elevenst_search(query, search_cache.FETCH_SIZE)
 
 
 async def search(query: str, max_results: int = 12) -> list[SearchResult]:

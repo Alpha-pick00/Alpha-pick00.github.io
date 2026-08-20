@@ -1,12 +1,18 @@
 """ADK(Google Agent Development Kit) 기반 역할 분리형 검색 파이프라인.
 
-정제(Groq) → 검색 → 제안(Qwen·Groq·DeepSeek 병렬, 각자 최선 1개) →
+검색(11번가) → 제안(Qwen·Groq·DeepSeek 병렬, 각자 최선 1개) →
 필터링+병합(fusion.dedup 재사용) → 검증(DeepSeek) → 매칭/합성 → 심사(Groq)
 순서로 실행된다 — `debate.py`의 run_single_debate/run_single_debate_stream이
 이 모듈의 run()/run_stream()을 호출한다. (제안 슬롯 이름은 "gpt"/"groq" -
 "gpt" 슬롯은 실제로는 Qwen이 돌지만 리네임 비용이 커서 식별자를 그대로 뒀고,
 "groq" 슬롯은 2026-08-18에 실제 쓰는 모델명으로 리네임했다 - 원래 이름은
 "gemini"였다.)
+
+(2026-08-20) 정제(refine, Groq) 단계는 파이프라인에서 뺐다("쿼리 재질의
+없애고") - 원본 질의를 그대로 검색에 쓴다. 검색 백엔드도 Tavily+다나와에서
+11번가 오픈API로 바꿨다("다나와를 폐기하고 11번가 쪽으로") - 다나와 관련
+코드(_DanawaFetchNode, fetchers/danawa*.py 등)는 참고용으로 파일에 남아있지만
+이 메인 파이프라인에서는 더 이상 안 쓴다.
 
 SequentialAgent/ParallelAgent는 google-adk 2.6.3 기준 deprecated(대체 예정인
 Workflow가 아직 LlmAgent의 sub-agent로 못 쓰여 미완성 상태)이지만, 실제로는
@@ -23,6 +29,7 @@ from typing import Any, AsyncGenerator, AsyncIterator
 from urllib.parse import urlsplit
 
 from fetchers import danawa as danawa_fetcher
+from fetchers import elevenst as elevenst_fetcher
 from openai import AsyncOpenAI
 from google.adk.agents import BaseAgent, LlmAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.invocation_context import InvocationContext
@@ -137,40 +144,42 @@ def _refined_query_text(state: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-_BROAD_FALLBACK_DANAWA_LIMIT = 5
+_BROAD_FALLBACK_ELEVENST_LIMIT = 5
 
 
 async def _broad_web_fallback_search(query: str) -> list[SearchResult]:
-    """다나와 한정 검색이 아무것도 못 찾았을 때의 최후 폴백(사용자 요청,
+    """11번가 검색이 아무것도 못 찾았을 때의 최후 폴백(사용자 요청,
     2026-08-19: "검색 알고리즘으로 적절한 상품을 찾을 수 없는 경우에는 구글
-    쇼핑에서 사용자 쿼리를 따로 검색해서 상위 5개의 제품을 다나와에서
-    가져오게"). search_module.search_unrestricted()로 도메인 제한 없이 한
-    번 더 검색해 질의에 맞는 실제 상품/브랜드명을 발견한 뒤, 가장 관련도
-    높은(Tavily가 1순위로 낸) 결과의 제목을 그 이름 삼아 다나와에 딱 한 번만
-    재검색한다(최대 5개) - 발견한 후보 개수만큼 다나와를 반복 검색하면
-    요청마다 10초 Crawl-delay가 곱절로 붙어(search.danawa.com 서비스 전체
-    상한 보호 원칙, fetchers/danawa_search.py 참고) 응답이 지나치게 느려진다."""
+    쇼핑에서 사용자 쿼리를 따로 검색해서 상위 5개의 제품을 가져오게").
+    search_module.search_unrestricted()로 도메인 제한 없이 Tavily를 한 번 더
+    호출해 질의에 맞는 실제 상품/브랜드명을 발견한 뒤, 가장 관련도 높은
+    (Tavily가 1순위로 낸) 결과의 제목을 그 이름 삼아 11번가에 딱 한 번만
+    재검색한다(최대 5개) - 다나와 배제(2026-08-20) 이후에도 이 최후 폴백은
+    다나와 URL을 다시 만들어내지 않는다."""
     broad_results = await search_module.search_unrestricted(query)
     if not broad_results:
         return []
 
     discovered_name = broad_results[0].title
+    if not settings.elevenst_api_key:
+        return []
     try:
-        items = await price_table_module._search_danawa_items(
-            discovered_name, limit=_BROAD_FALLBACK_DANAWA_LIMIT
+        result = await elevenst_fetcher.search_products(
+            settings.elevenst_api_key, discovered_name, page_size=_BROAD_FALLBACK_ELEVENST_LIMIT
         )
-    except Exception:
-        logger.warning("폴백 다나와 재검색 실패: %r", discovered_name, exc_info=True)
+    except elevenst_fetcher.ElevenstApiError:
+        logger.warning("폴백 11번가 재검색 실패: %r", discovered_name, exc_info=True)
         return []
 
     return [
         SearchResult(
-            title=item["product_name"],
-            url=f"https://prod.danawa.com/info/?pcode={item['pcode']}",
-            snippet=item["product_name"],
+            title=p.name,
+            url=p.detail_url,
+            snippet=search_module._elevenst_snippet(p),
             score=None,
         )
-        for item in items
+        for p in result.products
+        if p.detail_url and p.name
     ]
 
 
@@ -185,15 +194,19 @@ class _SearchNode(BaseAgent):
     "가전디지털"처럼 원래 넓은 대분류를 덧붙이면 Tavily가 그 흔한 키워드
     쪽으로 결과를 완전히 끌고 가버려("이어폰" 검색이 스마트링·TV·자동차
     뉴스로 뒤덮임), "완만한 가중치"라는 설계 의도와 달리 원 질의 자체가
-    묻혀버렸다. 그래서 이 보정을 제거하고 정제된 질의를 그대로 검색한다 -
-    다나와 도메인 한정만으로도 이미 충분히 좁혀져 있어 추가 보정이 없어도
-    된다. classify_category는 이 노드의 유일한 호출부였다(clarify 단계는
+    묻혀버렸다. 그래서 이 보정을 제거하고 정제된 질의를 그대로 검색한다.
+    classify_category는 이 노드의 유일한 호출부였다(clarify 단계는
     별도 호출, debate.py::_extract_clarify_options) - 이제 안 쓴다.
 
-    다나와 한정 검색이 완전히 빈손이면(2026-08-19 사용자 요청)
-    _broad_web_fallback_search로 한 번 더 시도한다 - 원래 질의로는
-    danawa.com 안에 매칭되는 상품이 아예 없을 때(표현이 어색하거나 다나와
-    색인에 없는 경우)의 최후 수단이라, 대부분의 검색은 이 분기를 안 탄다.
+    (2026-08-20 갱신) search_module.search()는 다나와 대신 11번가 오픈API로
+    검색한다("11번가 api를 구해서 다나와를 폐기하고 11번가 쪽으로 방향을
+    틀려고") - 위 문단들의 "다나와/Tavily" 언급은 그 이전 구조에 대한
+    역사적 맥락이다.
+
+    11번가 검색이 완전히 빈손이면(2026-08-19 사용자 요청, 원래는 다나와
+    한정 검색 대상) _broad_web_fallback_search로 한 번 더 시도한다 - Tavily
+    비제한 검색으로 상품/브랜드명을 발견한 뒤 11번가에 재검색하는 최후
+    수단이라, 대부분의 검색은 이 분기를 안 탄다.
 
     classify_category는(2026-08-19, 스타일 가이드 모드 게이트로 재사용 -
     검색어 보정 용도로는 위에서 이미 뗐지만 이건 별개 목적이다) 검색과
@@ -306,6 +319,68 @@ class _DanawaFetchNode(BaseAgent):
         )
 
 
+def _pick_elevenst_candidate(query: str, result: elevenst_fetcher.SearchResult) -> AgentCandidate | None:
+    """순수 함수(네트워크 없음) - _ElevenstFetchNode의 후보 선정 로직을
+    분리해 ADK 배관 없이 단위 테스트할 수 있게 한다.
+
+    다나와의 pick_primary()처럼 "가장 풍부한 페이지" 개념이 없다 -
+    ProductSearch는 개별 SKU 목록이라, query와 그라운딩되는(price_table
+    module._product_name_matches) 상품 중 최저가 1건을 고른다(_DanawaFetchNode가
+    query 무관 상품을 걸러낸 2026-08-16 하드닝과 같은 이유 - "이프로"를 검색해서
+    전혀 다른 상품이 최저가라는 이유만으로 뽑히면 안 된다). 유효 가격
+    (sale_price 우선, 없으면 price)과 detail_url이 둘 다 있어야 후보가 된다 -
+    구매 링크 없는 추천은 만들지 않는다."""
+    matched = [
+        p
+        for p in result.products
+        if p.name and price_table_module._product_name_matches(query, p.name)
+    ]
+    priced = [(p, p.sale_price or p.price) for p in matched]
+    priced = [(p, price) for p, price in priced if price and price > 0 and p.detail_url]
+    if not priced:
+        return None
+    cheapest, price = min(priced, key=lambda pair: pair[1])
+    return AgentCandidate(
+        product_name=cheapest.name,
+        price_krw=price,
+        retailer="11번가",
+        url=cheapest.detail_url,
+    )
+
+
+class _ElevenstFetchNode(BaseAgent):
+    """11번가 오픈API(ProductSearch) 구조화 데이터를 propose 3개 모델과
+    나란히(동시에) 조회한다(2026-08-20, "11번가 api를 구해서 다나와를 폐기하고
+    11번가 쪽으로 방향을 틀려고") - _DanawaFetchNode와 같은 자리(propose_parallel)
+    소속이라 gpt/groq/deepseek LlmAgent와 동시 실행되므로 지연시간이 추가되지
+    않는다. 다나와 관련 코드/데이터 흐름(_DanawaFetchNode 포함)은 그대로
+    남겨뒀지만 이 노드로 교체하면서 propose_parallel에서는 빠졌다(_build_pipeline
+    참고).
+
+    elevenst_fetcher.search_products()는 예외를 던질 수 있어(11번가 쿼터/장애
+    거동이 검증 안 됨) 이 노드가 직접 감싼다 - 실패해도 gpt/groq/deepseek
+    후보만으로 파이프라인이 계속 진행된다. API 키 미설정 시에도 조용히
+    스킵한다(ocr/google_vision.py와 동일한 패턴)."""
+
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        query = _refined_query_text(ctx.session.state)
+
+        elevenst_raw = "[]"
+        if settings.elevenst_api_key:
+            try:
+                result = await elevenst_fetcher.search_products(settings.elevenst_api_key, query)
+                candidate = _pick_elevenst_candidate(query, result)
+                if candidate is not None:
+                    elevenst_raw = json.dumps([candidate.model_dump()])
+            except Exception:
+                logger.exception("11번가 검색 실패: %r", query)
+
+        yield Event(
+            author=self.name,
+            actions=EventActions(state_delta={"elevenst_raw": elevenst_raw}),
+        )
+
+
 class _CoupangCheckNode(BaseAgent):
     """challenge 단계에 쿠팡 검색 결과를 독립 교차 확인 신호로 추가한다
     (사용자 요청, 2026-08-16: "그라운딩 성능을 높여줘"). propose_parallel
@@ -352,7 +427,11 @@ class _FilterMergeNode(BaseAgent):
             "gpt": state.get("gpt_raw"),
             "groq": state.get("groq_raw"),
             "deepseek": state.get("deepseek_raw"),
+            # "danawa": 2026-08-20부터 propose_parallel에서 빠져서 항상 None(무해) -
+            # 다나와 관련 코드/데이터 흐름은 그대로 남겨뒀으므로 이 키 자체는 지우지
+            # 않는다. "elevenst"가 메인 파이프라인의 구조화 후보 슬롯을 대신한다.
             "danawa": state.get("danawa_raw"),
+            "elevenst": state.get("elevenst_raw"),
         }
         danawa_tables = _danawa_tables_from_state(state)
         # 취향 주도 카테고리(스타일 가이드 모드)는 에이전트당 후보를 1개로
@@ -428,6 +507,20 @@ async def _merge_proposals(
 # Tavily extract 호출 수 상한 — 병합 후보가 많아도 재조회 비용/지연시간을 제한한다.
 _MAX_EXTRACT_CANDIDATES = 10
 
+# challenge 검증 없이도 이미 구조화·검증된 소스로 취급하는 에이전트 이름 집합
+# (2026-08-20, "다나와를 폐기하고 11번가 쪽으로") - _apply_challenge와
+# _urls_needing_challenge_extract가 공유한다. "danawa"도 계속 포함해두는 이유:
+# _DanawaFetchNode 자체는 코드로 남겨뒀고(propose_parallel에서만 빠짐),
+# run_danawa_only_debate() 같은 별도 경로가 여전히 danawa_raw 규약을 쓸 수
+# 있다 - 이 집합에 남겨두는 게 가장 안전하고 최소 변경이다.
+STRUCTURED_SOURCE_AGENTS = {"danawa", "elevenst"}
+
+# _apply_challenge()가 challenge_note를 조립할 때 쓰는 소스별 표시 문구.
+_STRUCTURED_SOURCE_NOTE = {
+    "danawa": "다나와 실측 가격표(A등급, 구매 링크 검증됨)",
+    "elevenst": "11번가 공식 API",
+}
+
 
 def _urls_to_extract(candidates: list[dict]) -> list[str]:
     """재조회 대상 URL — 병합 후보 중 URL이 있는 것만, 상한선까지만 남긴다."""
@@ -438,24 +531,22 @@ def _urls_needing_challenge_extract(candidates: list[dict]) -> list[str]:
     """Tavily extract() 결과가 실제로 challenge 판정에 쓰이는 URL만 남긴다
     (2026-08-20, 성능/비용 점검 - "다나와 후보 extract() 낭비 없애줘").
 
-    _apply_challenge()는 proposed_by에 "danawa"가 있는 후보(_DanawaFetchNode의
-    실측 픽과 병합된 후보)는 challenge 검증 결과를 아예 안 본다 - verified를
-    무조건 True로 강제하고, refreshed_price_krw도 절대 안 쓴다(다나와 자체
-    스크래핑 가격이 텍스트 재추출보다 정확하다고 보기 때문). 그 URL의 extract()
-    결과는 challenge 프롬프트에 실리기만 하고 최종적으로 어디에도 반영되지
-    않으므로, 애초에 Tavily에 요청할 필요가 없다.
+    _apply_challenge()는 proposed_by에 STRUCTURED_SOURCE_AGENTS(다나와/11번가)가
+    있는 후보는 challenge 검증 결과를 아예 안 본다 - verified를 무조건 True로
+    강제하고, refreshed_price_krw도 절대 안 쓴다(공식/실측 구조화 데이터가
+    텍스트 재추출보다 정확하다고 보기 때문). 그 URL의 extract() 결과는 challenge
+    프롬프트에 실리기만 하고 최종적으로 어디에도 반영되지 않으므로, 애초에
+    Tavily에 요청할 필요가 없다.
 
-    URL 도메인(danawa.com 여부)이 아니라 proposed_by로 판단하는 이유 - 검색
-    자체가 danawa.com 하나로 한정돼 있어(app.search.RETAILER_DOMAINS) propose
-    에이전트(Qwen/Groq/DeepSeek)가 스니펫만 보고 독자적으로 고른 후보도 URL은
-    거의 항상 danawa.com이다. 그런 후보는 _DanawaFetchNode의 픽과 병합되지
-    않았다면(proposed_by에 "danawa"가 없다면) challenge 검증이 그대로
-    쓰이므로, 도메인 기준으로 걸렀다면 진짜 필요한 재조회까지 함께 잘려나갔을
-    것이다."""
+    URL 도메인이 아니라 proposed_by로 판단하는 이유 - propose 에이전트(Qwen/
+    Groq/DeepSeek)가 검색 스니펫만 보고 독자적으로 고른 후보도 URL이 우연히
+    11번가/다나와 도메인일 수 있다. 그런 후보는 구조화 소스 노드의 픽과
+    병합되지 않았다면(proposed_by에 없다면) challenge 검증이 그대로 쓰이므로,
+    도메인 기준으로 걸렀다면 진짜 필요한 재조회까지 함께 잘려나갔을 것이다."""
     return [
         c["url"]
         for c in candidates[:_MAX_EXTRACT_CANDIDATES]
-        if c.get("url") and "danawa" not in (c.get("proposed_by") or [])
+        if c.get("url") and not (STRUCTURED_SOURCE_AGENTS & set(c.get("proposed_by") or []))
     ]
 
 
@@ -588,9 +679,11 @@ def _apply_challenge(
 
         proposed_by = candidate.get("proposed_by") or []
         price_krw = candidate.get("price_krw")
-        if "danawa" in proposed_by:
+        structured_sources = STRUCTURED_SOURCE_AGENTS & set(proposed_by)
+        if structured_sources:
             verified: bool | None = True
-            challenge_note = "다나와 실측 가격표에서 확인된 A등급(구매 링크 검증됨) 후보"
+            note_labels = [_STRUCTURED_SOURCE_NOTE[s] for s in ("danawa", "elevenst") if s in structured_sources]
+            challenge_note = " + ".join(note_labels) + "에서 확인된 후보"
         else:
             verdict = verdicts_by_url.get(url)
             if verdict is None and i < len(challenge.verdicts):
@@ -755,6 +848,30 @@ def _build_propose_agent(name: str, model) -> LlmAgent:
     )
 
 
+def _skip_challenge_if_all_structured(callback_context, llm_request) -> LlmResponse | None:
+    """challenge(DeepSeek) 왕복을 건너뛸 수 있으면 건너뛴다(2026-08-20, 비용
+    점검 - "LLM이 불필요하게 쓰이고 있는곳") - _apply_challenge()를 보면 후보의
+    proposed_by에 구조화 소스(STRUCTURED_SOURCE_AGENTS - danawa/elevenst)가
+    하나라도 있으면 challenge의 verdict를 통째로 무시하고 verified=True로
+    강제한다(이미 실측 확인된 가격을 텍스트 기반 LLM에게 다시 판단하게 하는
+    건 불필요하다는 게 그 검증 로직 자체의 전제). 11번가가 이제 유일한 검색
+    소스라 propose 3개(gpt/groq/deepseek)가 찾은 후보도 대부분 elevenst
+    픽과 병합되므로, 병합된 후보 전부가 구조화 소스를 포함하는 경우(=challenge
+    verdict를 아무도 안 볼 경우)가 흔해졌다 - 이때는 DeepSeek 호출 자체가
+    순수 낭비다. 후보가 하나도 없어도(검증할 대상 자체가 없음) 같은 이유로
+    건너뛴다. verdicts를 빈 배열로 채운 채 넘기면 _apply_challenge가 challenge를
+    실제로 돌렸을 때와 동일하게 동작한다(구조화 소스 후보는 애초에 verdicts를
+    안 보고, 나머지는 없으므로 영향 없음). 후보 중 하나라도 구조화 소스가
+    아니면(=진짜 검증이 필요한 후보가 섞여 있으면) None을 반환해 실제 challenge를
+    그대로 태운다."""
+    candidates: list[dict] = callback_context.state.get("candidates") or []
+    if not candidates or all(
+        STRUCTURED_SOURCE_AGENTS & set(c.get("proposed_by") or []) for c in candidates
+    ):
+        return _model_error_fallback_response("[]")
+    return None
+
+
 def _build_challenge_agent() -> LlmAgent:
     def instruction(ctx: ReadonlyContext) -> str:
         query = _refined_query_text(ctx.state)
@@ -770,6 +887,7 @@ def _build_challenge_agent() -> LlmAgent:
         model=LiteLlm(model=f"deepseek/{settings.deepseek_model}", num_retries=0),
         instruction=instruction,
         output_key="raw_challenge",
+        before_model_callback=_skip_challenge_if_all_structured,
     )
 
 
@@ -872,12 +990,13 @@ def _build_pipeline() -> SequentialAgent:
             _build_propose_agent(
                 deepseek_raw, LiteLlm(model=f"deepseek/{settings.deepseek_model}", num_retries=0)
             ),
-            # 다나와 A등급 실측가 - 2026-08-16, PRESERVED FROM seungmin/lsm의
-            # run_single_debate_price_table_variant(PART 4-2)를 라이브 ADK
-            # 파이프라인으로 포팅(README "한계점 및 향후 과제" 후속작업). LLM이
-            # 아니라 커스텀 BaseAgent지만 같은 ParallelAgent 소속이라 gpt/groq/
-            # deepseek와 동시에 실행된다(지연시간 추가 없음).
-            _DanawaFetchNode(name="danawa"),
+            # 11번가 공식 API 구조화 가격 - 2026-08-20("11번가 api를 구해서
+            # 다나와를 폐기하고 11번가 쪽으로 방향을 틀려고") - 다나와
+            # 스크래핑의 불안정함(AWS IP 차단, search.danawa.com Crawl-delay)
+            # 대신 공식 오픈API로 구조화된 후보를 만든다. _DanawaFetchNode와
+            # 같은 자리(같은 ParallelAgent 소속, 지연시간 추가 없음)를 대신한다
+            # - _DanawaFetchNode 자체는 코드로 남겨뒀다(참고/롤백 대비).
+            _ElevenstFetchNode(name="elevenst"),
             # 쿠팡 교차 확인(2026-08-16, "그라운딩 성능을 높여줘") - 후보를 만들지
             # 않고 challenge 단계의 참고 신호만 채운다. 같은 ParallelAgent 소속이라
             # 지연시간이 추가되지 않는다.
@@ -891,7 +1010,12 @@ def _build_pipeline() -> SequentialAgent:
     return SequentialAgent(
         name="single_debate_pipeline",
         sub_agents=[
-            _build_refine_agent(),
+            # refine(질의 정제) 단계는 2026-08-20("쿼리 재질의 없애고")부터 뺐다 -
+            # _build_refine_agent()는 코드로 남아있지만 더 이상 파이프라인에
+            # 안 묶인다. _refined_query_text()가 이미 "refined_query가 없으면
+            # original_query로 폴백"하도록 짜여 있어(그 전에도 짧은 질의는
+            # _skip_refine_if_already_specific로 종종 건너뛰었다) 이 노드를
+            # 아예 빼도 다른 코드 변경이 필요 없다.
             _SearchNode(name="search"),
             propose_parallel,
             _FilterMergeNode(name="filter_merge"),
@@ -914,7 +1038,6 @@ def _get_runner() -> InMemoryRunner:
 
 
 _STAGE_AFTER = {
-    "refine": "searching",
     "search": "proposing",
     "filter_merge": "challenging",
     "apply_challenge": "judging",
@@ -1195,6 +1318,8 @@ async def _finalize_with_danawa(
        URL로 치환하거나 다른 제안으로 넘긴다."""
     if decision.chosen_agent == "danawa":
         decision.price_source = "danawa_offer"
+    elif decision.chosen_agent == "elevenst":
+        decision.price_source = "elevenst_offer"
 
     primary = price_table_module.pick_primary(danawa_tables)
     price_table: PriceTable | None = None
@@ -1230,7 +1355,9 @@ async def run_stream(query: str, skip_clarify: bool = False) -> AsyncIterator[di
         app_name=_APP_NAME, user_id="anonymous", session_id=session_id, state={"original_query": query}
     )
 
-    yield {"type": "status", "stage": "refining"}
+    # refine 단계가 빠져서(2026-08-20) 검색이 이제 진짜 첫 단계다 - "refining"
+    # 대신 바로 "searching"으로 시작한다.
+    yield {"type": "status", "stage": "searching"}
 
     pipeline_failed = False
     gen = runner.run_async(

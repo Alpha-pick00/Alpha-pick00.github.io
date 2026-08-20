@@ -1,6 +1,6 @@
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export type AgentName = 'gpt' | 'groq' | 'deepseek';
+export type AgentName = 'gpt' | 'groq' | 'deepseek' | 'danawa' | 'elevenst';
 
 export interface Proposal {
   agent: AgentName;

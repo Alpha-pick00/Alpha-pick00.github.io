@@ -18,6 +18,12 @@ class Settings:
     )
     deepseek_api_key: str | None = os.environ.get("DEEPSEEK_API_KEY")
     tavily_api_key: str | None = os.environ.get("TAVILY_API_KEY")
+    # 2026-08-20("11번가 api를 구해서 다나와를 폐기하고 11번가 쪽으로 방향을
+    # 틀려고") - app.search.search()의 기본 검색 백엔드 및
+    # adk_pipeline._ElevenstFetchNode의 자격증명. 미설정이면 두 곳 모두
+    # 조용히 빈 결과로 스킵한다(ocr/google_vision.py와 동일한 "키 없으면
+    # 스킵" 패턴) - 서버가 죽지 않는다.
+    elevenst_api_key: str | None = os.environ.get("ELEVENST_API_KEY")
 
     # 2026-08-18("qwen 3.7 + 로 모델 바꿔줘") - qwen-max에서 Qwen3.7 세대의
     # plus 등급으로 교체. 필요하면 .env의 QWEN_MODEL로 다른 버전(예:

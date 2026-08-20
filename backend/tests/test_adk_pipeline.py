@@ -17,7 +17,9 @@ from app.adk_pipeline import (
     _on_propose_model_error,
     _on_refine_model_error,
     _pick_and_verify_relaxed,
+    _pick_elevenst_candidate,
     _relaxed_fallback_decision,
+    _skip_challenge_if_all_structured,
     _skip_judge_if_single_candidate,
     _urls_needing_challenge_extract,
     _urls_to_extract,
@@ -26,6 +28,7 @@ from app.adk_pipeline import (
 from app.agents.base import CHALLENGE_INSTRUCTIONS, build_challenge_prompt
 from app.price_table import build_price_table
 from app.schemas import ChallengeResult, ChallengeVerdict, Decision, JudgeVerdict, Proposal, SearchResult
+from fetchers import elevenst as elevenst_fetcher
 from fetchers.danawa import parse_danawa_html
 
 COUPANG_URL = "https://coupang.com/vp/products/1"
@@ -553,10 +556,27 @@ def test_broad_web_fallback_search_returns_empty_when_no_broad_results(monkeypat
     assert results == []
 
 
-def test_broad_web_fallback_search_regrounds_via_danawa_using_top_result_title(monkeypatch):
+def _elevenst_product(name: str, code: str = "1", detail_url: str | None = None) -> elevenst_fetcher.Product:
+    return elevenst_fetcher.Product(
+        code=code,
+        name=name,
+        price=10000,
+        sale_price=9000,
+        image_url=None,
+        seller_nick="테스트샵",
+        detail_url=detail_url or f"https://www.11st.co.kr/products/{code}",
+        delivery=None,
+        review_count=None,
+        buy_satisfy=None,
+        discount=None,
+    )
+
+
+def test_broad_web_fallback_search_regrounds_via_elevenst_using_top_result_title(monkeypatch):
     """비제한 검색(구글 쇼핑 대체)이 찾은 1순위 결과의 제목을 실제 상품명
-    삼아 다나와에 딱 한 번만 재검색해, 그 결과를 다나와 URL을 가진
-    SearchResult로 바꿔야 한다."""
+    삼아 11번가에 딱 한 번만 재검색해, 그 결과를 11번가 URL을 가진
+    SearchResult로 바꿔야 한다(2026-08-20, 다나와 배제 이후에도 이 최후
+    폴백이 다나와 URL을 다시 만들어내면 안 됨)."""
     captured: dict = {}
 
     async def _fake_unrestricted(query):
@@ -565,41 +585,122 @@ def test_broad_web_fallback_search_regrounds_via_danawa_using_top_result_title(m
             SearchResult(title="다른 후보", url="https://example.com/b", snippet="..."),
         ]
 
-    async def _fake_search_danawa_items(query, limit):
-        captured["query"] = query
-        captured["limit"] = limit
-        return [
-            {"pcode": "111", "product_name": "샤오미 15T 프로 512GB 블랙", "total_mall_count": None},
-            {"pcode": "222", "product_name": "샤오미 15T 프로 512GB 화이트", "total_mall_count": None},
-        ]
+    async def _fake_search_products(api_key, keyword, page_size=20, **kwargs):
+        captured["api_key"] = api_key
+        captured["keyword"] = keyword
+        captured["page_size"] = page_size
+        return elevenst_fetcher.SearchResult(
+            total_count=2,
+            products=[
+                _elevenst_product("샤오미 15T 프로 512GB 블랙", code="111"),
+                _elevenst_product("샤오미 15T 프로 512GB 화이트", code="222"),
+            ],
+            categories=[],
+        )
 
+    monkeypatch.setattr(adk_pipeline_module.settings, "elevenst_api_key", "test-key")
     monkeypatch.setattr(adk_pipeline_module.search_module, "search_unrestricted", _fake_unrestricted)
-    monkeypatch.setattr(adk_pipeline_module.price_table_module, "_search_danawa_items", _fake_search_danawa_items)
+    monkeypatch.setattr(adk_pipeline_module.elevenst_fetcher, "search_products", _fake_search_products)
 
     results = asyncio.run(_broad_web_fallback_search("애매한 원래 질의"))
 
-    assert captured["query"] == "샤오미 15T 프로 512GB"
-    assert captured["limit"] == adk_pipeline_module._BROAD_FALLBACK_DANAWA_LIMIT
+    assert captured["keyword"] == "샤오미 15T 프로 512GB"
+    assert captured["page_size"] == adk_pipeline_module._BROAD_FALLBACK_ELEVENST_LIMIT
     assert [r.url for r in results] == [
-        "https://prod.danawa.com/info/?pcode=111",
-        "https://prod.danawa.com/info/?pcode=222",
+        "https://www.11st.co.kr/products/111",
+        "https://www.11st.co.kr/products/222",
     ]
     assert results[0].title == "샤오미 15T 프로 512GB 블랙"
 
 
-def test_broad_web_fallback_search_returns_empty_when_danawa_lookup_fails(monkeypatch):
+def test_broad_web_fallback_search_returns_empty_when_elevenst_key_missing(monkeypatch):
     async def _fake_unrestricted(query):
         return [SearchResult(title="샤오미 15T 프로", url="https://example.com/a", snippet="...")]
 
-    async def _boom(query, limit):
-        raise RuntimeError("danawa search blocked")
-
+    monkeypatch.setattr(adk_pipeline_module.settings, "elevenst_api_key", None)
     monkeypatch.setattr(adk_pipeline_module.search_module, "search_unrestricted", _fake_unrestricted)
-    monkeypatch.setattr(adk_pipeline_module.price_table_module, "_search_danawa_items", _boom)
 
     results = asyncio.run(_broad_web_fallback_search("애매한 원래 질의"))
 
     assert results == []
+
+
+def test_broad_web_fallback_search_returns_empty_when_elevenst_lookup_fails(monkeypatch):
+    async def _fake_unrestricted(query):
+        return [SearchResult(title="샤오미 15T 프로", url="https://example.com/a", snippet="...")]
+
+    async def _boom(api_key, keyword, page_size=20, **kwargs):
+        raise elevenst_fetcher.ElevenstApiError("11번가 검색 차단")
+
+    monkeypatch.setattr(adk_pipeline_module.settings, "elevenst_api_key", "test-key")
+    monkeypatch.setattr(adk_pipeline_module.search_module, "search_unrestricted", _fake_unrestricted)
+    monkeypatch.setattr(adk_pipeline_module.elevenst_fetcher, "search_products", _boom)
+
+    results = asyncio.run(_broad_web_fallback_search("애매한 원래 질의"))
+
+    assert results == []
+
+
+# --- _pick_elevenst_candidate (_ElevenstFetchNode의 순수 후보 선정 로직) ----
+
+
+def test_pick_elevenst_candidate_rejects_ungrounded_products():
+    """query와 전혀 관련 없는 상품만 있으면(그라운딩 게이트 실패) 후보를
+    만들지 않는다 - _DanawaFetchNode의 2026-08-16 하드닝과 같은 이유."""
+    result = elevenst_fetcher.SearchResult(
+        total_count=1, products=[_elevenst_product("완전히 다른 상품 아이패드 케이스")], categories=[]
+    )
+
+    assert _pick_elevenst_candidate("삼성전자 갤럭시 버즈3 프로", result) is None
+
+
+def test_pick_elevenst_candidate_picks_cheapest_among_matches():
+    cheap = elevenst_fetcher.Product(
+        code="1", name="무선 마우스 A", price=15000, sale_price=12000, image_url=None,
+        seller_nick="샵A", detail_url="https://www.11st.co.kr/products/1", delivery=None,
+        review_count=None, buy_satisfy=None, discount=None,
+    )
+    expensive = elevenst_fetcher.Product(
+        code="2", name="무선 마우스 B", price=20000, sale_price=18000, image_url=None,
+        seller_nick="샵B", detail_url="https://www.11st.co.kr/products/2", delivery=None,
+        review_count=None, buy_satisfy=None, discount=None,
+    )
+    result = elevenst_fetcher.SearchResult(total_count=2, products=[expensive, cheap], categories=[])
+
+    candidate = _pick_elevenst_candidate("무선 마우스", result)
+
+    assert candidate is not None
+    assert candidate.price_krw == 12000
+    assert candidate.url == "https://www.11st.co.kr/products/1"
+    assert candidate.retailer == "11번가"
+
+
+def test_pick_elevenst_candidate_excludes_products_without_detail_url():
+    no_url = elevenst_fetcher.Product(
+        code="1", name="무선 마우스", price=5000, sale_price=None, image_url=None,
+        seller_nick="샵A", detail_url=None, delivery=None, review_count=None,
+        buy_satisfy=None, discount=None,
+    )
+    result = elevenst_fetcher.SearchResult(total_count=1, products=[no_url], categories=[])
+
+    assert _pick_elevenst_candidate("무선 마우스", result) is None
+
+
+def test_pick_elevenst_candidate_excludes_products_without_price():
+    no_price = elevenst_fetcher.Product(
+        code="1", name="무선 마우스", price=None, sale_price=None, image_url=None,
+        seller_nick="샵A", detail_url="https://www.11st.co.kr/products/1", delivery=None,
+        review_count=None, buy_satisfy=None, discount=None,
+    )
+    result = elevenst_fetcher.SearchResult(total_count=1, products=[no_price], categories=[])
+
+    assert _pick_elevenst_candidate("무선 마우스", result) is None
+
+
+def test_pick_elevenst_candidate_empty_products_returns_none():
+    result = elevenst_fetcher.SearchResult(total_count=0, products=[], categories=[])
+
+    assert _pick_elevenst_candidate("무선 마우스", result) is None
 
 
 # --- _urls_to_extract (challenge 전 실제 페이지 재조회 대상) ----------------
@@ -651,6 +752,16 @@ def test_urls_needing_challenge_extract_handles_missing_proposed_by():
     assert _urls_needing_challenge_extract(candidates) == [COUPANG_URL]
 
 
+def test_urls_needing_challenge_extract_excludes_elevenst_proposed_candidate():
+    """2026-08-20 - elevenst 픽도 다나와와 같은 이유(구조화 소스라 challenge
+    검증 결과가 버려짐)로 extract() 대상에서 빠져야 한다."""
+    candidates = [
+        {"url": COUPANG_URL, "proposed_by": ["gpt"]},
+        {"url": ELEVENST_URL, "proposed_by": ["elevenst"]},
+    ]
+    assert _urls_needing_challenge_extract(candidates) == [COUPANG_URL]
+
+
 # --- _judge_eligible_proposals (verified=False 후보 judge 이전 필터링) -----
 
 
@@ -696,6 +807,22 @@ def test_merge_proposals_includes_danawa_agent():
 
     assert len(merged) == 1
     assert merged[0]["proposed_by"] == ["danawa"]
+
+
+def test_merge_proposals_includes_elevenst_agent():
+    """2026-08-20 - _FilterMergeNode의 raw_by_agent에 elevenst_raw가 흘러들어가면
+    다른 3개 슬롯과 동일하게 병합 풀에 합류해야 한다."""
+    raw_by_agent = {
+        "gpt": None,
+        "groq": None,
+        "deepseek": None,
+        "elevenst": json.dumps([_raw_candidate("무선 마우스", 12900, ELEVENST_URL)]),
+    }
+
+    merged = asyncio.run(_merge_proposals(raw_by_agent, []))
+
+    assert len(merged) == 1
+    assert merged[0]["proposed_by"] == ["elevenst"]
 
 
 def test_merge_proposals_resolves_comparison_page_to_bridge_url_when_pcode_matches():
@@ -774,6 +901,30 @@ def test_apply_challenge_non_danawa_candidate_unaffected_by_danawa_override():
 
     assert proposals[0].verified is None
     assert proposals[0].challenge_note is None
+
+
+def test_apply_challenge_marks_elevenst_sourced_candidate_verified_without_challenge_verdict():
+    """2026-08-20 - 11번가 공식 API 구조화 데이터도 다나와와 같은 이유로
+    challenge 검증 없이 verified=True로 강제돼야 한다."""
+    candidates = [_merged_candidate(ELEVENST_URL, ["elevenst"], "상품A")]
+
+    proposals = _apply_challenge(candidates, ChallengeResult(verdicts=[]))
+
+    assert proposals[0].verified is True
+    assert "11번가" in proposals[0].challenge_note
+
+
+def test_apply_challenge_danawa_and_elevenst_merged_candidate_verified():
+    """다나와 픽과 11번가 픽이 같은 상품으로 병합되면(fusion.dedup이 상품명
+    유사도만으로도 병합할 수 있음) 두 소스 이름이 모두 challenge_note에
+    드러나야 한다."""
+    candidates = [_merged_candidate(COUPANG_URL, ["danawa", "elevenst"], "상품A")]
+
+    proposals = _apply_challenge(candidates, ChallengeResult(verdicts=[]))
+
+    assert proposals[0].verified is True
+    assert "다나와" in proposals[0].challenge_note
+    assert "11번가" in proposals[0].challenge_note
 
 
 # --- 쿠팡 교차 확인(build_challenge_prompt, 2026-08-16) ----------------------
@@ -966,6 +1117,26 @@ def test_finalize_with_danawa_sets_price_source_when_judge_chose_danawa():
     assert price_table.product_name == "테스트 상품"
 
 
+def test_finalize_with_danawa_sets_price_source_when_judge_chose_elevenst():
+    """2026-08-20 - judge가 11번가 후보를 골랐고(chosen_agent="elevenst") 매칭되는
+    다나와 실측 테이블이 없으면(danawa_tables=[]) price_source가 "llm_guess"가
+    아니라 "elevenst_offer"로 남아야 한다."""
+    decision = Decision(
+        product_name="테스트 상품",
+        price="19,000원",
+        retailer="11번가",
+        url="https://www.11st.co.kr/products/1",
+        reasoning="테스트",
+        chosen_agent="elevenst",
+    )
+
+    updated, price_table = asyncio.run(_finalize_with_danawa(decision, [], []))
+
+    assert updated.price_source == "elevenst_offer"
+    assert updated.url == "https://www.11st.co.kr/products/1"
+    assert price_table is None
+
+
 def test_finalize_with_danawa_enriches_matching_llm_decision():
     """judge가 이름이 일치하는 다나와 실측가를 고르지 않았어도(chosen_agent="gpt"),
     상품명이 맞으면 enrich_decision이 가격/URL을 실측치로 덮어쓴다."""
@@ -1058,6 +1229,46 @@ def test_skip_judge_none_when_the_only_candidate_is_missing_a_required_field():
     ctx = _FakeCallbackContext({"proposals": [incomplete.model_dump()]})
 
     assert _skip_judge_if_single_candidate(ctx, None) is None
+
+
+# --- _skip_challenge_if_all_structured (challenge LLM 호출 생략, 비용 절감) -----
+# (2026-08-20, "LLM이 불필요하게 쓰이고 있는곳" 점검 - _apply_challenge가 구조화
+# 소스(danawa/elevenst) 후보의 challenge verdict를 애초에 안 본다는 사실에서 착안)
+
+
+def test_skip_challenge_returns_empty_verdicts_when_every_candidate_is_structured():
+    candidates = [_merged_candidate(ELEVENST_URL, ["elevenst"]), _merged_candidate(COUPANG_URL, ["elevenst", "gpt"])]
+    ctx = _FakeCallbackContext({"candidates": candidates})
+
+    response = _skip_challenge_if_all_structured(ctx, None)
+
+    assert response is not None
+    assert json.loads(response.content.parts[0].text) == []
+
+
+def test_skip_challenge_returns_empty_verdicts_when_no_candidates():
+    ctx = _FakeCallbackContext({"candidates": []})
+
+    response = _skip_challenge_if_all_structured(ctx, None)
+
+    assert response is not None
+    assert json.loads(response.content.parts[0].text) == []
+
+
+def test_skip_challenge_none_when_a_candidate_is_not_structured():
+    """gpt/groq/deepseek만 제안하고 elevenst와 병합되지 않은 후보가 섞여
+    있으면(=진짜 검증이 필요한 후보가 있으면) challenge를 그대로 태워야 한다."""
+    candidates = [_merged_candidate(ELEVENST_URL, ["elevenst"]), _merged_candidate(COUPANG_URL, ["gpt"])]
+    ctx = _FakeCallbackContext({"candidates": candidates})
+
+    assert _skip_challenge_if_all_structured(ctx, None) is None
+
+
+def test_skip_challenge_none_when_only_candidate_is_llm_proposed():
+    candidates = [_merged_candidate(COUPANG_URL, ["gpt", "groq"])]
+    ctx = _FakeCallbackContext({"candidates": candidates})
+
+    assert _skip_challenge_if_all_structured(ctx, None) is None
 
 
 # --- relaxed fallback 하드닝(2026-08-16, "구매링크를 안띄워주는거야" 버그의 근본 -----

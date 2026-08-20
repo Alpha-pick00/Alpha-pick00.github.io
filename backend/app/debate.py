@@ -660,6 +660,13 @@ async def _extract_facets(
     로직(동적 facet vs 고정 4축)을 썼는데, 프론트가 이미 facet 렌더링을
     완전히 지원해서 별도 UI 변경 없이 하나로 합칠 수 있었다."""
     facets = await deepseek.extract_facets_from_names(query, names)
+    # (2026-08-20, "그냥 AI상세검색에서 '카테고리'라는거를 없애") 프롬프트
+    # (FACET_CLARIFY_INSTRUCTIONS)에서 "카테고리" 예시를 빼고 만들지 말라고
+    # 명시했지만, _strip_query_answered_options의 선례(DeepSeek이 프롬프트
+    # 지시를 안정적으로 안 지킴)와 같은 이유로 여기서 한 번 더 걸러낸다 -
+    # "초코파이"를 검색해도 여전히 "카테고리: 초코파이/과자세트/과자/..."처럼
+    # 검색어 자체를 되묻는 facet이 나온 실측 사례가 있었다.
+    facets = [f for f in facets if f.label != "카테고리"]
     facets = await _enrich_facets_per_brand(facets, names, query)
     facets = await _enrich_device_models_by_ecosystem(facets, names, query)
     facets = _attach_facet_crossfilter(facets, names)
@@ -791,12 +798,20 @@ async def check_clarify_facets(
     names = [item["product_name"] for item in items]
     facets = await _extract_facets(query, names, persona)
     facets = _strip_query_answered_options(query, facets)
-    # _apply_category_breakdown은 _strip_query_answered_options 뒤에 와야 한다 -
-    # 실측 카테고리 facet은 스스로 "이미 고른 값"을 정확히(부모 대분류 이름과의
-    # 우연한 부분 문자열 겹침을 걸러내고) 판정해 만들어지는데(_category_breakdown_facet
-    # 참고), 앞서 오면 이 일반 stripping이 그 정확한 결과를 다시 (덜 정확하게)
-    # 건드려버린다.
-    facets = _apply_category_breakdown(facets, query, categories)
+    # (2026-08-20, "카테고리 선택 안 하게 만들고" / "그냥 AI상세검색에서
+    # '카테고리'라는거를 없애") 예전엔 여기서 _apply_category_breakdown()이
+    # 다나와 실측 카테고리 집계로 "카테고리" facet을 주입해 되물었다 -
+    # "이프로"처럼 브랜드만 봐도 카테고리가 명백한 질의에도 "카테고리에서
+    # 음료를 고르세요"라고 불필요하게 되묻는 문제가 있어 뺐다. 이어서
+    # "초코파이"처럼 DeepSeek이 프롬프트 지시와 무관하게 스스로 "카테고리"
+    # facet(검색어 자체를 되묻는 값들)을 또 만들어내는 사례가 실측돼,
+    # _extract_facets 안에서 label=="카테고리"인 facet 자체를 한 번 더
+    # 걸러내도록 했다(위 함수 안 주석 참고) - 그래서 "카테고리" facet은
+    # 이제 어떤 경로로도 응답에 남지 않는다. _apply_category_breakdown/
+    # _category_breakdown_facet 함수 정의는 남아있지만 이제 호출부가 없다.
+    # 용량(ml) 등 DeepSeek이 스스로 뽑은 다른 facet은 그대로 유지된다 -
+    # categories 표본으로 다른 facet을 좁히는 로직(_select_effective_
+    # category_name, 위쪽에서 이미 호출됨)에는 영향 없다.
     return ClarifyResponse(query=query, options=ClarifyOptions(facets=facets))
 
 
